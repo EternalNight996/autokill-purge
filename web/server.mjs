@@ -32,13 +32,13 @@ const MODELS = [
   // ---------------- 国内 ----------------
   {
     id: 'deepseek-flash', name: 'DeepSeek V4.1 Flash', vendor: 'DeepSeek', domestic: true, recommended: 1,
-    family: 'DeepSeek V4.1-Flash-1017', api: 'deepseek-flash',
+    family: 'DeepSeek V4.1-Flash-1017', api: 'deepseek-flash', dshPurge: 'default',
     tagline: '最快最省，多模态，1M 上下文',
     notes: '官方调用名 deepseek-flash（V4.1-Flash-1017）：原生多模态、1M 上下文 / 384K 输出、thinking 三档 low/high/max、并发上限 2500。旧名 deepseek-v4-flash、deepseek-v4-flash-vision-exp 仍会路由到它。'
   },
   {
     id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', vendor: 'DeepSeek', domestic: true,
-    family: 'DeepSeek-V4-Pro-0813', api: 'deepseek-v4-pro',
+    family: 'DeepSeek-V4-Pro-0813', api: 'deepseek-v4-pro', dshPurge: 'supported',
     tagline: '复杂推理与 agent 任务更强',
     notes: '官方调用名 deepseek-v4-pro（V4-Pro-0813）：不支持图像输入；1M 上下文 / 384K 输出；agent 与长链路推理优先选它。'
   },

@@ -179,9 +179,9 @@ const S = {
     output: "",
     template: "sauce-1171",
     scope: "full",
-    // 默认就把输出要求全给（5 条拼成一条）；任务类型保持「自己写」——预填任务会污染用户输入。
+    // 默认就把输出要求全给（5 条拼成一条）；任务类型也默认「全部」。
     outputChoice: "all",
-    taskPreset: "custom",
+    taskPreset: "all",
     building: false,
     buildError: null,
     built: false,
@@ -711,6 +711,11 @@ function applyState(data) {
   if (!S.attempt.model) S.attempt.model = S.breach.model;
   if (!S.attempt.technique && S.techniques.length) S.attempt.technique = S.techniques[0].id;
   if (!S.assign.initialized) initAssignFromState();
+  // 任务类型默认「全部」：进页面就把 5 条预设任务填好（用户可改可删）。
+  if (!S.breach.task && S.breach.taskPreset && S.breach.taskPreset !== "custom") {
+    const presetText = presetTextFor(S.breach.taskPreset);
+    if (presetText) S.breach.task = presetText;
+  }
   /* 服务端 > localStorage > simple（契约 §2.1） */
   S.uiMode = resolveUiMode(settings.uiMode);
   // 刚在本机点过开关、服务端还没写完的那一刻刷新页面：以本机为准，并回写一次把两边对齐。
@@ -1060,10 +1065,13 @@ function simpleSteps() {
   }).join("")}</ol>`;
 }
 
-/* 普通模式的推荐位：服务端 recommended=1/2/3 优先，其余按目录顺序补足 3 个 */
+/* 普通模式的推荐位：只列 dsh-purge 1.1.71 口径内的模型
+   （default = 它配置里用的 deepseek-flash；supported = 同厂可用）；
+   其余模型留在技术模式的完整矩阵里。 */
 function recommendedModels() {
   const list = Array.isArray(S.models) ? S.models.filter((m) => m && m.id) : [];
-  return list
+  const purge = list.filter((m) => m.dshPurge === "default" || m.dshPurge === "supported");
+  return (purge.length ? purge : list)
     .map((m, i) => ({ m, rank: typeof m.recommended === "number" ? m.recommended : 99 + i }))
     .sort((a, b) => a.rank - b.rank)
     .slice(0, 3)
@@ -1843,7 +1851,7 @@ function renderBreach() {
     ? `<div class="grid models">${S.models.map((m) => {
       const on = m.id === b.model;
       return `<button type="button" class="pick" data-model="${esc(m.id)}" data-focus="model-${esc(m.id)}" aria-pressed="${on}">
-        <span class="pick-top"><span class="pick-name">${esc(m.name)}</span>${on ? badge("已选", "accent") : ""}</span>
+        <span class="pick-top"><span class="pick-name">${esc(m.name)}</span>${m.dshPurge === "default" ? badge("dsh-purge 默认", "accent") : (m.dshPurge === "supported" ? badge("dsh-purge 支持", "") : "")}${on ? badge("已选", "accent") : ""}</span>
         <span class="pick-note">${esc(m.notes || m.refusal || m.desc || "—")}</span>
         ${m.family ? `<span class="pick-meta">${esc(m.family)}</span>` : ""}
       </button>`;
