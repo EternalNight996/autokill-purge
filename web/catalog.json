@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "note": "装备清单：装进 AutoKill 的东西，以及它们该在记忆库里留下的卡片。状态由 memory-eternal 的 /lookup 给出（四态）。",
+  "version": 2,
+  "note": "装备清单（FR-10，≥20 条）：装进 AutoKill 的东西，以及它们该在记忆库里留下的卡片。状态由 memory-eternal /lookup 映射为四态：present（approved）/ pending / stale（rejected）/ missing。",
   "items": [
     {
       "id": "purge.gear.scan_packer_markers",
@@ -43,6 +43,111 @@
       "title": "装车流程：编译→config→plugins_refresh",
       "query": "plugins.wasm 装车 编译 组件 安装",
       "source": "gear/README.md"
+    },
+    {
+      "id": "purge.break.info",
+      "kind": "command",
+      "title": "break info：PE 布局与加壳信号",
+      "query": "break info PE 节 熵 加壳",
+      "source": "break/break.mjs"
+    },
+    {
+      "id": "purge.break.scan",
+      "kind": "command",
+      "title": "break scan：许可字符串与引用点",
+      "query": "break scan 字符串 引用 许可",
+      "source": "break/break.mjs"
+    },
+    {
+      "id": "purge.break.plan",
+      "kind": "command",
+      "title": "break plan：按字节提案",
+      "query": "break plan 提案 偏移 期望字节",
+      "source": "break/break.mjs"
+    },
+    {
+      "id": "purge.break.patch",
+      "kind": "command",
+      "title": "break patch：带 expect 下刀",
+      "query": "break patch 下刀 expect 写入",
+      "source": "break/break.mjs"
+    },
+    {
+      "id": "purge.break.invert",
+      "kind": "command",
+      "title": "break invert：翻转条件跳转",
+      "query": "break invert 跳转 翻转 jz jnz",
+      "source": "break/break.mjs"
+    },
+    {
+      "id": "purge.break.verify",
+      "kind": "command",
+      "title": "break verify：逐字节差异与 sha",
+      "query": "break verify 差异 sha256 逐字节",
+      "source": "break/break.mjs"
+    },
+    {
+      "id": "purge.break.restore",
+      "kind": "command",
+      "title": "break restore：从 .bak 还原并校验",
+      "query": "break restore 还原 bak 校验",
+      "source": "break/break.mjs"
+    },
+    {
+      "id": "purge.protocol.agreement",
+      "kind": "protocol",
+      "title": "协议闸：签署后才放行 API",
+      "query": "协议闸 签署 授权 403 agreement",
+      "source": "web/server.mjs"
+    },
+    {
+      "id": "purge.endpoint.assign",
+      "kind": "endpoint",
+      "title": "分发端点：/api/assign/<agent>.md 实时合并",
+      "query": "分发 端点 assign 实时 合并 markdown",
+      "source": "web/server.mjs"
+    },
+    {
+      "id": "purge.page.breach",
+      "kind": "page",
+      "title": "页面：破甲（模型侧 + 二进制侧）",
+      "query": "破甲 页面 模型 二进制 break",
+      "source": "web/public/"
+    },
+    {
+      "id": "purge.page.equipment",
+      "kind": "page",
+      "title": "页面：装备",
+      "query": "装备 页面 预设 智能体 权限",
+      "source": "web/public/"
+    },
+    {
+      "id": "purge.page.dispatch",
+      "kind": "page",
+      "title": "页面：记忆分发",
+      "query": "记忆分发 页面 选卡 端点",
+      "source": "web/public/"
+    },
+    {
+      "id": "purge.page.memory",
+      "kind": "page",
+      "title": "页面：记忆中心",
+      "query": "记忆中心 页面 检索 写卡 审核",
+      "source": "web/public/"
+    },
+    {
+      "id": "purge.page.settings",
+      "kind": "page",
+      "title": "页面：设置",
+      "query": "设置 页面 地址 令牌 协议重签",
+      "source": "web/public/"
+    },
+    {
+      "id": "purge.page.about",
+      "kind": "page",
+      "title": "页面：关于",
+      "query": "关于 页面 版本 作者 能力 声明",
+      "source": "web/public/"
     }
   ]
 }

@@ -14,3 +14,12 @@ _smoke/vault-live/
 
 # generated 7-section fixture (reproducible via test/make-7s-fixture.mjs)
 _smoke/sample-7s.exe
+
+# runtime state (first run recreates it; may hold a signed agreement)
+data/
+
+# local UI probe screenshots and harness
+_ui-test/
+
+# break journal directories created during probes
+*.purge/

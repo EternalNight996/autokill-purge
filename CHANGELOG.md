@@ -2,7 +2,7 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
-## [unreleased] — 2026-11-15（M1 进行中）
+## [unreleased] — 2026-11-16（M1–M3 交付）
 
 ### Added
 - `git init` + 基线提交 `a00e965`（59 文件，4051 行）：break CLI + gear 插件 + web + catalog + _smoke 夹具，重写前快照。
@@ -22,5 +22,20 @@
 ### 决策
 - AC-3.1「7 节」vs 样例「6 节」：**已决（2026-11-15，小梦代 YG）**选 (a) 补 ≥7 节样例，不降阈值、不改 `>6`。
 
+### Added（M2/M3 交活）
+- 六页控制台 `web/public/**`（Pixel）：协议闸、破甲两栏、装备、分发、记忆中心、设置/关于。
+- Web 服务 `web/server.mjs`（Lin）：FR-3 + §5.3 全端点、协议闸、break 白名单、memory 不可达 503 语义。
+- `web/catalog.json` 扩到 21 条四态；`gear/autokill-purge-plugin/src/tools.rs` + `gear/tools-check/`（插件 4 工具离线自检 6/6）。
+- `_smoke/web-settings-persist.mjs`：FR-7 设置持久化探针（重启后 `breakDir`/`pluginPath` 仍保留）。
+
+### Fixed（FR-7）
+- `POST /api/settings` 此前只存 memoryBase/memoryToken/language，丢弃 `breakDir`/`pluginPath`；现按 FR-7 持久化（`pluginPath` 空串可清空，`breakDir` 空串保留原值，>1024 拒绝）。
+
+### 实测（2026-11-16，小梦复跑）
+- `node test/acceptance.mjs`（server 8793）：**21/21 PASS** — M1 12 条、协议门 403/200、破甲 6 variants、空任务 400、分配 2→3 卡、未选智能体 400。
+- `node _smoke/web-settings-persist.mjs`：**9/9 PASS**，重启后两个字段保留。
+- `cargo test --offline`（gear/tools-check）：**6/6 PASS**。
+
 ### 待办
-- Lin/Pixel 交活后跑全量 `node test/acceptance.mjs`（Web 部分）逐条验收。
+- AutoKill 插件 `.wasm` 未产出：本机出网被拦，缺 `wit-bindgen-rust-macro`；在联网机器执行 `cargo build --release --target wasm32-unknown-unknown` 即可。
+- §8 共 40 条（正向 20 / 负向 15 / 回归 5），自动化覆盖 21 条，其余按 `docs/ACCEPTANCE.md` 手测清单执行。
