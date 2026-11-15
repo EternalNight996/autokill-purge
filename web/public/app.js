@@ -1180,6 +1180,7 @@ function renderSimpleBreach() {
     ${simpleSteps()}
     ${renderSimpleOperation()}
     ${renderSimpleResults()}
+    <p class="s-tip">宿主破甲（改 dsh 安装的那套补丁）在技术模式 → 破甲 → 诊断；备份与一键恢复也在那里。</p>
   `;
   bindSimpleBreach();
 }
@@ -1692,6 +1693,14 @@ function hostCountsLine(d) {
   return `${c.applied || 0}/${c.total || 0} 已应用 · ${c.pending || 0} 待应用 · ${c.na || 0} 不适用`;
 }
 
+function hostBadge() {
+  const d = S.host.data;
+  if (!d) return badge("宿主破甲 · 检查中", "");
+  if (d.available === false) return badge("宿主破甲 · 不可用", "");
+  const c = d.counts || {};
+  return badge(`宿主破甲 ${c.applied || 0}/${c.total || 0}`, c.pending ? "" : "accent");
+}
+
 function renderHostSection() {
   const h = S.host;
   if (!h.tried && !h.loading) loadHostStatus();
@@ -2010,8 +2019,7 @@ function renderBreach() {
       </form>
       ${statsHtml}
       ${attemptRows ? `<h3 style="margin-top:16px">最近记录</h3><div class="table-wrap" tabindex="0" role="region" aria-label="尝试记录"><table class="min"><thead><tr><th>时间</th><th>模型</th><th>技术</th><th>结果</th><th>备注</th></tr></thead><tbody>${attemptRows}</tbody></table></div>` : ""}
-    </section>
-    ${renderHostSection()}`;
+    </section>`;
 
   $("#page").innerHTML = `
     <div class="page-head">
@@ -2020,7 +2028,7 @@ function renderBreach() {
         <h1>破甲</h1>
         <p class="lead">模型侧选模型、层与技术，生成可复制的载荷并记录命中；二进制侧让 break 在副本上定性、提案、下刀、验证与还原，每一步都留证据。</p>
       </div>
-      <div class="head-meta">${badge("不调用模型 API", "accent")}${badge("只改副本", "")}${badge("expect 前置校验", "good")}</div>
+      <div class="head-meta">${badge("不调用模型 API", "accent")}${badge("只改副本", "")}${badge("expect 前置校验", "good")}${hostBadge()}</div>
     </div>
 
     ${groupsHtml("breach", [
@@ -2030,6 +2038,7 @@ function renderBreach() {
       { key: "paths", html: renderBinarySection() },
       { key: "diag", html: diagGroup },
     ])}
+    ${renderHostSection()}
   `;
   bindBreach();
   bindBinary();
