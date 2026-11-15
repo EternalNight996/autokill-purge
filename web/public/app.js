@@ -179,7 +179,8 @@ const S = {
     output: "",
     template: "sauce-1171",
     scope: "full",
-    outputChoice: "direct",
+    // 默认就把输出要求全给（5 条拼成一条）；任务类型保持「自己写」——预填任务会污染用户输入。
+    outputChoice: "all",
     taskPreset: "custom",
     building: false,
     buildError: null,
