@@ -15,6 +15,9 @@
 import { open, readFile, writeFile, mkdir, readdir, copyFile, stat, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE_DIR = dirname(fileURLToPath(import.meta.url));
 
 const DSH_PURGE_CANDIDATES = [
   'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/plugins/dsh-purge',
@@ -335,4 +338,117 @@ export async function applyHostPatches(kind) {
 /** 目录是否可用（只读自检，供 readiness 用） */
 export function hostFeatureAvailable() {
   return !!(dshPurgeRoot() && existsSync(ASAR_PATH));
+}
+
+// ---- 注入提示词（~/.dsh/prompt-inject.md）：原版面板的「提示词」那一栏 --------------
+function overridePath() {
+  return join(process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh'), 'prompt-inject.md');
+}
+
+/** 内置默认（照搬 dsh-purge 1.1.71 的那份，去掉 HTML 注释头） */
+async function builtinPrompt() {
+  const raw = await readFile(join(HERE_DIR, 'prompts', 'sauce-1171.md'), 'utf8');
+  return raw.replace(/^<!--[\s\S]*?-->\s*/, '');
+}
+
+export async function readPromptFile() {
+  const p = overridePath();
+  const { createHash } = await import('node:crypto');
+  if (!existsSync(p)) {
+    return { ok: true, exists: false, path: p, text: '', bytes: 0, sha256: null, mtime: null, isBuiltin: false };
+  }
+  const buf = await readFile(p);
+  const st = await stat(p);
+  let builtin = null;
+  try { builtin = await builtinPrompt(); } catch { builtin = null; }
+  const text = buf.toString('utf8');
+  return {
+    ok: true, exists: true, path: p, text: text, bytes: buf.length,
+    sha256: createHash('sha256').update(buf).digest('hex'),
+    mtime: st.mtime.toISOString(),
+    isBuiltin: !!(builtin && text.trim() === builtin.trim()),
+    builtinBytes: builtin ? Buffer.byteLength(builtin) : null,
+  };
+}
+
+/** 写提示词：先备份现有文件（改前必留），再写；text 为空时拒绝 */
+export async function writePromptFile(dataDir, text) {
+  if (typeof text !== 'string' || !text.trim()) throw new Error('提示词不能为空');
+  const p = overridePath();
+  await mkdir(dirname(p), { recursive: true });
+  const backup = await backupPromptFile(dataDir, 'pre-write');
+  await writeFile(p, text, 'utf8');
+  return { ok: true, path: p, bytes: Buffer.byteLength(text), backup: backup };
+}
+
+/** 恢复内置默认提示词（= 原版「恢复默认提示词」） */
+export async function resetPromptFile(dataDir) {
+  const builtin = await builtinPrompt();
+  const backup = await backupPromptFile(dataDir, 'pre-reset');
+  const p = overridePath();
+  await writeFile(p, builtin, 'utf8');
+  return { ok: true, path: p, bytes: Buffer.byteLength(builtin), backup: backup };
+}
+
+async function backupPromptFile(dataDir, tag) {
+  const p = overridePath();
+  if (!existsSync(p)) return null;
+  const dir = join(dataDir, 'host-snapshots', 'prompt-' + stamp() + '-' + tag);
+  await mkdir(dir, { recursive: true });
+  const name = 'prompt-inject.md';
+  await copyFile(p, join(dir, name));
+  const buf = await readFile(p);
+  const { createHash } = await import('node:crypto');
+  await writeFile(join(dir, 'manifest.json'), JSON.stringify({
+    kind: 'prompt', at: new Date().toISOString(), tag: tag, path: p, blob: name,
+    bytes: buf.length, sha256: createHash('sha256').update(buf).digest('hex'),
+  }, null, 2) + '\n', 'utf8');
+  return dir;
+}
+
+/** 原版面板其他几栏的现状：规则集 / 技能 / 工具库 / 出口白名单 */
+export async function hostInventory() {
+  const dsh = process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
+  const out = { dshHome: dsh, rules: null, skills: null, redteam: null, netScope: null, prompt: null };
+  const rulesDir = join(dsh, 'rules');
+  if (existsSync(rulesDir)) {
+    const files = await readdir(rulesDir).catch(() => []);
+    out.rules = { path: rulesDir, files: files.length, names: files.slice(0, 50) };
+  }
+  const skillsDir = join(dsh, 'skills');
+  if (existsSync(skillsDir)) {
+    const names = [];
+    const walk = async (d, prefix) => {
+      const entries = await readdir(d, { withFileTypes: true }).catch(() => []);
+      for (const e of entries) {
+        if (e.name.startsWith('.')) continue;
+        const full = join(d, e.name);
+        if (e.isDirectory()) await walk(full, prefix + e.name + '/');
+        else if (/\.md$/i.test(e.name)) names.push(prefix + e.name);
+      }
+    };
+    await walk(skillsDir, '');
+    out.skills = { path: skillsDir, files: names.length, names: names.slice(0, 80) };
+  }
+  const rtDir = join(dsh, 'redteam');
+  if (existsSync(rtDir)) {
+    const top = await readdir(rtDir).catch(() => []);
+    let files = 0;
+    const countDir = async (d, depth) => {
+      if (depth > 2) return;
+      const entries = await readdir(d, { withFileTypes: true }).catch(() => []);
+      for (const e of entries) {
+        if (e.isDirectory()) await countDir(join(d, e.name), depth + 1);
+        else files++;
+      }
+    };
+    await countDir(rtDir, 0);
+    out.redteam = { path: rtDir, top: top, files: files };
+  }
+  const ns = join(dsh, 'net-scope-allow.txt');
+  if (existsSync(ns)) {
+    const text = await readFile(ns, 'utf8').catch(() => '');
+    out.netScope = { path: ns, lines: text.split(/\r?\n/).filter((l) => l.trim()).length };
+  }
+  return out;
 }

@@ -157,7 +157,11 @@ const S = {
   tab: "breach",
   memoryStatus: "unknown",
   readiness: { data: null, loading: false, tried: false, error: null },
-  host: { data: null, loading: false, tried: false, error: null, busy: false, message: "" },
+  host: {
+    data: null, prompt: null, inventory: null,
+    loading: false, tried: false, error: null, busy: false, message: "",
+    promptDraft: null, promptDirty: false,
+  },
   simple: {
     buildError: "",
     attempted: {},
@@ -1745,7 +1749,7 @@ function hostBadge() {
 function renderHostSection() {
   const h = S.host;
   if (!h.tried && !h.loading) loadHostStatus();
-  const head = `<h2 id="h-host"><span class="num">12</span>宿主破甲（dsh-purge 1.1.71 引擎）`;
+  const head = `<h2 id="h-host"><span class="num">1</span>清洗 · 宿主破甲（dsh-purge 1.1.71）`;
   if (h.loading && !h.data) return `<section class="section">${head}</h2>${spinner("检查宿主状态…")}</section>`;
   const d = h.data;
   if (h.error && !d) return `<section class="section">${head}</h2>${alertBox("读不到宿主状态", simpleReason(h.error))}</section>`;
@@ -1761,12 +1765,39 @@ function renderHostSection() {
       <td>${hostStatusBadge(p.status)}</td>
     </tr>`).join("");
   const msg = h.message ? (h.error ? alertBox(h.message, "") : okBox(h.message)) : "";
+
+  // 原版面板第一栏：注入提示词（可直接改，改完点保存）
+  const pr = h.prompt;
+  const draft = h.promptDraft != null ? h.promptDraft : (pr && pr.text) || "";
+  const promptBlock = pr ? `<div class="card" style="margin-top:10px">
+      <div class="s-row"><div class="s-row-main"><strong>注入提示词</strong><span class="mono small">${esc(pr.path)}</span></div>
+        ${pr.isBuiltin ? badge("与内置默认一致", "good") : badge("已被改动", "accent")}${badge(fmtNum(draft.length) + " 字符", "")}</div>
+      <label class="field"><span class="small muted">正文（这就是注入到系统提示词最前面的那段；改完保存即可）</span>
+        <textarea id="hostPrompt" rows="12" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(draft)}</textarea>
+      </label>
+      <div class="actions">
+        <button type="button" class="primary" data-prompt-action="save"${h.promptDirty ? "" : " disabled"}>保存提示词</button>
+        <button type="button" class="ghost" data-prompt-action="reset">恢复默认提示词</button>
+        <span class="hint">保存前自动备份到 data/host-snapshots/prompt-*；重启 dsh 生效。</span>
+      </div>
+    </div>` : `<p class="small muted" style="margin-top:10px">读不到 prompt-inject.md</p>`;
+
+  // 原版面板其余几栏的现状
+  const inv = h.inventory;
+  const invRows = inv ? [
+    ["技能 skills", inv.skills ? `${inv.skills.files} 篇 · ${inv.skills.path}` : "目录不存在"],
+    ["工具库 / 知识库", inv.redteam ? `${fmtNum(inv.redteam.files)} 个文件 · ${inv.redteam.path}` : "目录不存在"],
+    ["规则集 rules", inv.rules ? `${inv.rules.files} 个文件` : "目录不存在（原版可新建）"],
+    ["出口白名单", inv.netScope ? `${inv.netScope.lines} 行` : "未设置"],
+  ].map(([k, v]) => `<div class="s-row"><div class="s-row-main"><strong>${esc(k)}</strong><span class="mono small">${esc(v)}</span></div></div>`).join("") : "";
+
   return `<section class="section">${head}<span class="count">${esc(hostCountsLine(d))}</span></h2>
     <div class="card">
       <div class="s-row"><div class="s-row-main"><strong>宿主</strong><span>${esc(d.surface || "?")} · ${esc(d.dshHome || "")}</span></div></div>
       <div class="s-row"><div class="s-row-main"><strong>备份基线</strong><span>官方 app.asar ${b.readable ? "可读" : "读不到"} · 已备份快照 ${snaps.length} 份</span></div></div>
       <div class="s-row"><div class="s-row-main"><strong>注入文件</strong><span class="mono">${esc(d.overridePath || "")}（${esc(d.overrideStatus || "")}）</span></div></div>
     </div>
+    ${promptBlock}
     <div class="actions" style="margin-top:10px">
       <button type="button" class="primary" data-host-action="snapshot">备份现在</button>
       <button type="button" class="ghost" data-host-action="restore"${snaps.length ? "" : " disabled"}>撤销上一次</button>
@@ -1775,6 +1806,7 @@ function renderHostSection() {
       <span class="hint">改宿主都要重启 dsh 才生效；每次写入前会先自动备份一份。</span>
     </div>
     ${msg}
+    ${invRows ? `<div class="card" style="margin-top:10px">${invRows}</div>` : ""}
     <p class="small muted" style="margin-top:8px">「恢复出厂」用官方 app.asar 原件覆盖被改文件（不依赖 .bak，本机实测 .bak 为 0）；「撤销上一次」用最近一份快照覆盖。</p>
     <div class="table-wrap" tabindex="0" role="region" aria-label="宿主补丁清单">
       <table class="min"><thead><tr><th>#</th><th>补丁</th><th>层</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>
@@ -1783,21 +1815,65 @@ function renderHostSection() {
   </section>`;
 }
 
-async function loadHostStatus(force = false) {
-  if (S.host.loading) return;
-  if (S.host.tried && !force && S.host.data) return;
-  S.host.loading = true;
+async function promptAction(kind) {
+  const h = S.host;
+  if (h.busy) return;
+  const ask = kind === "save"
+    ? "把当前编辑的提示词写进宿主的 prompt-inject.md？会先自动备份，改完要重启 dsh 才生效。"
+    : "用内置默认（dsh-purge 1.1.71）覆盖宿主提示词？会先自动备份，改完要重启 dsh 才生效。";
+  if (!window.confirm(ask)) return;
+  h.busy = true;
+  h.message = "";
+  h.error = null;
+  renderPage();
   try {
-    const data = await request("/api/host/status");
-    S.host.data = data;
-    S.host.error = null;
+    const body = { confirm: true };
+    if (kind === "save") body.text = h.promptDraft != null ? h.promptDraft : (h.prompt && h.prompt.text) || "";
+    const data = await request(kind === "save" ? "/api/host/prompt" : "/api/host/prompt/reset", { method: "POST", body });
+    if (!data || data.ok === false) throw payloadError(data, "写提示词失败");
+    h.message = (kind === "save" ? "已保存提示词" : "已恢复默认提示词")
+      + `（${fmtNum(data.bytes)} 字符）`
+      + (data.backup ? "，改前备份：" + data.backup : "")
+      + "。重启 dsh 生效。";
+    h.promptDraft = null;
+    h.promptDirty = false;
+    toast("完成");
+    S.host.tried = false;
+    await loadHostStatus(true);
   } catch (e) {
-    S.host.error = e;
+    h.error = e;
+    h.message = simpleReason(e);
   } finally {
-    S.host.loading = false;
-    S.host.tried = true;
-    if (modeIsTechnical() && S.tab === "breach") renderPage();
+    h.busy = false;
+    renderPage();
   }
+}
+
+async function loadHostStatus(force = false) {
+  if (S.host.loading) return S.host.loadPromise || null;
+  if (S.host.tried && !force && S.host.data && S.host.prompt) return null;
+  S.host.loading = true;
+  S.host.loadPromise = (async () => {
+    try {
+      const status = await request("/api/host/status");
+      S.host.data = status;
+      S.host.error = null;
+      // 提示词/清单单独取，且失败时串行重试一次：首次并发偶尔会拿不到（宿主扫描很慢）
+      let prompt = await request("/api/host/prompt").catch(() => null);
+      if (!prompt) prompt = await request("/api/host/prompt").catch(() => null);
+      S.host.prompt = prompt;
+      let inventory = await request("/api/host/inventory").catch(() => null);
+      if (!inventory) inventory = await request("/api/host/inventory").catch(() => null);
+      S.host.inventory = inventory;
+    } catch (e) {
+      S.host.error = e;
+    } finally {
+      S.host.loading = false;
+      S.host.tried = true;
+      if (modeIsTechnical() && S.tab === "breach") renderPage();
+    }
+  })();
+  return S.host.loadPromise;
 }
 
 async function hostAction(kind) {
@@ -2110,6 +2186,7 @@ function renderBreach() {
       <div class="head-meta">${badge("不调用模型 API", "accent")}${badge("只改副本", "")}${badge("expect 前置校验", "good")}${hostBadge()}</div>
     </div>
 
+    ${renderHostSection()}
     ${groupsHtml("breach", [
       { key: "base", html: baseGroup },
       { key: "strategy", html: strategyGroup },
@@ -2117,7 +2194,6 @@ function renderBreach() {
       { key: "paths", html: renderBinarySection() },
       { key: "diag", html: diagGroup },
     ])}
-    ${renderHostSection()}
     ${renderLiveModelsSection()}
   `;
   bindBreach();
@@ -2166,6 +2242,18 @@ function bindBreach() {
   });
   $$("#page [data-live-refresh]").forEach((el) => {
     el.addEventListener("click", () => refreshLiveModels());
+  });
+  const hostPrompt = $("#hostPrompt");
+  if (hostPrompt) {
+    hostPrompt.addEventListener("input", () => {
+      S.host.promptDraft = hostPrompt.value;
+      S.host.promptDirty = true;
+      const save = document.querySelector('#page [data-prompt-action="save"]');
+      if (save) save.disabled = false;
+    });
+  }
+  $$("#page [data-prompt-action]").forEach((el) => {
+    el.addEventListener("click", () => promptAction(el.dataset.promptAction));
   });
   if (tplField) {
     const ev = tplField.tagName === "SELECT" ? "change" : "input";

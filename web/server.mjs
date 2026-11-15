@@ -10,7 +10,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
-import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable } from './host.mjs';
+import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory } from './host.mjs';
 import { detectLiveModels } from './models-live.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -738,6 +738,36 @@ async function handleApi(req, res, url, state) {
       const r = await applyHostPatches(body.mode || 'apply');
       return send(res, 200, { ok: true, result: r, guardSnapshot: guard.id });
     } catch (e) { return send(res, 500, { ok: false, error: 'apply_failed', detail: publicError(e), guardSnapshot: guard.id }); }
+  }
+
+  if (p === '/api/host/inventory' && method === 'GET') {
+    try { return send(res, 200, Object.assign({ ok: true }, await hostInventory())); }
+    catch (e) { return send(res, 500, { ok: false, error: 'inventory_failed', detail: publicError(e) }); }
+  }
+  // 原版面板的「提示词」栏：读 / 写 / 恢复默认（写前必备份）
+  if (p === '/api/host/prompt' && method === 'GET') {
+    try { return send(res, 200, await readPromptFile()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'prompt_read_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/host/prompt' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '写注入提示词会改宿主的 prompt-inject.md，传 confirm:true' });
+    return withLock(async () => {
+      try {
+        const r = await writePromptFile(DATA_DIR, String(body.text || ''));
+        return send(res, 200, Object.assign({ ok: true }, r, { restartRequired: true }));
+      } catch (e) { return send(res, 400, { ok: false, error: 'prompt_write_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/host/prompt/reset' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '恢复默认提示词会覆盖 prompt-inject.md，传 confirm:true' });
+    return withLock(async () => {
+      try {
+        const r = await resetPromptFile(DATA_DIR);
+        return send(res, 200, Object.assign({ ok: true }, r, { restartRequired: true }));
+      } catch (e) { return send(res, 500, { ok: false, error: 'prompt_reset_failed', detail: publicError(e) }); }
+    });
   }
 
   // breach (FR-2)
