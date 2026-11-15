@@ -10,7 +10,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
-import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge } from './host.mjs';
+import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
 import { detectLiveModels } from './models-live.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -780,6 +780,70 @@ async function handleApi(req, res, url, state) {
     } catch (e) {
       return send(res, 500, { ok: false, error: 'uninstall_failed', detail: publicError(e), guardSnapshot: guard.id });
     }
+  }
+
+  // ---- 规则集 / 出口白名单 / 技能（原版面板另外三栏） -------------------------------
+  if (p === '/api/host/rules' && method === 'GET') {
+    try { return send(res, 200, await listRules()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'rules_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/host/rule' && method === 'GET') {
+    try { return send(res, 200, await readRule(url.searchParams.get('name') || '')); }
+    catch (e) { return send(res, 400, { ok: false, error: 'rule_read_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/host/rule' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '写规则集会落盘到 ~/.dsh/rules，传 confirm:true' });
+    return withLock(async () => {
+      try {
+        const r = await writeRule(DATA_DIR, body.name || '', String(body.text || ''));
+        return send(res, 200, Object.assign({ ok: true }, r));
+      } catch (e) { return send(res, 400, { ok: false, error: 'rule_write_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/host/rule/delete' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try { return send(res, 200, await deleteRule(DATA_DIR, body.name || '')); }
+      catch (e) { return send(res, 400, { ok: false, error: 'rule_delete_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/host/net-scope' && method === 'GET') {
+    try { return send(res, 200, await readNetScope()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'netscope_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/host/net-scope' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try { return send(res, 200, await writeNetScope(DATA_DIR, String(body.text || ''))); }
+      catch (e) { return send(res, 400, { ok: false, error: 'netscope_write_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/host/skills' && method === 'GET') {
+    try { return send(res, 200, await listSkills()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'skills_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/host/skill' && method === 'GET') {
+    try { return send(res, 200, await readSkill(url.searchParams.get('name') || '')); }
+    catch (e) { return send(res, 400, { ok: false, error: 'skill_read_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/host/skill' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try { return send(res, 200, Object.assign({ ok: true }, await writeSkill(DATA_DIR, body.name || '', String(body.text || '')))); }
+      catch (e) { return send(res, 400, { ok: false, error: 'skill_write_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/host/skill/delete' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try { return send(res, 200, await deleteSkill(DATA_DIR, body.name || '')); }
+      catch (e) { return send(res, 400, { ok: false, error: 'skill_delete_failed', detail: publicError(e) }); }
+    });
   }
 
   // breach (FR-2)

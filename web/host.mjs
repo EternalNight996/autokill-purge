@@ -524,9 +524,14 @@ async function backupPromptFile(dataDir, tag) {
   return dir;
 }
 
+/** 本机 DSH 主目录 */
+function dshHome() {
+  return process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
+}
+
 /** 原版面板其他几栏的现状：规则集 / 技能 / 工具库 / 出口白名单 */
 export async function hostInventory() {
-  const dsh = process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
+  const dsh = dshHome();
   const out = { dshHome: dsh, rules: null, skills: null, redteam: null, netScope: null, prompt: null };
   const rulesDir = join(dsh, 'rules');
   if (existsSync(rulesDir)) {
@@ -569,4 +574,132 @@ export async function hostInventory() {
     out.netScope = { path: ns, lines: text.split(/\r?\n/).filter((l) => l.trim()).length };
   }
   return out;
+}
+
+// ---- 规则集 / 出口白名单 / 技能：原版面板的另外三栏（可读写） ---------------------
+const SAFE_NAME = /^[\w\u4e00-\u9fa5][\w\u4e00-\u9fa5.\- ]{0,80}$/;
+
+function safeName(name, suffix = '') {
+  const n = String(name || '').trim();
+  if (!SAFE_NAME.test(n)) throw new Error('名字不合法（只允许中英文、数字、下划线、点、连字符、空格）');
+  return suffix && !n.toLowerCase().endsWith(suffix) ? n + suffix : n;
+}
+
+async function backupFile(dataDir, kind, srcPath) {
+  if (!existsSync(srcPath)) return null;
+  const dir = join(dataDir, 'host-snapshots', kind + '-' + stamp());
+  await mkdir(dir, { recursive: true });
+  const blob = basename(srcPath);
+  await copyFile(srcPath, join(dir, blob));
+  const { createHash } = await import('node:crypto');
+  const buf = await readFile(srcPath);
+  await writeFile(join(dir, 'manifest.json'), JSON.stringify({
+    kind: kind, at: new Date().toISOString(), path: srcPath, blob: blob,
+    bytes: buf.length, sha256: createHash('sha256').update(buf).digest('hex'),
+  }, null, 2) + '\n', 'utf8');
+  return dir;
+}
+
+/** 规则集：~/.dsh/rules/*.md（原版「编辑提示词和多套规则」的规则那半） */
+export async function listRules() {
+  const dir = join(dshHome(), 'rules');
+  const exists = existsSync(dir);
+  const out = [];
+  if (exists) {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      if (!e.isFile() || !/\.md$/i.test(e.name)) continue;
+      const st = await stat(join(dir, e.name)).catch(() => null);
+      out.push({ name: e.name, bytes: st ? st.size : 0, mtime: st ? st.mtime.toISOString() : null });
+    }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return { ok: true, dir: dir, exists: exists, files: out };
+}
+
+export async function readRule(name) {
+  const file = join(dshHome(), 'rules', safeName(name, '.md'));
+  if (!existsSync(file)) return { ok: false, error: 'not_found', name: name, text: '' };
+  const st = await stat(file);
+  return { ok: true, name: basename(file), path: file, text: await readFile(file, 'utf8'), bytes: st.size, mtime: st.mtime.toISOString() };
+}
+
+export async function writeRule(dataDir, name, text) {
+  if (typeof text !== 'string') throw new Error('正文必须是字符串');
+  const dir = join(dshHome(), 'rules');
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, safeName(name, '.md'));
+  const backup = await backupFile(dataDir, 'rule', file);
+  await writeFile(file, text, 'utf8');
+  return { ok: true, path: file, name: basename(file), bytes: Buffer.byteLength(text), backup: backup };
+}
+
+export async function deleteRule(dataDir, name) {
+  const file = join(dshHome(), 'rules', safeName(name, '.md'));
+  if (!existsSync(file)) throw new Error('规则不存在：' + name);
+  const backup = await backupFile(dataDir, 'rule', file);
+  await rm(file, { force: true });
+  return { ok: true, deleted: basename(file), backup: backup };
+}
+
+/** 出口白名单：~/.dsh/net-scope-allow.txt（原版「自己的服务器」那栏） */
+export async function readNetScope() {
+  const file = join(dshHome(), 'net-scope-allow.txt');
+  const exists = existsSync(file);
+  const text = exists ? await readFile(file, 'utf8') : '';
+  return { ok: true, path: file, exists: exists, text: text, lines: text.split(/\r?\n/).filter((l) => l.trim()).length };
+}
+
+export async function writeNetScope(dataDir, text) {
+  const file = join(dshHome(), 'net-scope-allow.txt');
+  const backup = await backupFile(dataDir, 'net-scope', file);
+  await writeFile(file, String(text || ''), 'utf8');
+  return { ok: true, path: file, bytes: Buffer.byteLength(String(text || '')), backup: backup };
+}
+
+/** 技能：~/.dsh/skills/<name>/SKILL.md */
+export async function listSkills() {
+  const dir = join(dshHome(), 'skills');
+  const exists = existsSync(dir);
+  const out = [];
+  if (exists) {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('.')) continue;
+      const md = join(dir, e.name, 'SKILL.md');
+      if (!existsSync(md)) continue;
+      const st = await stat(md).catch(() => null);
+      out.push({ name: e.name, bytes: st ? st.size : 0, mtime: st ? st.mtime.toISOString() : null });
+    }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return { ok: true, dir: dir, exists: exists, skills: out };
+}
+
+export async function readSkill(name) {
+  const n = safeName(name);
+  const file = join(dshHome(), 'skills', n, 'SKILL.md');
+  if (!existsSync(file)) return { ok: false, error: 'not_found', name: n, text: '' };
+  const st = await stat(file);
+  return { ok: true, name: n, path: file, text: await readFile(file, 'utf8'), bytes: st.size, mtime: st.mtime.toISOString() };
+}
+
+export async function writeSkill(dataDir, name, text) {
+  if (typeof text !== 'string' || !text.trim()) throw new Error('技能正文不能为空');
+  const n = safeName(name);
+  const dir = join(dshHome(), 'skills', n);
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, 'SKILL.md');
+  const backup = await backupFile(dataDir, 'skill', file);
+  await writeFile(file, text, 'utf8');
+  return { ok: true, path: file, name: n, bytes: Buffer.byteLength(text), backup: backup };
+}
+
+export async function deleteSkill(dataDir, name) {
+  const n = safeName(name);
+  const dir = join(dshHome(), 'skills', n);
+  if (!existsSync(dir)) throw new Error('技能不存在：' + name);
+  const backup = await backupFile(dataDir, 'skill', join(dir, 'SKILL.md'));
+  await rm(dir, { recursive: true, force: true });
+  return { ok: true, deleted: n, backup: backup };
 }

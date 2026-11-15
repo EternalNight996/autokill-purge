@@ -159,6 +159,10 @@ const S = {
   readiness: { data: null, loading: false, tried: false, error: null },
   host: {
     data: null, prompt: null, inventory: null,
+    rules: null, skills: null, netScope: null,
+    ruleEdit: { name: "", text: "", dirty: false },
+    skillView: { name: "", text: "" },
+    netScopeDraft: null,
     loading: false, tried: false, error: null, busy: false, message: "",
     promptDraft: null, promptDirty: false,
   },
@@ -1283,11 +1287,82 @@ function renderSimpleBreach() {
     ${renderFlowPlanStep("simple")}
     ${renderFlowApplyStep()}
     ${renderFlowPatchList()}
+    ${renderFlowExtraPanels()}
     ${renderSimpleOperation()}
     ${renderSimpleResults()}
   `;
   bindSimpleBreach();
   bindFlowControls();
+}
+
+/* 原版另外三栏的动作：规则集 / 白名单 / 技能 */
+async function reloadHostExtras() {
+  S.host.rules = await request("/api/host/rules").catch(() => S.host.rules);
+  S.host.skills = await request("/api/host/skills").catch(() => S.host.skills);
+  S.host.netScope = await request("/api/host/net-scope").catch(() => S.host.netScope);
+  if (S.tab === "breach") renderPage();
+}
+
+async function openRule(name) {
+  try {
+    const d = await request("/api/host/rule?name=" + encodeURIComponent(name));
+    S.host.ruleEdit = { name: d.name || name, text: d.text || "" };
+    renderPage();
+  } catch (e) { toast(simpleReason(e)); }
+}
+
+async function saveRule() {
+  const e = S.host.ruleEdit || {};
+  const name = String(e.name || "").trim();
+  if (!name) { toast("先写文件名，例如 strict.md"); return; }
+  try {
+    const d = await request("/api/host/rule", { method: "POST", body: { confirm: true, name: name, text: String(e.text || "") } });
+    if (!d || d.ok === false) throw payloadError(d, "保存规则失败");
+    toast("规则已保存");
+    S.host.ruleEdit = { name: d.name, text: e.text };
+    await reloadHostExtras();
+  } catch (err) { toast(simpleReason(err)); }
+}
+
+async function deleteRuleFile(name) {
+  if (!window.confirm("删除规则 " + name + "？会先自动备份。")) return;
+  try {
+    const d = await request("/api/host/rule/delete", { method: "POST", body: { confirm: true, name: name } });
+    if (!d || d.ok === false) throw payloadError(d, "删除规则失败");
+    toast("已删除");
+    if ((S.host.ruleEdit || {}).name === name) S.host.ruleEdit = { name: "", text: "" };
+    await reloadHostExtras();
+  } catch (e) { toast(simpleReason(e)); }
+}
+
+async function saveNetScope() {
+  try {
+    const text = S.host.netScopeDraft != null ? S.host.netScopeDraft : ((S.host.netScope || {}).text || "");
+    const d = await request("/api/host/net-scope", { method: "POST", body: { confirm: true, text: text } });
+    if (!d || d.ok === false) throw payloadError(d, "保存白名单失败");
+    toast("白名单已保存");
+    S.host.netScopeDraft = null;
+    await reloadHostExtras();
+  } catch (e) { toast(simpleReason(e)); }
+}
+
+async function openSkill(name) {
+  try {
+    const d = await request("/api/host/skill?name=" + encodeURIComponent(name));
+    S.host.skillView = { name: d.name || name, text: d.text || "" };
+    renderPage();
+  } catch (e) { toast(simpleReason(e)); }
+}
+
+async function deleteSkillFile(name) {
+  if (!window.confirm("删除技能 " + name + "？会先自动备份。")) return;
+  try {
+    const d = await request("/api/host/skill/delete", { method: "POST", body: { confirm: true, name: name } });
+    if (!d || d.ok === false) throw payloadError(d, "删除技能失败");
+    toast("已删除");
+    if ((S.host.skillView || {}).name === name) S.host.skillView = { name: "", text: "" };
+    await reloadHostExtras();
+  } catch (e) { toast(simpleReason(e)); }
 }
 
 /* 统一流程里的公共控件（两模式共用）：注入/卸载/还原、重新识别、注入正文编辑 */
@@ -1301,6 +1376,22 @@ function bindFlowControls() {
   $$("#page [data-prompt-action]").forEach((el) => {
     el.addEventListener("click", () => promptAction(el.dataset.promptAction));
   });
+  // 规则集
+  $$("#page [data-rule-open]").forEach((el) => el.addEventListener("click", () => openRule(el.dataset.ruleOpen)));
+  $$("#page [data-rule-del]").forEach((el) => el.addEventListener("click", () => deleteRuleFile(el.dataset.ruleDel)));
+  $$("#page [data-rule-new]").forEach((el) => el.addEventListener("click", () => { S.host.ruleEdit = { name: "", text: "" }; renderPage(); }));
+  $$("#page [data-rule-save]").forEach((el) => el.addEventListener("click", () => saveRule()));
+  const ruleNameEl = $("#ruleName");
+  if (ruleNameEl) ruleNameEl.addEventListener("input", () => { S.host.ruleEdit = Object.assign({}, S.host.ruleEdit, { name: ruleNameEl.value }); });
+  const ruleTextEl = $("#ruleText");
+  if (ruleTextEl) ruleTextEl.addEventListener("input", () => { S.host.ruleEdit = Object.assign({}, S.host.ruleEdit, { text: ruleTextEl.value }); });
+  // 出口白名单
+  const nsEl = $("#netScopeText");
+  if (nsEl) nsEl.addEventListener("input", () => { S.host.netScopeDraft = nsEl.value; });
+  $$("#page [data-netscope-save]").forEach((el) => el.addEventListener("click", () => saveNetScope()));
+  // 技能
+  $$("#page [data-skill-open]").forEach((el) => el.addEventListener("click", () => openSkill(el.dataset.skillOpen)));
+  $$("#page [data-skill-del]").forEach((el) => el.addEventListener("click", () => deleteSkillFile(el.dataset.skillDel)));
   const hp = $("#hostPrompt");
   if (hp) {
     hp.addEventListener("input", () => {
@@ -1937,6 +2028,65 @@ function renderFlowPatchList() {
   </section>`;
 }
 
+/* 原版面板另外三栏：规则集 / 出口白名单 / 技能（都落在 ~/.dsh 下，写前自动备份） */
+function renderFlowExtraPanels() {
+  const h = S.host;
+  if (!h.data || h.data.available === false) return "";
+  const rules = h.rules || { files: [] };
+  const skills = h.skills || { skills: [] };
+  const ns = h.netScope || { exists: false, text: "", lines: 0 };
+  const re = h.ruleEdit || { name: "", text: "" };
+  const sv = h.skillView || { name: "", text: "" };
+  const nsDraft = h.netScopeDraft != null ? h.netScopeDraft : (ns.text || "");
+
+  const ruleRows = (rules.files || []).map((f) => `<div class="s-row">
+      <div class="s-row-main"><strong>${esc(f.name)}</strong><span class="mono small">${fmtNum(f.bytes)} 字节 · ${esc(f.mtime ? fmtTime(f.mtime) : "")}</span></div>
+      <div class="actions"><button type="button" class="small" data-rule-open="${esc(f.name)}">编辑</button>
+        <button type="button" class="small" data-rule-del="${esc(f.name)}">删除</button></div>
+    </div>`).join("");
+
+  const skillRows = (skills.skills || []).map((s) => `<div class="s-row">
+      <div class="s-row-main"><strong>${esc(s.name)}</strong><span class="mono small">${fmtNum(s.bytes)} 字节</span></div>
+      <div class="actions"><button type="button" class="small" data-skill-open="${esc(s.name)}">查看</button>
+        <button type="button" class="small" data-skill-del="${esc(s.name)}">删除</button></div>
+    </div>`).join("");
+
+  return `<section class="section">
+    <h2><span class="num">3+</span>其他三栏<span class="count">规则 ${(rules.files || []).length} · 技能 ${(skills.skills || []).length} · 白名单 ${ns.lines || 0} 行</span></h2>
+
+    <details class="grp" data-group="extra:rules">
+      <summary><span class="grp-title">规则集</span><span class="grp-hint">~/.dsh/rules/*.md · ${(rules.files || []).length} 个${rules.exists ? "" : "（目录还没建，保存时自动建）"}</span></summary>
+      <div class="grp-body">
+        ${ruleRows || `<p class="small muted">还没有规则文件。</p>`}
+        <div class="actions" style="margin:8px 0"><button type="button" class="ghost" data-rule-new>新建规则</button></div>
+        <label class="field"><span>文件名</span><input id="ruleName" type="text" value="${esc(re.name)}" placeholder="例：strict.md"></label>
+        <label class="field"><span>正文</span><textarea id="ruleText" rows="8" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(re.text)}</textarea></label>
+        <div class="actions"><button type="button" class="primary" data-rule-save>保存规则</button><span class="hint">保存前自动备份到 data/host-snapshots/rule-*。</span></div>
+      </div>
+    </details>
+
+    <details class="grp" data-group="extra:netscope">
+      <summary><span class="grp-title">出口白名单</span><span class="grp-hint">~/.dsh/net-scope-allow.txt · ${ns.lines || 0} 行${ns.exists ? "" : "（未设置）"}</span></summary>
+      <div class="grp-body">
+        <label class="field"><span>每行一个主机 / 网段（原版「自己的服务器」那栏）</span>
+          <textarea id="netScopeText" rows="8" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(nsDraft)}</textarea>
+        </label>
+        <div class="actions"><button type="button" class="primary" data-netscope-save>保存白名单</button><span class="hint">保存前自动备份。</span></div>
+      </div>
+    </details>
+
+    <details class="grp" data-group="extra:skills">
+      <summary><span class="grp-title">技能</span><span class="grp-hint">~/.dsh/skills · ${(skills.skills || []).length} 篇</span></summary>
+      <div class="grp-body">
+        ${skillRows || `<p class="small muted">还没有技能。</p>`}
+        <label class="field"><span>查看：${esc(sv.name || "未选择")}</span>
+          <textarea rows="10" readonly spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(sv.text)}</textarea>
+        </label>
+      </div>
+    </details>
+  </section>`;
+}
+
 function hostStatusBadge(status) {
   if (status === "applied") return badge("已应用", "accent");
   if (status === "pending") return badge("待应用", "");
@@ -2067,16 +2217,22 @@ async function loadHostStatus(force = false) {
   S.host.loading = true;
   S.host.loadPromise = (async () => {
     try {
-      const status = await request("/api/host/status");
+      // 并行取：status 最慢（要扫宿主），其余一起发，别串成 6 次等待
+      const [status, prompt0, inventory0, rules0, skills0, netScope0] = await Promise.all([
+        request("/api/host/status"),
+        request("/api/host/prompt").catch(() => null),
+        request("/api/host/inventory").catch(() => null),
+        request("/api/host/rules").catch(() => null),
+        request("/api/host/skills").catch(() => null),
+        request("/api/host/net-scope").catch(() => null),
+      ]);
       S.host.data = status;
       S.host.error = null;
-      // 提示词/清单单独取，且失败时串行重试一次：首次并发偶尔会拿不到（宿主扫描很慢）
-      let prompt = await request("/api/host/prompt").catch(() => null);
-      if (!prompt) prompt = await request("/api/host/prompt").catch(() => null);
-      S.host.prompt = prompt;
-      let inventory = await request("/api/host/inventory").catch(() => null);
-      if (!inventory) inventory = await request("/api/host/inventory").catch(() => null);
-      S.host.inventory = inventory;
+      S.host.prompt = prompt0 || await request("/api/host/prompt").catch(() => null);
+      S.host.inventory = inventory0;
+      S.host.rules = rules0;
+      S.host.skills = skills0;
+      S.host.netScope = netScope0;
     } catch (e) {
       S.host.error = e;
     } finally {
@@ -2398,6 +2554,7 @@ function renderBreach() {
     ${renderFlowPlanStep("technical")}
     ${renderFlowApplyStep()}
     ${renderFlowPatchList()}
+    ${renderFlowExtraPanels()}
 
     ${groupsHtml("breach", [
       { key: "base", html: baseGroup },
