@@ -153,6 +153,7 @@ const S = {
   prompts: [],
   outputChoices: [],
   taskPresets: [],
+  modelsLive: null,
   tab: "breach",
   memoryStatus: "unknown",
   readiness: { data: null, loading: false, tried: false, error: null },
@@ -695,6 +696,7 @@ function applyState(data) {
   S.prompts = Array.isArray(data.prompts) ? data.prompts : [];
   S.outputChoices = Array.isArray(data.outputChoices) ? data.outputChoices : [];
   S.taskPresets = Array.isArray(data.taskPresets) ? data.taskPresets : [];
+  S.modelsLive = data.modelsLive || null;
   S.attempts = Array.isArray(S.state.attempts) ? S.state.attempts : [];
   S.equipment = Array.isArray(S.state.equipment) ? S.state.equipment : [];
   S.assignments = S.state.assignments && typeof S.state.assignments === "object" ? S.state.assignments : {};
@@ -1842,6 +1844,43 @@ async function hostAction(kind) {
   }
 }
 
+/* 实时模型识别：来源、当前默认模型、重新识别 */
+function renderLiveModelsSection() {
+  const lv = S.modelsLive;
+  if (!lv) return "";
+  const srcRows = (lv.sources || []).map((s) => `<tr>
+      <td>${esc(s.kind)}</td>
+      <td class="mono small">${esc(s.path || "")}</td>
+      <td>${fmtNum(s.models || 0)}</td>
+      <td class="muted small">${s.error ? esc(s.error) : (s.mtime ? esc(fmtTime(s.mtime)) : "")}</td>
+    </tr>`).join("");
+  return `<section class="section"><h2 id="h-live"><span class="num">13</span>实时模型识别<span class="count">${fmtNum(lv.count || 0)} 个 · ${lv.detectedAt ? esc(fmtTime(lv.detectedAt)) : "未识别"}</span></h2>
+    <div class="card">
+      <div class="s-row"><div class="s-row-main"><strong>当前默认模型</strong><span>${lv.default ? esc((lv.default.provider || "?") + " / " + lv.default.model) : "未识别到"}</span></div></div>
+      <div class="s-row"><div class="s-row-main"><strong>识别到的模型</strong><span>${fmtNum(lv.count || 0)} 个（标「实时」的条目就来自这里；静态目录里没有的会追加到模型矩阵）</span></div></div>
+    </div>
+    <div class="actions" style="margin-top:10px">
+      <button type="button" class="ghost" data-live-refresh>重新识别</button>
+      <span class="hint">读 ~/.dsh 的 cordis.patch.yml、用量账本与 Ollama（30 秒缓存，点这里强制重扫）。</span>
+    </div>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="实时模型来源">
+      <table class="min"><thead><tr><th>来源类型</th><th>路径</th><th>模型数</th><th>时间 / 错误</th></tr></thead><tbody>${srcRows || `<tr><td colspan="4" class="muted">没有可读来源</td></tr>`}</tbody></table>
+    </div>
+  </section>`;
+}
+
+async function refreshLiveModels() {
+  try {
+    await request("/api/models/live?refresh=1");
+    const data = await request("/api/state");
+    applyState(data);
+    renderPage();
+    toast("已重新识别");
+  } catch (e) {
+    toast(simpleReason(e));
+  }
+}
+
 function renderBreach() {
   const b = S.breach;
   const model = S.models.find((m) => m.id === b.model) || S.models[0] || null;
@@ -1851,9 +1890,10 @@ function renderBreach() {
     ? `<div class="grid models">${S.models.map((m) => {
       const on = m.id === b.model;
       return `<button type="button" class="pick" data-model="${esc(m.id)}" data-focus="model-${esc(m.id)}" aria-pressed="${on}">
-        <span class="pick-top"><span class="pick-name">${esc(m.name)}</span>${m.dshPurge === "default" ? badge("dsh-purge 默认", "accent") : (m.dshPurge === "supported" ? badge("dsh-purge 支持", "") : "")}${on ? badge("已选", "accent") : ""}</span>
+        <span class="pick-top"><span class="pick-name">${esc(m.name)}</span>${m.live ? badge("实时", "") : ""}${m.dshDefault ? badge("当前默认", "good") : ""}${m.dshPurge === "default" ? badge("dsh-purge 默认", "accent") : (m.dshPurge === "supported" ? badge("dsh-purge 支持", "") : "")}${on ? badge("已选", "accent") : ""}</span>
         <span class="pick-note">${esc(m.notes || m.refusal || m.desc || "—")}</span>
         ${m.family ? `<span class="pick-meta">${esc(m.family)}</span>` : ""}
+        ${m.live ? `<span class="pick-meta">${esc(m.liveProvider || m.liveSourceType || "")}${m.liveSource ? " · " + esc(m.liveSource) : ""}</span>` : ""}
       </button>`;
     }).join("")}</div>`
     : emptyState("模型目录为空", "服务端 /api/state 没有返回 models[]；确认后端版本与协议契约。");
@@ -2078,6 +2118,7 @@ function renderBreach() {
       { key: "diag", html: diagGroup },
     ])}
     ${renderHostSection()}
+    ${renderLiveModelsSection()}
   `;
   bindBreach();
   bindBinary();
@@ -2122,6 +2163,9 @@ function bindBreach() {
   const tplField = $("#bTemplate");
   $$("#page [data-host-action]").forEach((el) => {
     el.addEventListener("click", () => hostAction(el.dataset.hostAction));
+  });
+  $$("#page [data-live-refresh]").forEach((el) => {
+    el.addEventListener("click", () => refreshLiveModels());
   });
   if (tplField) {
     const ev = tplField.tagName === "SELECT" ? "change" : "input";

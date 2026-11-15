@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
 import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable } from './host.mjs';
+import { detectLiveModels } from './models-live.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -475,6 +476,60 @@ function slugify(s) {
 }
 
 // ---- API router --------------------------------------------------------------
+// ---- 实时模型识别（30s 缓存，force=true 强制重扫） ---------------------------------
+let liveCache = { at: 0, data: null };
+async function liveModels(force) {
+  if (!force && liveCache.data && Date.now() - liveCache.at < 30000) return liveCache.data;
+  try {
+    const data = await detectLiveModels();
+    liveCache = { at: Date.now(), data: data };
+    return data;
+  } catch (e) {
+    return { ok: false, error: publicError(e), count: 0, models: [], sources: [], defaults: [] };
+  }
+}
+
+/** 静态目录 + 实时识别结果合并：识别到的标 live，未收录的作为新条目追加；默认模型排最前 */
+function mergeLiveModels(statics, live) {
+  const byId = new Map(statics.map((m) => [m.id, Object.assign({}, m)]));
+  const defaultId = live && live.default ? live.default.model : null;
+  const extra = [];
+  for (const l of (live && live.models) || []) {
+    const isDefault = !!(l.isDefault || (defaultId && l.id === defaultId));
+    const hit = byId.get(l.id);
+    if (hit) {
+      hit.live = true;
+      hit.liveSource = l.source;
+      hit.liveSourceType = l.sourceType;
+      hit.liveProvider = l.provider || null;
+      if (isDefault) { hit.dshDefault = true; hit.recommended = 0; }
+    } else {
+      extra.push({
+        id: l.id,
+        name: l.name || l.id,
+        vendor: l.provider || '本机识别',
+        domestic: true,
+        live: true,
+        liveSource: l.source,
+        liveSourceType: l.sourceType,
+        liveProvider: l.provider || null,
+        api: null,
+        tagline: '本机识别 · ' + (l.sourceType === 'ollama' ? 'Ollama' : l.sourceType === 'usage-ledger' ? '实际用过' : (l.provider || 'DSH 配置')),
+        notes: '实时识别自 ' + l.source + (l.contextWindow ? '（上下文 ' + l.contextWindow + '）' : ''),
+        dshPurge: l.isDefault ? 'default' : undefined,
+        dshDefault: !!l.isDefault,
+      });
+    }
+  }
+  const all = [...byId.values(), ...extra];
+  all.sort((a, b) => {
+    const ra = a.dshDefault ? -1 : (typeof a.recommended === 'number' ? a.recommended : 99);
+    const rb = b.dshDefault ? -1 : (typeof b.recommended === 'number' ? b.recommended : 99);
+    return ra - rb;
+  });
+  return all;
+}
+
 async function handleApi(req, res, url, state) {
   const p = url.pathname;
   const method = req.method;
@@ -482,12 +537,19 @@ async function handleApi(req, res, url, state) {
   if (p === '/api/ping' && method === 'GET') return send(res, 200, { ok: true, version: VERSION });
 
   if (p === '/api/state' && method === 'GET') {
+    const live = await liveModels(false);
     return send(res, 200, {
       ok: true, version: VERSION, agreementVersion: AGREEMENT_VERSION, agreementText: AGREEMENT_TEXT,
-      state: redact(state), models: MODELS, layers: LAYERS, techniques: TECHNIQUES,
+      state: redact(state), models: mergeLiveModels(MODELS, live), layers: LAYERS, techniques: TECHNIQUES,
+      modelsLive: { ok: live.ok !== false, detectedAt: live.detectedAt || null, count: live.count || 0, default: live.default || null, sources: live.sources || [], error: live.error || null },
       prompts: PROMPTS.map((x) => ({ id: x.id, name: x.name, note: x.note, source: x.source, scopes: x.scopes })),
       outputChoices: OUTPUT_CHOICES, taskPresets: TASK_PRESETS
     });
+  }
+  if (p === '/api/models/live' && method === 'GET') {
+    const force = url.searchParams.get('refresh') === '1';
+    const live = await liveModels(force);
+    return send(res, 200, Object.assign({ ok: true }, live));
   }
 
   // readiness probe for the simple-mode status card (UX-2LAYER §1.2). Deliberately NOT in the
@@ -634,7 +696,7 @@ async function handleApi(req, res, url, state) {
     return sendText(res, 200, await assignMarkdown(state, agent), 'text/markdown');
   }
 
-  // ---- 宿主破甲（照搬 dsh-purge 1.1.71 的补丁引擎 + 备份/恢复闭环） --------------
+// ---- 宿主破甲（照搬 dsh-purge 1.1.71 的补丁引擎 + 备份/恢复闭环） --------------
   if (p === '/api/host/status' && method === 'GET') {
     return send(res, 200, await hostStatus(DATA_DIR));
   }
