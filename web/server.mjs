@@ -10,6 +10,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
+import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable } from './host.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -627,6 +628,50 @@ async function handleApi(req, res, url, state) {
     const r = await memFetch(state, '/health');
     if (r.unreachable || !r.ok) return sendText(res, 503, '服务不可用', 'text/markdown');
     return sendText(res, 200, await assignMarkdown(state, agent), 'text/markdown');
+  }
+
+  // ---- 宿主破甲（照搬 dsh-purge 1.1.71 的补丁引擎 + 备份/恢复闭环） --------------
+  if (p === '/api/host/status' && method === 'GET') {
+    return send(res, 200, await hostStatus(DATA_DIR));
+  }
+  if (p === '/api/host/baseline' && method === 'GET') {
+    try { return send(res, 200, Object.assign({ ok: true }, await baselineDiff())); }
+    catch (e) { return send(res, 503, { ok: false, error: 'baseline_unavailable', detail: publicError(e) }); }
+  }
+  if (p === '/api/host/snapshot' && method === 'POST') {
+    const body = await bodyOf(req);
+    try {
+      const snap = await createSnapshot(DATA_DIR, body.tag || 'manual');
+      return send(res, 200, { ok: true, snapshot: snap });
+    } catch (e) { return send(res, 500, { ok: false, error: 'snapshot_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/host/restore' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '恢复会覆盖宿主文件，必须先备份并传 confirm:true' });
+    // 覆盖前先给「当前状态」再存一份，保证这次操作本身也可撤销
+    const guard = await createSnapshot(DATA_DIR, 'pre-restore');
+    try {
+      const r = await restoreSnapshot(DATA_DIR, body.id || null);
+      return send(res, 200, { ok: true, restored: r, guardSnapshot: guard.id, restartRequired: true });
+    } catch (e) { return send(res, 500, { ok: false, error: 'restore_failed', detail: publicError(e), guardSnapshot: guard.id }); }
+  }
+  if (p === '/api/host/factory' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '恢复出厂会用官方 app.asar 原件覆盖宿主文件，传 confirm:true' });
+    const guard = await createSnapshot(DATA_DIR, 'pre-factory');
+    try {
+      const r = await factoryRestore();
+      return send(res, 200, { ok: true, factory: r, guardSnapshot: guard.id, restartRequired: true });
+    } catch (e) { return send(res, 500, { ok: false, error: 'factory_failed', detail: publicError(e), guardSnapshot: guard.id }); }
+  }
+  if (p === '/api/host/apply' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '应用会改宿主文件并需要重启 dsh，传 confirm:true' });
+    const guard = await createSnapshot(DATA_DIR, 'pre-apply');
+    try {
+      const r = await applyHostPatches(body.mode || 'apply');
+      return send(res, 200, { ok: true, result: r, guardSnapshot: guard.id });
+    } catch (e) { return send(res, 500, { ok: false, error: 'apply_failed', detail: publicError(e), guardSnapshot: guard.id }); }
   }
 
   // breach (FR-2)

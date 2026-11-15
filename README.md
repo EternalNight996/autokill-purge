@@ -84,7 +84,26 @@ node web/server.mjs            # http://127.0.0.1:8792
 
 破甲模板：`web/prompts/sauce-1171.md` 照搬自 **dsh-purge v1.1.71**（MIT）的内置默认提示词
 （面向国模「小码酱」），来源 <https://github.com/YuJunZhiXue/dsh-purge>，按该项目的署名要求标注在文件头。
-换模型可换模板：模板清单由 `web/server.mjs` 的 `PROMPTS` 登记，正文按需读取，不进 `/api/state`。
+用户模式的模板下拉目前只列它**真实实现**的两项：`小码酱 · dsh-purge 1.1.71` 与 `不套模板（纯指令）`。
+
+## 宿主破甲与备份/恢复（技术模式）
+
+破甲分两半：**内容**（本仓库的模板）与**改宿主**（dsh-purge 1.1.71 的 83 个补丁）。
+改宿主这一半不复制代码，直接驱动本机已安装的 dsh-purge 引擎（`web/host.mjs`）：
+
+| 动作 | 接口 | 说明 |
+|---|---|---|
+| 读状态 | `GET /api/host/status` | 83 条补丁的 `applied/pending/na`、宿主面、注入文件、快照列表 |
+| 备份现在 | `POST /api/host/snapshot` | 把 59 个被补丁文件整份复制到 `data/host-snapshots/<ts>/` + sha256 清单 |
+| 撤销上一次 | `POST /api/host/restore {confirm:true}` | 用最近一份快照覆盖；**覆盖前先自动再备份**（guard） |
+| 恢复出厂 | `POST /api/host/factory {confirm:true}` | 从官方 `resources/app.asar` 按需提取原件覆盖（本机实测 54 个文件与原件不同） |
+| 应用补丁 | `POST /api/host/apply {confirm:true}` | 调它原版 `applyPatchesAllHosts()`；写入前自动备份，返回 `restartRequired` |
+
+三条写接口都必须 `confirm:true`，且每次写入前先存一份 guard 快照——**本次操作本身也可撤销**。
+改宿主都要重启 dsh 才生效（我们不自动重启，那会杀掉正在用的会话）。
+
+逐项对照（含 PASS / FAIL / N-G 与原因）：[破甲逐项对照-dsh-purge-1.1.71.md](docs/破甲逐项对照-dsh-purge-1.1.71.md)。
+与它的评分对比：[破甲对比与评分.md](docs/破甲对比与评分.md)。
 
 ## 验收
 

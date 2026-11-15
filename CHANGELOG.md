@@ -2,6 +2,42 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [unreleased] — 2026-11-16（整套破甲照抄 dsh-purge 1.1.71 + 宿主破甲备份/恢复闭环）
+
+### Added（宿主破甲：驱动 dsh-purge 1.1.71 的补丁引擎，不复制它的 344 KB 代码）
+- `web/host.mjs`：`dshPurgeRoot()` 定位本机插件 → 动态 import 它的 `lib/core.js`；`hostStatus()` 输出 83 条补丁的 `applied/pending/na`、宿主面（desktop/web）、注入文件、shim、被补丁文件清单（59 个，跨 `resources/app/**`、`%APPDATA%/npm/node_modules/@deepseek-ai/dsh/**`、`~/.dsh/profiles/*/node_modules/**`）。
+- `asarRead()`：只解析 `app.asar` header 再按区间精确读单文件（213 MB 不整包解压），作为「原件基线」。
+- `applyHostPatches()`：调它原版 `applyPatchesAllHosts()` / `revertAllHosts()`，效果与它一致且跟着它升级。
+- 路由：`GET /api/host/status`、`GET /api/host/baseline`、`POST /api/host/{snapshot,restore,factory,apply}`；四个写接口一律 `confirm:true` 才执行。
+
+### Added（备份与恢复闭环，两级 + guard）
+- 快照：`createSnapshot()` 把 59 个被补丁文件整份复制到 `data/host-snapshots/<ts>-<tag>/` 并记 sha256 清单（实测 59 文件 / 2,670,542 字节）。
+- 撤销上一次：`restoreSnapshot()` 用最近一份快照覆盖。
+- 恢复出厂：`factoryRestore()` 用 `app.asar` 原件覆盖；实测基线比对 **54 patched / 1 identical / 4 not-in-asar**。
+- **每次写入前先自动存 `pre-apply` / `pre-restore` / `pre-factory` 快照**，响应返回 `guardSnapshot` —— 本次操作本身也可撤销。
+- 版本闸门：`asarVersion()` vs 磁盘 `dsh` 版本不同源时不硬抄，结果里写明"优先重装对应包"。
+- 本机实测 `.dshpurge.bak` 数量为 **0**（它自己的回滚在本机不可用），所以恢复不依赖 `.bak`。
+
+### Changed（前端）
+- 技术模式「破甲·诊断」组新增**宿主破甲面板**：74/83 已应用 · 0 待应用 · 8 不适用、基线可读性、注入文件、四个动作按钮（备份现在 / 撤销上一次 / 恢复出厂 / 应用补丁）、83 行补丁表、快照表；每个写动作都有二次确认与结果提示。
+- 修模式持久化竞态：点开关后 15 秒内刷新页面时，服务端可能还没写完 POST，之前会出现"刷新后模式反转"（技术↔普通颠倒）；现在以本机最近一次点击为准并回写服务端。
+- 用户模式破甲模板下拉**只列它真实实现的两项**：`小码酱 · dsh-purge 1.1.71` / `不套模板（纯指令）`。
+
+### Added（文档）
+- `docs/破甲逐项对照-dsh-purge-1.1.71.md`：39 项逐条 PASS / FAIL / N-G + 原因 + 实测证据；同时分列「我们」与「它自身是否真做到」。
+  汇总：破甲内容 11/12 PASS；宿主侧 8/9 PASS（唯一 N-G 是 shim）；备份恢复 9/9 PASS；模型与选项 7/7 PASS；FAIL 3 条（① 不进系统提示词 ② 换模型换提示词——它也没实现 ③ 不自动重启 dsh）。
+
+### 实测（2026-11-16，8792）
+- `GET /api/host/status`：`74/83 applied · 0 pending · 8 na`，基线可读，59 个文件，1 份快照。
+- `GET /api/host/baseline`：`54 patched / 1 identical / 4 not-in-asar`（原位对照 asar 原件）。
+- `POST /api/host/snapshot`：`20261116-023618-first`，59 文件 / 2,670,542 字节。
+- 技术模式 DOM：`宿主破甲` 1 处、`已应用` 74 行、`不适用` 8 行、四个动作按钮齐全。
+- 回归：acceptance **21/21**、ux2layer **18/18**、ac-check **19/19**、ux2layer-ui **16/16**（连续两轮）。
+
+### 还缺什么
+- 不自动重启 dsh（会杀掉当前会话），应用后需用户自行重启。
+- 补丁应用后若需回滚到"未破甲"，走 `factory` + 重启；npm 全局那份若与 asar 版本不同源，正确做法是重装该包。
+
 ## [unreleased] — 2026-11-16（文档清理 + 与 dsh-purge 1.1.71 的对比评分）
 
 ### Removed（文档清理，按用户要求）

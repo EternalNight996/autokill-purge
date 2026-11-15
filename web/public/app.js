@@ -43,6 +43,7 @@ const GROUP_HINT = {
 };
 
 const LS_UI_MODE = "ap.uiMode";
+const LS_UI_MODE_AT = "ap.uiModeAt";
 const LS_TECH_HINT = "ap.techHint";
 const LS_GROUPS = "ap.groups";
 
@@ -155,6 +156,7 @@ const S = {
   tab: "breach",
   memoryStatus: "unknown",
   readiness: { data: null, loading: false, tried: false, error: null },
+  host: { data: null, loading: false, tried: false, error: null, busy: false, message: "" },
   simple: {
     buildError: "",
     attempted: {},
@@ -710,6 +712,10 @@ function applyState(data) {
   if (!S.assign.initialized) initAssignFromState();
   /* 服务端 > localStorage > simple（契约 §2.1） */
   S.uiMode = resolveUiMode(settings.uiMode);
+  // 刚在本机点过开关、服务端还没写完的那一刻刷新页面：以本机为准，并回写一次把两边对齐。
+  if (settings.uiMode && S.uiMode !== settings.uiMode) {
+    request("/api/settings", { method: "POST", body: { uiMode: S.uiMode } }).catch(() => {});
+  }
   S.techHintOpen = S.uiMode === "technical" && !lsGet(LS_TECH_HINT, "");
   applyModeRoute();
 }
@@ -718,9 +724,14 @@ function resolveUiMode(serverValue) {
   const server = serverValue == null
     ? (S.state && S.state.settings ? S.state.settings.uiMode : undefined)
     : serverValue;
-  if (server === "simple" || server === "technical") return server;
   const local = lsGet(LS_UI_MODE, "");
-  if (local === "simple" || local === "technical") return local;
+  const localOk = local === "simple" || local === "technical";
+  const localAt = Number(lsGet(LS_UI_MODE_AT, "0")) || 0;
+  // 点开关 → 写 localStorage → POST 服务端，这三步不是原子的：若用户在这 15 秒内刷新，
+  // 服务端可能还是旧值。此时以本机刚点的为准（并回写服务端），否则会出现「刷新后模式反转」。
+  if (localOk && localAt && Date.now() - localAt < 15000 && server && server !== local) return local;
+  if (server === "simple" || server === "technical") return server;
+  if (localOk) return local;
   return "simple";
 }
 
@@ -753,6 +764,7 @@ function setUiMode(mode, opts = {}) {
   S.state.settings = S.state.settings || {};
   S.state.settings.uiMode = next;
   lsSet(LS_UI_MODE, next);
+  lsSet(LS_UI_MODE_AT, String(Date.now()));
   if (next === "technical") S.techHintOpen = !lsGet(LS_TECH_HINT, "");
   else S.techHintOpen = false;
   updateModeSwitch();
@@ -1666,6 +1678,122 @@ function resultName(id) {
   return r ? r.name : id || "—";
 }
 
+/* ============================================================ 宿主破甲（照搬 dsh-purge 1.1.71） */
+function hostStatusBadge(status) {
+  if (status === "applied") return badge("已应用", "accent");
+  if (status === "pending") return badge("待应用", "");
+  if (status === "na") return badge("不适用", "");
+  if (status === "missing_file") return badge("文件缺失", "");
+  return badge(status || "未知", "");
+}
+
+function hostCountsLine(d) {
+  const c = d.counts || {};
+  return `${c.applied || 0}/${c.total || 0} 已应用 · ${c.pending || 0} 待应用 · ${c.na || 0} 不适用`;
+}
+
+function renderHostSection() {
+  const h = S.host;
+  if (!h.tried && !h.loading) loadHostStatus();
+  const head = `<h2 id="h-host"><span class="num">12</span>宿主破甲（dsh-purge 1.1.71 引擎）`;
+  if (h.loading && !h.data) return `<section class="section">${head}</h2>${spinner("检查宿主状态…")}</section>`;
+  const d = h.data;
+  if (h.error && !d) return `<section class="section">${head}</h2>${alertBox("读不到宿主状态", simpleReason(h.error))}</section>`;
+  if (!d || d.available === false) {
+    return `<section class="section">${head}</h2>${alertBox("宿主破甲不可用", (d && d.reason) || "本机没装 dsh-purge，宿主侧补丁引擎用不了；破甲内容仍可正常生成。")}</section>`;
+  }
+  const b = d.baseline || {};
+  const snaps = Array.isArray(d.snapshots) ? d.snapshots : [];
+  const rows = (d.patches || []).map((p) => `<tr>
+      <td class="mono">#${esc(String(p.id))}</td>
+      <td>${esc(p.name)}</td>
+      <td class="muted">${esc(p.layer || "")}</td>
+      <td>${hostStatusBadge(p.status)}</td>
+    </tr>`).join("");
+  const msg = h.message ? (h.error ? alertBox(h.message, "") : okBox(h.message)) : "";
+  return `<section class="section">${head}<span class="count">${esc(hostCountsLine(d))}</span></h2>
+    <div class="card">
+      <div class="s-row"><div class="s-row-main"><strong>宿主</strong><span>${esc(d.surface || "?")} · ${esc(d.dshHome || "")}</span></div></div>
+      <div class="s-row"><div class="s-row-main"><strong>备份基线</strong><span>官方 app.asar ${b.readable ? "可读" : "读不到"} · 已备份快照 ${snaps.length} 份</span></div></div>
+      <div class="s-row"><div class="s-row-main"><strong>注入文件</strong><span class="mono">${esc(d.overridePath || "")}（${esc(d.overrideStatus || "")}）</span></div></div>
+    </div>
+    <div class="actions" style="margin-top:10px">
+      <button type="button" class="primary" data-host-action="snapshot">备份现在</button>
+      <button type="button" class="ghost" data-host-action="restore"${snaps.length ? "" : " disabled"}>撤销上一次</button>
+      <button type="button" class="ghost" data-host-action="factory">恢复出厂</button>
+      <button type="button" class="ghost" data-host-action="apply">应用补丁</button>
+      <span class="hint">改宿主都要重启 dsh 才生效；每次写入前会先自动备份一份。</span>
+    </div>
+    ${msg}
+    <p class="small muted" style="margin-top:8px">「恢复出厂」用官方 app.asar 原件覆盖被改文件（不依赖 .bak，本机实测 .bak 为 0）；「撤销上一次」用最近一份快照覆盖。</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="宿主补丁清单">
+      <table class="min"><thead><tr><th>#</th><th>补丁</th><th>层</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>
+    </div>
+    ${snaps.length ? `<h3 style="margin-top:14px">快照</h3><div class="table-wrap" tabindex="0"><table class="min"><thead><tr><th>快照</th><th>时间</th><th>文件</th><th>字节</th></tr></thead><tbody>${snaps.map((s) => `<tr><td class="mono">${esc(s.id)}</td><td>${esc(fmtTime(s.at))}</td><td>${fmtNum(s.files)}</td><td>${fmtNum(s.bytes)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+  </section>`;
+}
+
+async function loadHostStatus(force = false) {
+  if (S.host.loading) return;
+  if (S.host.tried && !force && S.host.data) return;
+  S.host.loading = true;
+  try {
+    const data = await request("/api/host/status");
+    S.host.data = data;
+    S.host.error = null;
+  } catch (e) {
+    S.host.error = e;
+  } finally {
+    S.host.loading = false;
+    S.host.tried = true;
+    if (modeIsTechnical() && S.tab === "breach") renderPage();
+  }
+}
+
+async function hostAction(kind) {
+  if (S.host.busy) return;
+  const h = S.host;
+  const confirmText = {
+    snapshot: "",
+    restore: "用最近一份快照覆盖宿主文件？覆盖前会自动再备份一份。改完要重启 dsh 才生效。",
+    factory: "用官方 app.asar 原件覆盖被改的宿主文件？覆盖前会自动备份现在。改完要重启 dsh 才生效。",
+    apply: "按 dsh-purge 1.1.71 的补丁表应用全部清洗？会改宿主文件，需要重启 dsh 才生效。",
+  }[kind];
+  if (confirmText && !window.confirm(confirmText)) return;
+  h.busy = true;
+  h.message = "";
+  h.error = null;
+  renderPage();
+  try {
+    let data;
+    if (kind === "snapshot") {
+      data = await request("/api/host/snapshot", { method: "POST", body: { tag: "manual" } });
+      if (!data || data.ok === false) throw payloadError(data, "备份失败");
+      h.message = `已备份：${data.snapshot.id}（${fmtNum(data.snapshot.files)} 个文件 / ${fmtNum(data.snapshot.bytes)} 字节）`;
+    } else if (kind === "restore") {
+      data = await request("/api/host/restore", { method: "POST", body: { confirm: true } });
+      if (!data || data.ok === false) throw payloadError(data, "恢复失败");
+      h.message = `已按快照 ${data.restored.id} 覆盖 ${fmtNum(data.restored.restored)} 个文件；覆盖前的状态另存为 ${data.guardSnapshot}。重启 dsh 生效。`;
+    } else if (kind === "factory") {
+      data = await request("/api/host/factory", { method: "POST", body: { confirm: true } });
+      if (!data || data.ok === false) throw payloadError(data, "恢复出厂失败");
+      h.message = `已用 asar 原件覆盖 ${fmtNum(data.factory.restored)} 个文件（跳过 ${fmtNum(data.factory.skipped)}）；覆盖前状态另存为 ${data.guardSnapshot}。${data.factory.note ? " " + data.factory.note : ""}`;
+    } else if (kind === "apply") {
+      data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply" } });
+      if (!data || data.ok === false) throw payloadError(data, "应用失败");
+      h.message = `已应用：新增 ${fmtNum(data.result.applied)} 个补丁（${fmtNum(data.result.already)} 个本来就是最新）。${data.result.restartRequired ? "重启 dsh 生效。" : ""}`;
+    }
+    toast("完成");
+    await loadHostStatus(true);
+  } catch (e) {
+    h.error = e;
+    h.message = simpleReason(e);
+  } finally {
+    h.busy = false;
+    renderPage();
+  }
+}
+
 function renderBreach() {
   const b = S.breach;
   const model = S.models.find((m) => m.id === b.model) || S.models[0] || null;
@@ -1882,7 +2010,8 @@ function renderBreach() {
       </form>
       ${statsHtml}
       ${attemptRows ? `<h3 style="margin-top:16px">最近记录</h3><div class="table-wrap" tabindex="0" role="region" aria-label="尝试记录"><table class="min"><thead><tr><th>时间</th><th>模型</th><th>技术</th><th>结果</th><th>备注</th></tr></thead><tbody>${attemptRows}</tbody></table></div>` : ""}
-    </section>`;
+    </section>
+    ${renderHostSection()}`;
 
   $("#page").innerHTML = `
     <div class="page-head">
@@ -1943,6 +2072,9 @@ function bindBreach() {
   const output = $("#bOutput");
   if (output) output.addEventListener("input", () => { S.breach.output = output.value; });
   const tplField = $("#bTemplate");
+  $$("#page [data-host-action]").forEach((el) => {
+    el.addEventListener("click", () => hostAction(el.dataset.hostAction));
+  });
   if (tplField) {
     const ev = tplField.tagName === "SELECT" ? "change" : "input";
     tplField.addEventListener(ev, () => { S.breach.template = tplField.value || "none"; });
