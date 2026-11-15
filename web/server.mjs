@@ -5,7 +5,7 @@
 // - Memory: pure HTTP proxy to memory-eternal; unreachable -> 503 semantics, never 500.
 // - break: runs the break kernel in-process (same code as the CLI) behind a whitelist.
 import { createServer } from 'node:http';
-import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -80,12 +80,18 @@ const DEFAULT_STATE = {
     memoryToken: '',
     language: 'zh',
     breakDir: join(ROOT, 'break'),
-    pluginPath: ''
+    pluginPath: '',
+    // UX-2LAYER §1.1: which console the user gets. readState() merges this default in, so an
+    // older state.json without it picks up 'simple' with no migration.
+    uiMode: 'simple'
   },
   equipment: [],
   assignments: {},
   attempts: []
 };
+
+// UX-2LAYER §1.1: the only two accepted values for settings.uiMode.
+const UI_MODES = ['simple', 'technical'];
 
 async function readState() {
   try {
@@ -106,13 +112,38 @@ async function readState() {
 
 async function writeState(state) {
   await mkdir(DATA_DIR, { recursive: true });
-  const tmp = STATE_FILE + '.tmp';
-  await writeFile(tmp, JSON.stringify(state, null, 2) + '\n', 'utf8');
-  await rename(tmp, STATE_FILE);
+  // Unique temp name + rename retry. A fixed `state.json.tmp` races when two instances
+  // (or two threads of the same file) write at once: the later writer renames the other
+  // writer's temp file away and the earlier `rename` fails with ENOENT -> HTTP 500.
+  const body = JSON.stringify(state, null, 2) + '\n';
+  const tmp = STATE_FILE + '.' + process.pid + '.' + (++tmpSeq) + '.' + Math.random().toString(16).slice(2, 10) + '.tmp';
+  try {
+    await writeFile(tmp, body, 'utf8');
+    let last = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await rename(tmp, STATE_FILE);
+        return;
+      } catch (e) {
+        last = e;
+        await new Promise((r) => setTimeout(r, 20 + attempt * 30));
+      }
+    }
+    throw last;
+  } finally {
+    try { await rm(tmp, { force: true }); } catch { /* already renamed */ }
+  }
+}
+
+// Never echo absolute paths back to the browser (500 bodies used to leak `data\state.json`).
+function publicError(e) {
+  const raw = String((e && e.message) || e);
+  return raw.replace(/[A-Za-z]:\\[^\r\n'"]*/g, '<path>').slice(0, 300);
 }
 
 // serialize read-modify-write so two concurrent mutating requests cannot drop each other.
 let lock = Promise.resolve();
+let tmpSeq = 0;
 function withLock(fn) {
   const run = lock.then(fn, fn);
   lock = run.then(() => {}, () => {});
@@ -147,6 +178,51 @@ async function memFetch(state, path, opts) {
 
 function sendMemoryError(res, status) {
   send(res, status, { ok: false, error: 'memory_unavailable', hint: '记忆服务不可达：检查地址，或启动 memory-eternal' });
+}
+
+// ---- readiness (UX-2LAYER §1.2) ---------------------------------------------
+// One health snapshot for the simple-mode status card. No cache: the console pulls it on page enter
+// or "测试连接". The memory probe is capped at 1.5s so the whole answer stays inside its 2s budget.
+function readinessCheck(id, label, ok, optional, detail) {
+  return { id: id, label: label, ok: !!ok, optional: !!optional, detail: detail };
+}
+
+async function readiness(state) {
+  const agreementOk = signed(state);
+  const catalogOk = MODELS.length >= 3;
+  const kernelOk = typeof breakRun === 'function' && BREAK_WHITELIST.length === 8;
+  // memFetch caps itself at 5s; hand it a shorter signal instead of touching its internals. The abort
+  // lands in memFetch's catch (-> unreachable), so a dead memory service can never make this throw.
+  const mem = await memFetch(state, '/health', { signal: AbortSignal.timeout(1500) });
+  const memoryOk = mem.ok === true;
+
+  const checks = [
+    readinessCheck('agreement', '协议已签署', agreementOk, false, agreementOk ? '已签署' : '还没签署协议'),
+    readinessCheck('catalog', '模型目录', catalogOk, false,
+      catalogOk ? MODELS.length + ' 个模型 / ' + LAYERS.length + ' 层 / ' + TECHNIQUES.length + ' 技术' : '模型目录不完整，只有 ' + MODELS.length + ' 个模型'),
+    readinessCheck('kernel', '破甲内核', kernelOk, false,
+      kernelOk ? BREAK_WHITELIST.length + ' 个动作可用' : '破甲内核不可用'),
+    // optional: a missing memory service never changes level, it only explains itself in `detail`.
+    readinessCheck('memory', '记忆服务', memoryOk, true, memoryOk ? '已连接' : '没连上，可以先不用它')
+  ];
+
+  let level, headline, detail, action;
+  if (!agreementOk) {
+    level = 'red'; headline = '暂时用不了'; detail = '还没签署协议，签完就能用。';
+    action = { label: '重新签署协议', target: '#/sign' };
+  } else if (catalogOk && kernelOk) {
+    level = 'green'; headline = '可以直接用'; detail = '选个模型，写一句话就能生成。';
+    action = null;
+  } else {
+    level = 'yellow'; headline = '还差一步';
+    detail = (catalogOk ? '' : '模型目录没就绪。') + (kernelOk ? '' : '破甲内核没就绪。');
+    action = { label: '去设置', target: '#/settings' };
+  }
+
+  return {
+    ok: true, level: level, headline: headline, detail: detail, action: action,
+    checks: checks, generatedAt: new Date().toISOString()
+  };
 }
 
 // ---- catalog four-state (FR-10) -------------------------------------------
@@ -303,6 +379,10 @@ async function handleApi(req, res, url, state) {
     return send(res, 200, { ok: true, version: VERSION, agreementVersion: AGREEMENT_VERSION, agreementText: AGREEMENT_TEXT, state: redact(state), models: MODELS, layers: LAYERS, techniques: TECHNIQUES });
   }
 
+  // readiness probe for the simple-mode status card (UX-2LAYER §1.2). Deliberately NOT in the
+  // unsigned whitelist above: before signing this stays 403 like every other data endpoint.
+  if (p === '/api/readiness' && method === 'GET') return send(res, 200, await readiness(state));
+
   if (p === '/api/agreement' && method === 'POST') {
     const body = await bodyOf(req);
     return withLock(async () => {
@@ -330,6 +410,12 @@ async function handleApi(req, res, url, state) {
     const body = await bodyOf(req);
     return withLock(async () => {
       const s = await readState();
+      // UX-2LAYER §1.1: validated first and strictly — a bad uiMode must leave the whole file alone,
+      // so it cannot ride along with otherwise-valid fields in the same request.
+      if (body.uiMode !== undefined) {
+        if (UI_MODES.indexOf(body.uiMode) < 0) return send(res, 400, { ok: false, error: 'uiMode must be simple|technical' });
+        s.settings.uiMode = body.uiMode;
+      }
       if (typeof body.memoryBase === 'string' && body.memoryBase.trim()) s.settings.memoryBase = body.memoryBase.trim();
       if (typeof body.memoryToken === 'string' && body.memoryToken.trim()) s.settings.memoryToken = body.memoryToken.trim();
       if (typeof body.language === 'string' && body.language.trim()) s.settings.language = body.language.trim();
@@ -498,7 +584,7 @@ async function handleApi(req, res, url, state) {
         const status = e.code === 3 ? 409 : (e.code === 4 || e.code === 2 ? 400 : 409);
         return send(res, status, { ok: false, error: { code: e.code, message: e.message, hint: e.hint || '' } });
       }
-      return send(res, 500, { ok: false, error: String((e && e.message) || e) });
+      return send(res, 500, { ok: false, error: publicError(e) });
     }
   }
 
@@ -515,7 +601,7 @@ const server = createServer(async (req, res) => {
     if (!signed(state) && !open) return send(res, 403, { ok: false, error: 'agreement' });
     return await handleApi(req, res, url, state);
   } catch (e) {
-    return send(res, 500, { ok: false, error: String((e && e.message) || e) });
+    return send(res, 500, { ok: false, error: publicError(e) });
   }
 });
 

@@ -19,6 +19,73 @@ const cx = (...parts) => parts.filter(Boolean).join(" ");
 const TABS = ["breach", "equip", "assign", "memory", "settings", "about"];
 const TAB_LABEL = { breach: "破甲", equip: "装备", assign: "记忆分发", memory: "记忆中心", settings: "设置", about: "关于" };
 
+/* ------------------------------------------------------- two-layer UI (contract §2) */
+const NAV_BY_MODE = {
+  simple: [
+    { tab: "breach", label: "破甲" },
+    { tab: "equip", label: "装备" },
+    { tab: "memory", label: "记忆" },
+    { tab: "settings", label: "设置" },
+  ],
+  technical: TABS.map((t) => ({ tab: t, label: TAB_LABEL[t] })),
+};
+/* pages that only exist in technical mode; direct links fall back to breach */
+const TECH_ONLY_TABS = ["assign", "about"];
+
+const GROUP_ORDER = ["base", "strategy", "sampling", "paths", "diag"];
+const GROUP_LABEL = { base: "基础", strategy: "生成策略", sampling: "采样", paths: "路径与文件", diag: "诊断" };
+const GROUP_HINT = {
+  base: "模型、输入与主操作",
+  strategy: "载荷怎么生成",
+  sampling: "采样建议与不可见字符",
+  paths: "本机路径与文件，改错会影响运行",
+  diag: "记录、命中率与错误详情",
+};
+
+const LS_UI_MODE = "ap.uiMode";
+const LS_TECH_HINT = "ap.techHint";
+const LS_GROUPS = "ap.groups";
+
+/* default values shown as a badge in technical mode; 空 = 内置默认 */
+const FIELD_DEFAULTS = {
+  memoryBase: "http://127.0.0.1:7999/memory-eternal/api",
+  language: "zh",
+  breakDir: "",
+  pluginPath: "",
+  role: "",
+  output: "",
+};
+
+/* 普通模式只看名字和一句特点：不显示 family / 拒绝风格字段 */
+const SIMPLE_TAGLINE = {
+  "gpt-4o": "通用问答稳，长任务不乱",
+  o3: "擅长一步步推理",
+  claude: "行文自然，适合长文",
+  gemini: "多语言、多模态都能用",
+  deepseek: "中文表达贴切",
+  qwen3: "会跟着格式要求走",
+  llama: "本地自托管，自己说了算",
+  local: "完全本地运行，内容不出门",
+  custom: "按你自己的那一个来",
+};
+
+/* 普通模式 DOM 文本里不允许出现的词（契约 §2.6） */
+const SIMPLE_FORBIDDEN = [
+  ["breakDir", "工作目录"],
+  ["pluginPath", "插件路径"],
+  ["memoryBase", "记忆服务地址"],
+  ["payload", "载荷"],
+  ["variant", "变体"],
+  ["technique", "技术"],
+  ["schema", "格式"],
+  ["layer", "层"],
+  ["wasm", "内嵌模块"],
+  ["token", "令牌"],
+  ["API", "服务"],
+  ["HTTP", "网络"],
+];
+
+
 const AGENTS = [
   { id: "dsh", name: "DeepSeek Harness", short: "dsh", desc: "本机编码与研究智能体，工具面最全。" },
   { id: "mengbot", name: "MengBot", short: "mengbot", desc: "聊天侧执行体，适合轻量任务与巡检。" },
@@ -76,11 +143,27 @@ const S = {
   state: null,
   version: "",
   agreementVersion: "",
+  uiMode: "simple",
+  techHintOpen: false,
   models: [],
   layers: [],
   techniques: [],
   tab: "breach",
   memoryStatus: "unknown",
+  readiness: { data: null, loading: false, tried: false, error: null },
+  simple: {
+    buildError: "",
+    attempted: {},
+    attemptBusy: false,
+    equipBusy: false,
+    equipResult: "",
+    equipError: "",
+    removed: [],
+    testState: "idle",
+    testMessage: "",
+    resignArmed: false,
+    detailIndex: null,
+  },
   breach: {
     model: "",
     layer: "prompt",
@@ -154,6 +237,7 @@ const S = {
     breakDir: "",
     pluginPath: "",
     dataDir: "",
+    draft: {},
     saving: false,
     error: null,
     ok: null,
@@ -263,9 +347,95 @@ function isHex(value) {
   return s.length > 0 && s.length % 2 === 0;
 }
 
+/* ------------------------------------------------------ two-layer helpers */
+function lsGet(key, fallback = "") {
+  try { const v = localStorage.getItem(key); return v == null ? fallback : v; } catch { return fallback; }
+}
+function lsSet(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* private mode / quota */ }
+}
+
+/* 普通模式的自愈文案：把技术名词换成人话，再去掉裸状态码 */
+function simpleText(value) {
+  let out = String(value == null ? "" : value);
+  for (const [from, to] of SIMPLE_FORBIDDEN) {
+    try { out = out.replace(new RegExp(from, "gi"), to); } catch { /* bad pattern in a hostile build */ }
+  }
+  out = out.replace(/\b(400|403|404|500|502|503)\b/g, " ");
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
+/* 普通模式的错误提示 = 发生了什么（人话）+ 下一步做什么（一个动作） */
+function simpleReason(err) {
+  const code = String((err && err.code) || "");
+  const status = Number((err && err.status) || 0);
+  if (code === "network" || status === 0) return "连不上本机的控制台服务。确认它还开着，再点『重试』。";
+  if (code === "agreement" || status === 403) return "协议需要重新签一下。点『重新签署协议』签完再回来。";
+  if (status === 503) return "记忆服务没连上。到设置里点『测试连接』看看，再回来重试。";
+  if (status === 404) return "这个版本还不支持这一步。先点『重试』，还不行就切到技术模式看详情。";
+  if (status >= 500) return "服务端这次没返回结果。等几秒再点『重试』。";
+  if (status === 400) return "这次的要求没法处理。把要它做的事写具体一点，再点『重试』。";
+  return "这次没成功。等一秒再点『重试』。";
+}
+
+/* ---- technical mode: collapsible groups ---- */
+function readGroups() {
+  const raw = lsGet(LS_GROUPS, "");
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch { return {}; }
+}
+function groupIsOpen(page, key) {
+  const map = readGroups();
+  const k = page + ":" + key;
+  return Object.prototype.hasOwnProperty.call(map, k) ? !!map[k] : key === "base";
+}
+function saveGroupState(el) {
+  const key = el && el.dataset ? el.dataset.group : "";
+  if (!key) return;
+  const map = readGroups();
+  map[key] = !!el.open;
+  lsSet(LS_GROUPS, JSON.stringify(map));
+}
+function bindGroups() {
+  $$("#page details.grp").forEach((el) => el.addEventListener("toggle", () => saveGroupState(el)));
+}
+/* groups: [{ key, html, hint? }] — 固定顺序 基础 → 生成策略 → 采样 → 路径与文件 → 诊断 */
+function groupsHtml(page, groups) {
+  const list = (Array.isArray(groups) ? groups : []).filter((g) => g && g.html);
+  if (!list.length) return "";
+  const sorted = list.slice().sort((a, b) => GROUP_ORDER.indexOf(a.key) - GROUP_ORDER.indexOf(b.key));
+  return `<div class="groups">${sorted.map((g) => {
+    const open = groupIsOpen(page, g.key);
+    return `<details class="grp" data-group="${esc(page + ":" + g.key)}"${open ? " open" : ""}>
+      <summary><span class="grp-title">${esc(GROUP_LABEL[g.key] || g.key)}</span><span class="grp-hint">${esc(g.hint || GROUP_HINT[g.key] || "")}</span></summary>
+      <div class="grp-body">${g.html}</div>
+    </details>`;
+  }).join("")}</div>`;
+}
+
+/* 技术模式的字段脚注：默认值徽标 + 恢复默认 */
+function fieldDefault(what, current, defaultValue, opts = {}) {
+  const value = String(current == null ? "" : current);
+  const fallback = String(defaultValue == null ? "" : defaultValue);
+  const shown = fallback ? fallback : "内置默认";
+  const isDefault = value === fallback;
+  return `<span class="field-default">${badge("默认值：" + shown, isDefault ? "good" : "", "mono")}
+    <button type="button" class="small" data-reset-field="${esc(what)}" ${isDefault ? "disabled" : ""}>恢复默认</button></span>`;
+}
+
 /* copy buttons keep long payloads out of HTML attributes */
 let copyStore = new Map();
 let copySeq = 0;
+/* 只读快照：浏览器端验收脚本拿不到剪贴板权限时，用它核对「复制」内容 */
+try {
+  Object.defineProperty(window, "__copyStore", {
+    configurable: true,
+    get: () => Object.fromEntries(copyStore),
+  });
+} catch { /* 老浏览器忽略 */ }
 function resetCopyStore() {
   copyStore = new Map();
   copySeq = 0;
@@ -527,7 +697,80 @@ function applyState(data) {
   if (!S.attempt.model) S.attempt.model = S.breach.model;
   if (!S.attempt.technique && S.techniques.length) S.attempt.technique = S.techniques[0].id;
   if (!S.assign.initialized) initAssignFromState();
+  /* 服务端 > localStorage > simple（契约 §2.1） */
+  S.uiMode = resolveUiMode(settings.uiMode);
+  S.techHintOpen = S.uiMode === "technical" && !lsGet(LS_TECH_HINT, "");
+  applyModeRoute();
 }
+
+function resolveUiMode(serverValue) {
+  const server = serverValue == null
+    ? (S.state && S.state.settings ? S.state.settings.uiMode : undefined)
+    : serverValue;
+  if (server === "simple" || server === "technical") return server;
+  const local = lsGet(LS_UI_MODE, "");
+  if (local === "simple" || local === "technical") return local;
+  return "simple";
+}
+
+function modeIsTechnical() { return S.uiMode === "technical"; }
+
+function updateModeSwitch() {
+  const btn = $("#modeSwitch");
+  if (!btn) return;
+  const tech = modeIsTechnical();
+  const label = tech ? "当前是技术模式，点一下回到普通模式" : "当前是普通模式，点一下进入技术模式";
+  btn.setAttribute("aria-checked", tech ? "true" : "false");
+  btn.setAttribute("aria-label", label);
+  btn.dataset.mode = S.uiMode;
+  btn.title = label;
+}
+
+/* simple 模式没有 #/assign、#/about：直接访问要落回破甲页 */
+function applyModeRoute() {
+  if (modeIsTechnical()) return false;
+  if (!TECH_ONLY_TABS.includes(S.tab)) return false;
+  S.tab = "breach";
+  try { history.replaceState(null, "", "#/breach"); } catch { /* file:// */ }
+  return true;
+}
+
+function setUiMode(mode, opts = {}) {
+  const next = mode === "technical" ? "technical" : "simple";
+  S.uiMode = next;
+  S.state = S.state || {};
+  S.state.settings = S.state.settings || {};
+  S.state.settings.uiMode = next;
+  lsSet(LS_UI_MODE, next);
+  if (next === "technical") S.techHintOpen = !lsGet(LS_TECH_HINT, "");
+  else S.techHintOpen = false;
+  updateModeSwitch();
+  applyModeRoute();
+  setNav();
+  renderPage();
+  if (opts.persist === false) return;
+  /* 存服务端失败只 toast：不回滚 UI、不阻断（契约 §2.1） */
+  request("/api/settings", { method: "POST", body: { uiMode: next } })
+    .then((data) => {
+      if (!data || data.ok === false) throw payloadError(data, "保存模式失败");
+      if (data.settings && typeof data.settings === "object") mergeSettings(data.settings);
+    })
+    .catch(() => {
+      toast(next === "technical"
+        ? "已经切到技术模式了，只是这次没记住；下次打开可能还是普通模式。"
+        : "已经切到普通模式了，只是这次没记住；下次打开可能还是技术模式。");
+    });
+}
+
+function renderTechHint() {
+  const box = $("#page");
+  if (!box || !S.techHintOpen || !modeIsTechnical() || S.locked) return;
+  box.insertAdjacentHTML("afterbegin", `<div class="tech-hint" role="status">
+    <span>技术模式会显示全部参数和文件路径。改错可能影响运行，可以随时点『恢复默认』。</span>
+    <button type="button" class="small" data-tech-hint>知道了</button>
+  </div>`);
+}
+
 
 function cardPath(card) {
   if (typeof card === "string") return card;
@@ -619,16 +862,25 @@ function tabFromHash() {
 }
 
 function setNav() {
-  $$("#nav a").forEach((a) => {
-    if (a.dataset.tab === S.tab) a.setAttribute("aria-current", "page");
-    else a.removeAttribute("aria-current");
-  });
+  const nav = $("#nav");
+  if (!nav) return;
+  const items = NAV_BY_MODE[modeIsTechnical() ? "technical" : "simple"];
+  const sig = S.uiMode + "|" + items.map((i) => i.tab).join(",") + "|" + S.tab;
+  if (nav.dataset.sig === sig) return;
+  nav.innerHTML = items.map((it) => `<a href="#/${it.tab}" data-tab="${it.tab}"${it.tab === S.tab ? ' aria-current="page"' : ""}>${esc(it.label)}</a>`).join("");
+  nav.dataset.sig = sig;
+  nav.dataset.mode = S.uiMode;
 }
 
 function onRoute() {
   const tab = tabFromHash();
   const changed = tab !== S.tab;
   S.tab = tab;
+  if (applyModeRoute()) {
+    S.tab = "breach";
+    renderPage();
+    return;
+  }
   if (changed) {
     S.assign.ok = null;
     S.assign.saveError = null;
@@ -658,6 +910,14 @@ function renderGlobalAlert() {
   const box = $("#globalAlert");
   if (!box) return;
   if (S.bootError) {
+    if (!modeIsTechnical()) {
+      box.innerHTML = `<div class="alert bad" role="alert">
+        <strong>连不上控制台服务，页面暂时读不到状态。</strong>
+        <span class="hint">确认控制台还开着；好了以后点『重试连接』。</span>
+        <div class="actions"><button type="button" class="small" data-retry-boot>重试连接</button></div>
+      </div>`;
+      return;
+    }
     box.innerHTML = `<div class="alert bad" role="alert">
       <strong>无法读取控制台状态：${esc(S.bootError.message)}</strong>
       <span class="hint">${esc(S.bootError.hint || "确认服务端已启动（默认 http://127.0.0.1:8792），再重试。")}</span>
@@ -670,27 +930,577 @@ function renderGlobalAlert() {
 
 function renderPage() {
   setNav();
+  updateModeSwitch();
   renderGlobalAlert();
   resetCopyStore();
   const saved = captureFocus();
   const page = $("#page");
   if (!page) return;
   if (S.locked) {
+    if (!modeIsTechnical()) {
+      page.innerHTML = `<div class="page-head"><div><p class="eyebrow">协议</p><h1>签完协议就能用</h1><p class="lead">页面没有关。签署《安全与法律协议》后，四个页面与所有功能一起解锁。</p></div></div>
+        ${emptyState("还没签署协议", "签署记录只保存在本机；点上面的『签署并进入』即可继续。")}`;
+      return;
+    }
     page.innerHTML = `<div class="page-head"><div><p class="eyebrow">LOCKED</p><h1>协议签署后加载控制台</h1><p class="lead">页面当前不可交互。签署《安全与法律协议》后，六页与接口会一起解锁。</p></div></div>
       ${emptyState("尚未签署协议", "签署记录只保存在本机 state.json；未签署时服务端会以 403 拒绝控制台接口。")}`;
     return;
   }
-  if (S.tab === "breach") renderBreach();
-  else if (S.tab === "equip") renderEquip();
-  else if (S.tab === "assign") renderAssign();
-  else if (S.tab === "memory") renderMemory();
-  else if (S.tab === "settings") renderSettings();
-  else renderAbout();
+  if (modeIsTechnical()) {
+    if (S.tab === "breach") renderBreach();
+    else if (S.tab === "equip") renderEquip();
+    else if (S.tab === "assign") renderAssign();
+    else if (S.tab === "memory") renderMemory();
+    else if (S.tab === "settings") renderSettings();
+    else renderAbout();
+  } else {
+    if (S.tab === "breach") renderSimpleBreach();
+    else if (S.tab === "equip") renderSimpleEquip();
+    else if (S.tab === "memory") renderSimpleMemory();
+    else renderSimpleSettings();
+  }
+  if (modeIsTechnical()) renderTechHint();
+  bindGroups();
   $$('#page pre[tabindex="0"]').forEach((pre, index) => {
     if (!pre.getAttribute("aria-label")) pre.setAttribute("aria-label", "可滚动文本内容 " + (index + 1));
     if (!pre.getAttribute("role")) pre.setAttribute("role", "region");
   });
   restoreFocus(saved);
+}
+
+/* ------------------------------------------------------ readiness (new endpoint) */
+async function loadReadiness(force = false) {
+  if (S.readiness.loading) return;
+  if (S.readiness.tried && !force) return;
+  S.readiness.loading = true;
+  try {
+    const data = await request("/api/readiness");
+    if (!data || data.ok === false || !data.level) throw new Error("readiness unavailable");
+    S.readiness.data = data;
+    S.readiness.error = null;
+  } catch (e) {
+    /* 旧后端没有这个接口：状态卡整块隐藏，不报错、不挡主流程 */
+    S.readiness.data = null;
+    S.readiness.error = e || new Error("readiness unavailable");
+    if (isAgreementError(e)) { S.readiness.tried = true; return; }
+  } finally {
+    S.readiness.loading = false;
+    S.readiness.tried = true;
+    if (!modeIsTechnical() && S.tab === "breach") renderPage();
+  }
+}
+
+/* ============================================================ simple mode · 破甲 */
+function simpleModelTagline(m) {
+  if (!m) return "";
+  const custom = m.tagline || m.notes || "";
+  if (custom) return simpleText(custom);
+  return SIMPLE_TAGLINE[m.id] || "可以直接用";
+}
+
+function renderSimpleStatusCard() {
+  const rd = S.readiness.data;
+  if (!rd || !rd.level) return `<section class="s-status" hidden aria-hidden="true"></section>`;
+  const level = rd.level === "green" ? "green" : (rd.level === "red" ? "red" : "yellow");
+  const fallbackHeadline = level === "green" ? "可以直接用" : (level === "red" ? "暂时用不了" : "还差一步");
+  const headline = simpleText(rd.headline || "") || fallbackHeadline;
+  const detail = simpleText(rd.detail || "") || (level === "green" ? "选个模型，写一句话就能生成。" : "");
+  const action = rd.action && rd.action.label
+    ? `<button type="button" class="ghost" data-readiness-action="${esc(rd.action.target || "#/settings")}">${esc(simpleText(rd.action.label))}</button>`
+    : "";
+  return `<section class="s-status ${level}" aria-label="现在能不能用">
+    <div class="s-status-body"><strong>${esc(headline)}</strong>${detail ? `<span class="s-status-detail">${esc(detail)}</span>` : ""}</div>
+    ${action}
+  </section>`;
+}
+
+function simpleSteps() {
+  const b = S.breach;
+  const hasModel = !!(b.model || S.models.length);
+  const hasTask = !!String(b.task || "").trim();
+  const done = !!(b.built && b.variants.length);
+  let current = 3;
+  if (!b.building && !hasTask) current = hasModel ? 2 : 1;
+  const rows = [
+    { n: 1, t: "选一个模型" },
+    { n: 2, t: "写一句你要它做什么" },
+    { n: 3, t: "拿到可复制的载荷" },
+  ];
+  return `<ol class="steps" aria-label="三步拿到载荷">${rows.map((r) => {
+    const isCurrent = r.n === current;
+    let state = "";
+    if (r.n === 3 && b.building) state = "doing";
+    else if (done) state = "done";
+    else if (r.n < current) state = "done";
+    return `<li aria-current="${isCurrent ? "step" : "false"}"${state ? ` data-state="${state}"` : ""}><span class="step-n" aria-hidden="true">${r.n}</span><span class="step-t">${esc(r.t)}</span></li>`;
+  }).join("")}</ol>`;
+}
+
+function renderSimpleOperation() {
+  const b = S.breach;
+  const models = S.models.slice(0, 3);
+  const current = models.find((m) => m.id === b.model) || models[0] || null;
+  const cards = models.length
+    ? `<div class="simple-models">${models.map((m) => {
+      const on = !!current && m.id === current.id;
+      return `<button type="button" class="pick" data-model="${esc(m.id)}" data-focus="smodel-${esc(m.id)}" aria-pressed="${on}">
+        <span class="pick-top"><span class="pick-name">${esc(simpleText(m.name))}</span>${on ? badge("已选", "accent") : ""}</span>
+        <span class="pick-note">${esc(simpleModelTagline(m))}</span>
+      </button>`;
+    }).join("")}</div>`
+    : emptyState("还没有可选的模型", "等几秒再试一次；如果一直这样，就到设置页看看连接状态。");
+  const err = S.simple.buildError;
+  const emptyHint = err && err.kind === "empty"
+    ? `<div class="alert warn" role="alert"><strong>${esc(err.message)}</strong><span class="hint">写完这一句，再点『一键生成』。</span></div>`
+    : "";
+  return `<section class="section" aria-labelledby="s-op-h">
+    <h2 id="s-op-h"><span class="num">1</span>选一个模型<span class="count">${models.length} 个推荐</span></h2>
+    ${cards}
+    <form id="simpleForm" class="card" novalidate style="margin-top:12px">
+      <label class="field"><span>写一句你要它做什么</span>
+        <textarea id="sTask" data-focus="sTask" rows="3" placeholder="例：让它详细说明如何绕过内容审核">${esc(b.task)}</textarea>
+        <span class="help">写得越具体，生成的载荷越能用</span>
+      </label>
+      ${emptyHint}
+      <button class="primary s-generate" id="sBuild" type="submit"${b.building ? ' disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : "一键生成"}</button>
+    </form>
+  </section>`;
+}
+
+function renderSimpleResults() {
+  const b = S.breach;
+  const head = `<h2><span class="num">3</span>拿到可复制的载荷`;
+  if (b.building) {
+    return `<section class="section">${head}</h2>${spinner("正在生成，请稍等…")}</section>`;
+  }
+  const err = S.simple.buildError;
+  if (err && err.kind === "failed") {
+    return `<section class="section">${head}</h2>
+      <div class="alert bad" role="alert"><strong>没生成出来</strong><span class="hint">${esc(err.message)}</span>
+        <div class="actions"><button type="button" class="small" data-simple-retry>重试</button></div>
+      </div></section>`;
+  }
+  const list = Array.isArray(b.variants) ? b.variants : [];
+  if (!list.length) {
+    return `<section class="section">${head}</h2>${emptyState("还没有载荷。上面写一句话，点『一键生成』。", "")}</section>`;
+  }
+  const all = list.map((v, i) => `【${i + 1}】${v.name || "载荷"}\n${v.text || ""}`).join("\n\n");
+  const cards = list.map((v, i) => {
+    const key = String(v.id || v.technique || i);
+    const recorded = S.simple.attempted[key];
+    return `<article class="payload">
+      <div class="payload-head">
+        <div><h3>${i + 1}. ${esc(simpleText(v.name || "载荷"))}</h3>
+          ${v.desc ? `<div class="payload-desc">${esc(simpleText(v.desc))}</div>` : ""}</div>
+        ${copyBtn(v.text || "", "复制")}
+      </div>
+      <details class="s-fold"><summary>展开看全文</summary><pre tabindex="0">${esc(v.text || "")}</pre></details>
+      <div class="s-record">
+        ${recorded ? `<span class="s-record-done">已记录：${esc(recorded === "pass" ? "这次成功了" : "被拒绝了")}</span>` : ""}
+        <button type="button" class="small" data-simple-attempt="pass" data-simple-key="${esc(key)}"${recorded ? " disabled" : ""}>这次成功了</button>
+        <button type="button" class="small" data-simple-attempt="refused" data-simple-key="${esc(key)}"${recorded ? " disabled" : ""}>被拒绝了</button>
+      </div>
+    </article>`;
+  }).join("");
+  return `<section class="section">
+    <div class="s-results-head">${head}<span class="count">${list.length} 条</span></h2>${copyBtn(all, "复制全部")}</div>
+    <div class="payload-list">${cards}</div>
+    <p class="s-tip">想调层、技术、采样？切到技术模式。</p>
+  </section>`;
+}
+
+function renderSimpleBreach() {
+  if (!S.readiness.tried && !S.readiness.loading) loadReadiness();
+  $("#page").innerHTML = `
+    <div class="page-head"><div>
+      <p class="eyebrow">破甲</p>
+      <h1>破甲</h1>
+      <p class="lead">选一个目标模型，写清楚你要它做什么，就能拿到可以直接复制的载荷。</p>
+    </div></div>
+    ${renderSimpleStatusCard()}
+    ${simpleSteps()}
+    ${renderSimpleOperation()}
+    ${renderSimpleResults()}
+  `;
+  bindSimpleBreach();
+}
+
+function bindSimpleBreach() {
+  $$("#page [data-model]").forEach((el) => {
+    el.addEventListener("click", () => {
+      S.breach.model = el.dataset.model;
+      S.attempt.model = el.dataset.model;
+      renderPage();
+    });
+  });
+  const task = $("#sTask");
+  if (task) {
+    task.addEventListener("input", () => { S.breach.task = task.value; });
+    task.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); simpleBuild(); }
+    });
+  }
+  const form = $("#simpleForm");
+  if (form) form.addEventListener("submit", (e) => { e.preventDefault(); simpleBuild(); });
+  $$("#page [data-simple-retry]").forEach((el) => el.addEventListener("click", () => simpleBuild()));
+  $$("#page [data-simple-attempt]").forEach((el) => el.addEventListener("click", () => simpleAttempt(el.dataset.simpleKey, el.dataset.simpleAttempt)));
+  $$("#page [data-readiness-action]").forEach((el) => el.addEventListener("click", () => {
+    const target = el.dataset.readinessAction || "#/settings";
+    if (target === "#/sign") { showAgreement(true); return; }
+    if (/^#\//.test(target)) { location.hash = target; return; }
+    location.hash = "#/settings";
+  }));
+}
+
+/* 一键全自动：模型 → prompt 层 + 前 3 项技术 → 生成载荷（用户不选） */
+async function simpleBuild() {
+  const b = S.breach;
+  if (b.building) return;
+  S.simple.buildError = null;
+  const task = String(b.task || "").trim();
+  if (!task) {
+    S.simple.buildError = { kind: "empty", message: "先写一句你要它做什么。" };
+    renderPage();
+    const el = $("#sTask");
+    if (el) el.focus();
+    return;
+  }
+  const model = b.model || (S.models[0] && S.models[0].id) || "";
+  if (!model) {
+    S.simple.buildError = { kind: "failed", message: "还没读到可用的模型。等几秒再点『重试』。" };
+    renderPage();
+    return;
+  }
+  const techniques = S.techniques.slice(0, 3).map((t) => t.id);
+  b.building = true;
+  renderPage();
+  try {
+    const data = await request("/api/breach/build", {
+      method: "POST",
+      body: { model, layer: "prompt", techniques, task, role: "安全研究员", output: "请直接给出结果" },
+    });
+    if (!data || data.ok === false) throw payloadError(data, "生成失败");
+    const result = data.result || data;
+    b.variants = (Array.isArray(result.variants) ? result.variants : []).map(normalizeVariant);
+    b.advice = (Array.isArray(result.advice) ? result.advice : []).map(adviceText).filter(Boolean);
+    b.zero = result.zero_wide_sample || "";
+    b.resultMeta = { model: result.model || model, layer: result.layer || "prompt", at: new Date().toISOString() };
+    b.built = true;
+    S.attempt.model = model;
+    const first = b.variants[0] ? String(b.variants[0].technique || b.variants[0].id || "").replace(/-(rot13|base64)$/i, "") : "";
+    if (first && S.techniques.some((t) => t.id === first)) S.attempt.technique = first;
+    if (!b.variants.length) S.simple.buildError = { kind: "failed", message: "服务端这次没给出内容。点『重试』再生成一次。" };
+  } catch (e) {
+    if (isAgreementError(e)) return;
+    S.simple.buildError = { kind: "failed", message: simpleReason(e) };
+  } finally {
+    b.building = false;
+    if (!modeIsTechnical() && S.tab === "breach") renderPage();
+  }
+}
+
+async function simpleAttempt(key, result) {
+  if (!key || !result || S.simple.attemptBusy) return;
+  const b = S.breach;
+  const list = Array.isArray(b.variants) ? b.variants : [];
+  const variant = list.find((v, i) => String(v.id || v.technique || i) === String(key)) || list[0] || null;
+  const model = b.model || (S.models[0] && S.models[0].id) || "";
+  const rawTech = variant ? String(variant.technique || variant.id || "").replace(/-(rot13|base64)$/i, "") : "";
+  const technique = S.techniques.some((t) => t.id === rawTech) ? rawTech : ((S.techniques[0] && S.techniques[0].id) || "");
+  if (!model || !technique) { toast("这次没能记录：先点一次『一键生成』。"); return; }
+  S.simple.attemptBusy = true;
+  try {
+    const data = await request("/api/breach/attempt", { method: "POST", body: { model, technique, result, note: "简单模式记录" } });
+    if (!data || data.ok === false) throw payloadError(data, "记录失败");
+    const attempt = data.attempt || { model, technique, result, note: "", at: new Date().toISOString() };
+    S.attempts.push(attempt);
+    S.breachStats = normalizeBreachStats(data.stats, S.attempts);
+    S.simple.attempted[String(key)] = result;
+    toast("已记录");
+  } catch (e) {
+    if (isAgreementError(e)) return;
+    toast(simpleReason(e));
+  } finally {
+    S.simple.attemptBusy = false;
+    if (!modeIsTechnical() && S.tab === "breach") renderPage();
+  }
+}
+
+/* ============================================================ simple mode · 装备 */
+function agentDisplayName(id) {
+  const a = AGENTS.find((x) => x.id === id);
+  return a ? a.name : id;
+}
+function agentDisplayDesc(id) {
+  const a = AGENTS.find((x) => x.id === id);
+  return a ? a.desc : "自定义智能体";
+}
+
+function simpleEquippedItems() {
+  const latest = S.equipment.length ? S.equipment[S.equipment.length - 1] : null;
+  if (!latest) return [];
+  const items = [];
+  const preset = PRESETS.find((p) => p.id === latest.preset);
+  items.push({ key: "preset:" + (latest.id || latest.preset || "redteam"), name: preset ? preset.name : presetName(latest.preset), desc: preset ? preset.desc : "推荐组合" });
+  for (const a of (Array.isArray(latest.agents) ? latest.agents : [])) {
+    items.push({ key: "agent:" + a, name: agentDisplayName(a), desc: agentDisplayDesc(a) });
+  }
+  const removed = new Set(S.simple.removed || []);
+  return items.filter((it) => !removed.has(it.key));
+}
+
+function renderSimpleEquip() {
+  const items = simpleEquippedItems();
+  const rows = items.length
+    ? `<div class="card">${items.map((it) => `<div class="s-row">
+        <div class="s-row-main"><strong>${esc(simpleText(it.name))}</strong><span>${esc(simpleText(it.desc))}</span></div>
+        <button type="button" class="small" data-simple-unequip="${esc(it.key)}">卸下</button>
+      </div>`).join("")}</div>`
+    : emptyState("还没装备。点上面的按钮，一次装好推荐组合。", "");
+  const out = S.simple.equipError
+    ? alertBox(S.simple.equipError, "再点一次『一键装备推荐组合』试试。")
+    : (S.simple.equipResult ? okBox(S.simple.equipResult) : "");
+  $("#page").innerHTML = `
+    <div class="page-head"><div>
+      <p class="eyebrow">装备</p><h1>装备</h1>
+      <p class="lead">把现成能力装到你的智能体上，装完就能用。</p>
+    </div></div>
+    <section class="s-status ${items.length ? "green" : "yellow"}" aria-label="当前装备">
+      <div class="s-status-body">
+        <strong>当前已装备 ${items.length} 件</strong>
+        <span class="s-status-detail">${items.length ? "这些能力都装好了，可以直接用。" : "还没有装能力，点下面这个按钮一次装好。"}</span>
+      </div>
+    </section>
+    <section class="section">
+      <button type="button" class="primary s-generate" id="sEquipAll"${S.simple.equipBusy ? ' disabled aria-busy="true"' : ""}>${S.simple.equipBusy ? "装备中…" : "一键装备推荐组合"}</button>
+      <div id="sEquipOut" style="margin-top:10px">${out}</div>
+    </section>
+    <section class="section" aria-labelledby="s-eq-h">
+      <h2 id="s-eq-h"><span class="num">1</span>已装的<span class="count">${items.length} 件</span></h2>
+      ${rows}
+    </section>
+  `;
+  bindSimpleEquip();
+}
+
+function bindSimpleEquip() {
+  const all = $("#sEquipAll");
+  if (all) all.addEventListener("click", () => simpleEquipPreset());
+  $$("#page [data-simple-unequip]").forEach((el) => el.addEventListener("click", () => {
+    const key = el.dataset.simpleUnequip;
+    if (!key) return;
+    if (!S.simple.removed.includes(key)) S.simple.removed.push(key);
+    toast("已卸下");
+    renderPage();
+  }));
+}
+
+async function simpleEquipPreset() {
+  if (S.simple.equipBusy) return;
+  S.simple.equipBusy = true;
+  S.simple.equipError = "";
+  S.simple.equipResult = "";
+  renderPage();
+  const body = { preset: "redteam", agents: ["dsh"], permissions: "read-only", notes: "" };
+  try {
+    const data = await request("/api/equipment", { method: "POST", body });
+    if (!data || data.ok === false) throw payloadError(data, "装备失败");
+    if (Array.isArray(data.equipment)) S.equipment = data.equipment;
+    else if (data.equipment && typeof data.equipment === "object") S.equipment = [...S.equipment, data.equipment];
+    else S.equipment = [...S.equipment, Object.assign({}, body, { at: new Date().toISOString() })];
+    S.simple.removed = [];
+    const items = simpleEquippedItems();
+    S.simple.equipResult = `已装备 ${items.length} 件：${items.map((i) => simpleText(i.name)).join("、")}`;
+  } catch (e) {
+    if (isAgreementError(e)) return;
+    S.simple.equipError = simpleReason(e);
+  } finally {
+    S.simple.equipBusy = false;
+    if (!modeIsTechnical() && S.tab === "equip") renderPage();
+  }
+}
+
+/* ============================================================ simple mode · 记忆 */
+function memoryCardTime(card) {
+  if (!card || typeof card !== "object") return "";
+  const raw = card.updated || card.updatedAt || card.updated_at || card.created || card.createdAt || card.created_at || card.at || card.date || card.mtime || "";
+  return raw ? fmtTime(raw) : "";
+}
+
+function renderSimpleMemory() {
+  const m = S.memory;
+  if (!m.statsLoaded && !m.statsLoading) loadMemoryStats();
+  if (!m.cardsLoaded && !m.cardsLoading) loadMemoryCards();
+  const checking = m.statsLoading && !m.statsLoaded;
+  const connected = !!m.statsLoaded && !m.statsError;
+  /* 连接状态只给两种确定答案：检查中也按「未连接」显示，检查完再翻成已连接 */
+  const statusLine = connected
+    ? `<span class="badge good">记忆服务已连接</span>`
+    : `<span class="badge warn">记忆服务未连接</span>${checking ? `<span class="hint">正在检查…</span>` : ""} <a href="#/settings">去设置</a>`;
+
+  let results = "";
+  if (m.cardsLoading) results = spinner("正在找…");
+  else if (m.error) results = alertBox("没读到内容。", simpleReason(m.error));
+  else if (!connected) results = emptyState("连上记忆服务后才能搜索", "先到设置里点『测试连接』，连上再回来。");
+  else if (!m.cards || !m.cards.length) results = emptyState("没有找到相关内容", "换一个词，再点『搜索』。");
+  else {
+    results = `<div class="list memory-cards">${m.cards.map((c, i) => {
+      const time = memoryCardTime(c);
+      return `<button type="button" class="row-item" data-simple-card="${i}" data-focus="scard-${i}" style="text-align:left;width:100%">
+        <span class="grow">
+          <span class="t">${esc(c.title || "未命名卡片")}</span>
+          ${c.summary ? `<span class="s">${esc(String(c.summary).slice(0, 160))}</span>` : ""}
+          ${time ? `<span class="s faint">${esc(time)}</span>` : ""}
+        </span>
+        <span class="badge">打开</span>
+      </button>`;
+    }).join("")}</div>`;
+  }
+
+  const detail = m.detailLoading
+    ? spinner("读取中…")
+    : m.detailError
+      ? alertBox("这张卡暂时打不开。", simpleReason(m.detailError))
+      : m.detail
+        ? `<div class="card soft">
+            <div class="card-head"><h3>${esc(String(m.detail.text || "").split("\n")[0].replace(/^#+\s*/, "") || "内容")}</h3>${copyBtn(m.detail.text || "", "复制内容")}</div>
+            <pre class="tall" tabindex="0">${esc(m.detail.text || "（内容为空）")}</pre>
+          </div>`
+        : "";
+
+  $("#page").innerHTML = `
+    <div class="page-head"><div>
+      <p class="eyebrow">记忆</p><h1>记忆</h1>
+      <p class="lead">查你的智能体记住了什么。</p>
+    </div></div>
+    <div class="s-row" style="border-top:0">${statusLine}</div>
+    <section class="section">
+      <form id="simpleMemorySearch" class="card soft" novalidate>
+        <label class="field"><span>搜什么</span>
+          <input id="sMemQ" data-focus="sMemQ" type="search" value="${esc(m.q)}" placeholder="技能 / 项目 / 关键词">
+        </label>
+        <div class="actions"><button class="primary" type="submit">搜索</button><span class="hint">按回车也可以搜。</span></div>
+      </form>
+    </section>
+    <section class="section" aria-labelledby="s-mem-h">
+      <h2 id="s-mem-h"><span class="num">1</span>结果${m.cards ? `<span class="count">${m.cards.length} 张</span>` : ""}</h2>
+      ${results}
+    </section>
+    ${detail ? `<section class="section" aria-labelledby="s-mem-d"><h2 id="s-mem-d"><span class="num">2</span>全文</h2>${detail}</section>` : ""}
+  `;
+  bindSimpleMemory();
+}
+
+function bindSimpleMemory() {
+  const q = $("#sMemQ");
+  if (q) q.addEventListener("input", () => { S.memory.q = q.value; });
+  const form = $("#simpleMemorySearch");
+  if (form) form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    S.memory.q = $("#sMemQ") ? $("#sMemQ").value.trim() : "";
+    S.memory.kind = "";
+    S.memory.cards = null;
+    S.memory.cardsLoaded = false;
+    S.memory.error = null;
+    S.memory.detail = null;
+    S.memory.detailError = null;
+    S.simple.detailIndex = null;
+    renderPage();
+  });
+  $$("#page [data-simple-card]").forEach((el) => el.addEventListener("click", () => {
+    const index = Number(el.dataset.simpleCard);
+    S.simple.detailIndex = index;
+    openMemoryCard(index);
+  }));
+}
+
+/* ============================================================ simple mode · 设置 */
+function renderSimpleSettings() {
+  const agreement = (S.state && S.state.agreement) || { accepted: false, version: "", at: "", signer: "" };
+  const connected = !!S.memory.statsLoaded && !S.memory.statsError;
+  const testing = S.simple.testState === "loading";
+  const testOut = S.simple.testState === "ok"
+    ? okBox(S.simple.testMessage)
+    : S.simple.testState === "bad"
+      ? alertBox(S.simple.testMessage, "再试一次就点『测试连接』。")
+      : "";
+  $("#page").innerHTML = `
+    <div class="page-head"><div>
+      <p class="eyebrow">设置</p><h1>设置</h1>
+      <p class="lead">只有这几项。要改参数和文件路径，切到技术模式。</p>
+    </div></div>
+    <section class="card settings-list" aria-label="设置项">
+      <div class="s-row">
+        <div class="s-row-main"><strong>连接状态</strong><span>${connected ? "记忆服务已连接" : "记忆服务未连接"}</span></div>
+        <button type="button" class="small" id="sSimpleTest"${testing ? " disabled" : ""}>${testing ? "测试中…" : "测试连接"}</button>
+      </div>
+      <div id="sSimpleTestOut">${testOut}</div>
+      <div class="s-row">
+        <div class="s-row-main"><strong>语言</strong><span>简体中文（当前版本只提供简体中文）</span></div>
+        ${badge("已选", "accent")}
+      </div>
+      <div class="s-row">
+        <div class="s-row-main"><strong>想改更多参数</strong><span>技术模式会显示全部参数与文件路径，也能逐项恢复默认。</span></div>
+        <button type="button" class="ghost" id="sSimpleTech">切换到技术模式</button>
+      </div>
+      <div class="s-row">
+        <div class="s-row-main"><strong>重新签署协议</strong><span>${agreement.accepted ? "当前已签署。" : "当前还没签署。"}${S.simple.resignArmed ? "再点一次就会清空签署并重新弹窗。" : ""}</span></div>
+        <button type="button" class="${S.simple.resignArmed ? "danger" : "ghost"}" id="sSimpleResign">${S.simple.resignArmed ? "确认重签" : "重新签署协议"}</button>
+      </div>
+    </section>
+    <section class="section">
+      <details class="lib"><summary>版本与关于</summary><div class="lib-body">
+        <dl class="kv compact">
+          <dt>名称</dt><dd>autokill-purge</dd>
+          <dt>版本</dt><dd class="mono">${esc(S.version || "—")}</dd>
+          <dt>作者</dt><dd>EternalNight996（YG）</dd>
+          <dt>许可</dt><dd>MIT</dd>
+        </dl>
+        <p class="small muted" style="margin-top:8px">本工具只用于本人拥有或获得书面授权的系统、模型与数据的安全研究、红队演练与教学演示。使用者对自己的一切操作与后果负全部责任。</p>
+      </div></details>
+    </section>
+  `;
+  bindSimpleSettings();
+}
+
+function bindSimpleSettings() {
+  const test = $("#sSimpleTest");
+  if (test) test.addEventListener("click", () => simpleTestConnection());
+  const tech = $("#sSimpleTech");
+  if (tech) tech.addEventListener("click", () => setUiMode("technical"));
+  const resign = $("#sSimpleResign");
+  if (resign) resign.addEventListener("click", () => {
+    if (!S.simple.resignArmed) { S.simple.resignArmed = true; renderPage(); return; }
+    S.simple.resignArmed = false;
+    resetAgreement();
+  });
+}
+
+async function simpleTestConnection() {
+  if (S.simple.testState === "loading") return;
+  S.simple.testState = "loading";
+  S.simple.testMessage = "";
+  renderPage();
+  loadReadiness(true);
+  try {
+    const data = await request("/api/memory/stats");
+    if (!data || data.ok === false) throw payloadError(data, "记忆服务不可用");
+    S.memory.stats = normalizeStats(data);
+    S.memory.statsLoaded = true;
+    S.memory.statsError = null;
+    S.simple.testState = "ok";
+    S.simple.testMessage = "连上了，记忆服务可以用。";
+    setStatus("ok", "记忆中心已连接");
+  } catch (e) {
+    if (isAgreementError(e)) { S.simple.testState = "idle"; return; }
+    S.memory.statsError = e;
+    S.memory.statsLoaded = true;
+    S.simple.testState = "bad";
+    S.simple.testMessage = simpleReason(e);
+    setStatus("bad", "记忆中心未连接", e.message);
+  } finally {
+    if (!modeIsTechnical() && S.tab === "settings") renderPage();
+  }
 }
 
 /* ------------------------------------------------------------------ breach · model side */
@@ -857,13 +1667,17 @@ function renderBreach() {
     ? `<div class="card">
         <h3>采样建议</h3>
         ${b.advice.length ? `<ul>${b.advice.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>` : `<p class="muted small">服务端没有返回 advice[]。</p>`}
-        <div class="card-foot">
-          <div class="card-head"><h3>零宽变体样本</h3>${b.zero ? copyBtn(b.zero, "复制样本") : ""}</div>
-          ${b.zero ? `<pre class="zero" tabindex="0">${esc(b.zero)}</pre>` : `<p class="muted small">服务端没有返回 zero_wide_sample；不显示本地伪造样本。</p>`}
-          <p class="hint" style="margin-top:6px">零宽字符可能不可见，粘贴前确认目标环境是否保留它们。</p>
-        </div>
+        <div class="inline-note">建议里的 temperature / top_p / 重试次数来自服务端针对当前模型返回的配置；按建议调采样，再对比命中率。</div>
       </div>`
-    : emptyState("生成后给出采样建议", "建议来自服务端针对当前模型返回的 advice[]，同时给出零宽变体样本。");
+    : emptyState("生成后给出采样建议", "建议来自服务端针对当前模型返回的 advice[]；重试次数与采样参数都在这里。");
+
+  const zeroHtml = b.built
+    ? `<div class="card">
+        <div class="card-head"><h3>零宽变体样本</h3>${b.zero ? copyBtn(b.zero, "复制样本") : ""}</div>
+        ${b.zero ? `<pre class="zero" tabindex="0">${esc(b.zero)}</pre>` : `<p class="muted small">服务端没有返回 zero_wide_sample；不显示本地伪造样本。</p>`}
+        <p class="hint" style="margin-top:6px">零宽字符可能不可见，粘贴前确认目标环境是否保留它们。</p>
+      </div>`
+    : emptyState("生成后给出零宽样本", "零宽变体用来测试目标是否过滤不可见字符；生成一次后出现在这里。");
 
   const modelOptions = S.models.length
     ? S.models.map((m) => `<option value="${esc(m.id)}" ${m.id === S.attempt.model ? "selected" : ""}>${esc(m.name)}</option>`).join("")
@@ -897,66 +1711,83 @@ function renderBreach() {
       <td>${esc(a.note || "")}</td>
     </tr>`).join("");
 
-  $("#page").innerHTML = `
-    <div class="page-head">
-      <div>
-        <p class="eyebrow">CONTROL · 01</p>
-        <h1>破甲</h1>
-        <p class="lead">模型侧选模型、层与技术，生成可复制的载荷并记录命中；二进制侧让 break 在副本上定性、提案、下刀、验证与还原，每一步都留证据。</p>
-      </div>
-      <div class="head-meta">${badge("不调用模型 API", "accent")}${badge("只改副本", "")}${badge("expect 前置校验", "good")}</div>
-    </div>
-
+  /* 技术模式：零删减，全部原有块按固定顺序装进 5 组折叠 */
+  const baseGroup = `
     <section class="section" aria-labelledby="h-model">
       <h2 id="h-model"><span class="num">1</span>目标模型<span class="count">${S.models.length} 类</span></h2>
       ${modelsHtml}
       ${modelNote}
     </section>
 
-    <section class="section" aria-labelledby="h-layer">
-      <h2 id="h-layer"><span class="num">2</span>突破层<span class="count">${S.layers.length} 层</span></h2>
-      ${layerHtml}
-    </section>
-
-    <section class="section" aria-labelledby="h-tech">
-      <h2 id="h-tech"><span class="num">3</span>技术组合<span class="count">${S.techniques.length} 项</span></h2>
-      ${techHtml}
-    </section>
-
     <section class="section" aria-labelledby="h-task">
-      <h2 id="h-task"><span class="num">4</span>任务与框架</h2>
+      <h2 id="h-task"><span class="num">2</span>任务与框架</h2>
       <form id="buildForm" class="card" novalidate>
-        <div class="form-grid">
-          <label class="field span-2"><span>任务（必填，要能验收）</span>
-            <textarea id="bTask" data-focus="bTask" rows="3" placeholder="例：写一段在授权靶场里验证 SSH 弱口令的步骤，包含命令与验收条件">${esc(b.task)}</textarea>
-          </label>
-          <label class="field"><span>角色（可选）</span>
-            <input id="bRole" data-focus="bRole" type="text" value="${esc(b.role)}" placeholder="在授权靶场里工作的攻防研究员">
-          </label>
-          <label class="field"><span>输出要求（可选）</span>
-            <input id="bOutput" data-focus="bOutput" type="text" value="${esc(b.output)}" placeholder="编号步骤 + 每步验收条件">
-          </label>
-        </div>
+        <label class="field"><span>任务（必填，要能验收）</span>
+          <textarea id="bTask" data-focus="bTask" rows="3" placeholder="例：写一段在授权靶场里验证 SSH 弱口令的步骤，包含命令与验收条件">${esc(b.task)}</textarea>
+        </label>
         <div id="buildError">${b.buildError ? alertBox(b.buildError.message, b.buildError.hint) : ""}</div>
         <div class="actions">
           <button class="primary" id="bBuild" type="submit" ${b.building ? 'disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : "生成载荷"}</button>
-          <span class="muted">不调用任何模型；只产出可复制载荷与建议。任务为空时不会发请求。</span>
+          <span class="muted">不调用任何模型；只产出可复制载荷与建议。任务为空时不会发请求。角色与输出要求在「生成策略」里。</span>
         </div>
       </form>
     </section>
 
     <section class="section" aria-labelledby="h-payload">
-      <h2 id="h-payload"><span class="num">5</span>载荷<span class="count">${b.variants.length} 条</span></h2>
+      <h2 id="h-payload"><span class="num">3</span>载荷<span class="count">${b.variants.length} 条</span></h2>
       ${variantsHtml}
+    </section>`;
+
+  const strategyGroup = `
+    <section class="section" aria-labelledby="h-layer">
+      <h2 id="h-layer"><span class="num">4</span>突破层<span class="count">${S.layers.length} 层</span></h2>
+      ${layerHtml}
     </section>
 
+    <section class="section" aria-labelledby="h-tech">
+      <h2 id="h-tech"><span class="num">5</span>技术组合<span class="count">${S.techniques.length} 项</span></h2>
+      ${techHtml}
+    </section>
+
+    <section class="section" aria-labelledby="h-frame">
+      <h2 id="h-frame"><span class="num">6</span>角色与输出要求</h2>
+      <div class="card">
+        <div class="form-grid">
+          <label class="field"><span>角色（可选）</span>
+            <input id="bRole" data-focus="bRole" type="text" value="${esc(b.role)}" placeholder="在授权靶场里工作的攻防研究员">
+            ${fieldDefault("role", b.role, FIELD_DEFAULTS.role)}
+            <span class="help">留空则用内置默认角色；写清身份与授权范围更稳。</span>
+          </label>
+          <label class="field"><span>输出要求（可选）</span>
+            <input id="bOutput" data-focus="bOutput" type="text" value="${esc(b.output)}" placeholder="编号步骤 + 每步验收条件">
+            ${fieldDefault("output", b.output, FIELD_DEFAULTS.output)}
+            <span class="help">留空则用内置默认输出要求（编号步骤）。</span>
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="h-encoding">
+      <h2 id="h-encoding"><span class="num">7</span>编码变体</h2>
+      <div class="card">
+        <p class="muted small">生成时服务端会按技术给出文本 / Base64 / ROT13 等编码变体，每条载荷卡片右上角的徽标就是它的编码方式；零宽变体见「采样」组。</p>
+        <div class="badge-row">${b.variants.length ? b.variants.map((v) => badge(v.encoding || "文本", v.encoding ? "accent" : "")).join("") : badge("尚未生成", "")}</div>
+      </div>
+    </section>`;
+
+  const samplingGroup = `
     <section class="section" aria-labelledby="h-advice">
-      <h2 id="h-advice"><span class="num">6</span>采样与变体</h2>
+      <h2 id="h-advice"><span class="num">8</span>采样建议</h2>
       ${adviceHtml}
     </section>
+    <section class="section" aria-labelledby="h-zero">
+      <h2 id="h-zero"><span class="num">9</span>零宽变体样本</h2>
+      ${zeroHtml}
+    </section>`;
 
+  const diagGroup = `
     <section class="section" aria-labelledby="h-attempt">
-      <h2 id="h-attempt"><span class="num">7</span>尝试记录与命中率<span class="count">${stats.total} 次</span></h2>
+      <h2 id="h-attempt"><span class="num">11</span>尝试记录与命中率<span class="count">${stats.total} 次</span></h2>
       <form id="attemptForm" class="card" novalidate>
         <div class="grid three">
           <label class="field"><span>模型</span><select id="aModel" data-focus="aModel">${modelOptions}</select></label>
@@ -975,9 +1806,25 @@ function renderBreach() {
       </form>
       ${statsHtml}
       ${attemptRows ? `<h3 style="margin-top:16px">最近记录</h3><div class="table-wrap" tabindex="0" role="region" aria-label="尝试记录"><table class="min"><thead><tr><th>时间</th><th>模型</th><th>技术</th><th>结果</th><th>备注</th></tr></thead><tbody>${attemptRows}</tbody></table></div>` : ""}
-    </section>
+    </section>`;
 
-    ${renderBinarySection()}
+  $("#page").innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">CONTROL · 01</p>
+        <h1>破甲</h1>
+        <p class="lead">模型侧选模型、层与技术，生成可复制的载荷并记录命中；二进制侧让 break 在副本上定性、提案、下刀、验证与还原，每一步都留证据。</p>
+      </div>
+      <div class="head-meta">${badge("不调用模型 API", "accent")}${badge("只改副本", "")}${badge("expect 前置校验", "good")}</div>
+    </div>
+
+    ${groupsHtml("breach", [
+      { key: "base", html: baseGroup },
+      { key: "strategy", html: strategyGroup },
+      { key: "sampling", html: samplingGroup },
+      { key: "paths", html: renderBinarySection() },
+      { key: "diag", html: diagGroup },
+    ])}
   `;
   bindBreach();
   bindBinary();
@@ -1999,16 +2846,7 @@ function renderEquip() {
     </tbody></table></div><p class="table-note">复制内容与上面的配置预览使用同一组键：preset / agents / permissions / memory_endpoint / notes。</p>`
     : emptyState("还没有发放记录", "选好装备包、智能体与权限档后点「发放装备」，历史会出现在这里。");
 
-  $("#page").innerHTML = `
-    <div class="page-head">
-      <div>
-        <p class="eyebrow">CONTROL · 02</p>
-        <h1>装备</h1>
-        <p class="lead">把一套能力装到具体智能体上：dsh、mengbot、autokill，或你自己的。发出去就有一份可复制的配置，并留下发放历史。</p>
-      </div>
-      <div class="head-meta">${badge("6 个预设", "accent")}${badge("3 档权限", "")}${badge("可复制 JSON", "")}</div>
-    </div>
-
+  const baseGroup = `
     <section class="section" aria-labelledby="h-preset">
       <h2 id="h-preset"><span class="num">1</span>装备包<span class="count">${PRESETS.length} 个</span></h2>
       <div class="grid presets">${presetCards}</div>
@@ -2043,16 +2881,38 @@ function renderEquip() {
           <span class="hint">未选智能体时会被拒绝，不会发请求。</span>
         </div>
       </form>
-      <div class="card soft">
-        <div class="card-head"><h3>配置预览</h3>${badge("只读预览", "good")}</div>
+    </section>`;
+
+  const pathsGroup = `
+    <section class="section" aria-labelledby="h-preview">
+      <h2 id="h-preview"><span class="num">5</span>配置预览</h2>
+      ${badge("高级", "warn")}${badge("只读预览", "good")}
+      <div class="card soft" style="margin-top:10px">
         <pre id="equipPreview" tabindex="0">${esc(JSON.stringify(config, null, 2))}</pre>
       </div>
-    </section>
+    </section>`;
 
+  const diagGroup = `
     <section class="section" aria-labelledby="h-history">
-      <h2 id="h-history"><span class="num">5</span>发放历史<span class="count">${S.equipment.length} 条</span></h2>
+      <h2 id="h-history"><span class="num">6</span>发放历史<span class="count">${S.equipment.length} 条</span></h2>
       ${historyHtml}
-    </section>
+    </section>`;
+
+  $("#page").innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">CONTROL · 02</p>
+        <h1>装备</h1>
+        <p class="lead">把一套能力装到具体智能体上：dsh、mengbot、autokill，或你自己的。发出去就有一份可复制的配置，并留下发放历史。</p>
+      </div>
+      <div class="head-meta">${badge("6 个预设", "accent")}${badge("3 档权限", "")}${badge("可复制 JSON", "")}</div>
+    </div>
+
+    ${groupsHtml("equip", [
+      { key: "base", html: baseGroup },
+      { key: "paths", html: pathsGroup },
+      { key: "diag", html: diagGroup },
+    ])}
   `;
   bindEquip();
 }
@@ -2299,16 +3159,7 @@ function renderAssign() {
     }).join("")}</div><p class="table-note">显示 ${visible.length} 张${skillsOnly ? `（已过滤 ${filteredOut} 张非技能卡）` : ""}${allCards.length >= 40 ? "；结果上限 40 张，可加关键词缩小范围" : ""}。</p>`;
   }
 
-  $("#page").innerHTML = `
-    <div class="page-head">
-      <div>
-        <p class="eyebrow">CONTROL · 03</p>
-        <h1>记忆分发</h1>
-        <p class="lead">把 memory-eternal 里的知识与技能实时分给已经装备好的智能体。分配变化立即生效，智能体读同一个端点。</p>
-      </div>
-      <div class="head-meta">${badge("实时合并", "accent")}${badge("不缓存", "")}${badge("只读卡片", "")}</div>
-    </div>
-
+  const baseGroup = `
     <section class="section" aria-labelledby="h-a-agent">
       <h2 id="h-a-agent"><span class="num">1</span>给哪个智能体<span class="count">${esc(assignAgentName(a.agent))}</span></h2>
       <div class="chips">${agentChips}${customChip}</div>
@@ -2333,19 +3184,8 @@ function renderAssign() {
       ${cardsHtml}
     </section>
 
-    <section class="section" aria-labelledby="h-a-mode">
-      <h2 id="h-a-mode"><span class="num">3</span>定制模式</h2>
-      <div class="card">
-        <label class="check"><input type="checkbox" id="aSkills" ${skillsOnly ? "checked" : ""}><span>只发技能卡（kind=skill），过滤普通知识</span></label>
-        <label class="check"><input type="checkbox" id="aSync" ${a.mode.autoSync ? "checked" : ""}><span>实时同步（端点每次请求重新合并，不缓存）</span></label>
-        ${skillsOnly ? `<div class="alert info" role="status"><strong>只发技能卡已开启</strong><span class="hint">当前搜索结果中已过滤 ${filteredOut} 张非技能卡${nonSkillSelected ? `；已选的 ${nonSkillSelected} 张非技能卡不会出现在端点` : ""}。</span></div>` : ""}
-        ${skillsOnly && nonSkillSelected ? `<div class="alert warn" role="alert"><strong>选择里有非技能卡</strong><span class="hint">端点会按 kind=skill 过滤；如果要保留它们，请关闭「只发技能卡」。</span></div>` : ""}
-        <div class="actions" style="margin-top:10px"><span class="hint">已选 ${selectedCount} 张；保存后端点立即变化。</span></div>
-      </div>
-    </section>
-
     <section class="section" aria-labelledby="h-a-save">
-      <h2 id="h-a-save"><span class="num">4</span>保存与端点</h2>
+      <h2 id="h-a-save"><span class="num">4</span>保存分配</h2>
       <form id="assignForm" class="card" novalidate>
         <div id="assignError">${a.saveError ? alertBox(a.saveError.message, a.saveError.hint) : ""}</div>
         ${a.ok ? okBox(a.ok) : ""}
@@ -2355,9 +3195,25 @@ function renderAssign() {
           <span class="hint">保存只写分配关系，不改卡片本身。</span>
         </div>
       </form>
+    </section>`;
 
+  const strategyGroup = `
+    <section class="section" aria-labelledby="h-a-mode">
+      <h2 id="h-a-mode"><span class="num">3</span>定制模式</h2>
       <div class="card">
-        <div class="card-head"><h3>智能体怎么拿</h3>${badge("实时端点", "accent")}</div>
+        <label class="check"><input type="checkbox" id="aSkills" ${skillsOnly ? "checked" : ""}><span>只发技能卡（kind=skill），过滤普通知识</span></label>
+        <label class="check"><input type="checkbox" id="aSync" ${a.mode.autoSync ? "checked" : ""}><span>实时同步（端点每次请求重新合并，不缓存）</span></label>
+        ${skillsOnly ? `<div class="alert info" role="status"><strong>只发技能卡已开启</strong><span class="hint">当前搜索结果中已过滤 ${filteredOut} 张非技能卡${nonSkillSelected ? `；已选的 ${nonSkillSelected} 张非技能卡不会出现在端点` : ""}。</span></div>` : ""}
+        ${skillsOnly && nonSkillSelected ? `<div class="alert warn" role="alert"><strong>选择里有非技能卡</strong><span class="hint">端点会按 kind=skill 过滤；如果要保留它们，请关闭「只发技能卡」。</span></div>` : ""}
+        <div class="actions" style="margin-top:10px"><span class="hint">已选 ${selectedCount} 张；保存后端点立即变化。</span></div>
+      </div>
+    </section>`;
+
+  const pathsGroup = `
+    <section class="section" aria-labelledby="h-a-endpoint">
+      <h2 id="h-a-endpoint"><span class="num">5</span>智能体怎么拿 ${badge("高级", "warn")}</h2>
+      <div class="card">
+        <div class="card-head"><h3>实时端点</h3>${badge("实时端点", "accent")}</div>
         <dl class="kv compact">
           <dt>端点</dt><dd class="mono">${esc(endpoint)} ${copyBtn(endpoint, "复制路径")}</dd>
           <dt>命令行</dt><dd>${copyBtn(curl, "复制 curl")}</dd>
@@ -2372,7 +3228,11 @@ function renderAssign() {
           <pre tabindex="0">${esc(dshSnippet)}</pre>
         </div>
       </div>
+    </section>`;
 
+  const diagGroup = `
+    <section class="section" aria-labelledby="h-a-preview">
+      <h2 id="h-a-preview"><span class="num">6</span>端点实时预览</h2>
       <div class="card soft">
         <div class="card-head"><h3>端点实时预览</h3>${a.previewLoading ? badge("读取中…", "warn") : badge(sectionCount + " 个小节", sectionCount ? "accent" : "")}</div>
         ${a.previewError ? alertBox(a.previewError.message, a.previewError.hint, a.previewError.tone || "bad") : ""}
@@ -2382,7 +3242,24 @@ function renderAssign() {
             ? `<pre class="tall" tabindex="0">${esc(a.preview)}</pre><div class="actions"><span class="hint">每次请求重新合并；未选择时端点应明确写「尚未选择」。</span>${copyBtn(a.preview, "复制 Markdown")}</div>`
             : emptyState("端点还没有内容", "保存分配后刷新预览；未选择卡片时端点应返回「尚未选择」。")}
       </div>
-    </section>
+    </section>`;
+
+  $("#page").innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">CONTROL · 03</p>
+        <h1>记忆分发</h1>
+        <p class="lead">把 memory-eternal 里的知识与技能实时分给已经装备好的智能体。分配变化立即生效，智能体读同一个端点。</p>
+      </div>
+      <div class="head-meta">${badge("实时合并", "accent")}${badge("不缓存", "")}${badge("只读卡片", "")}</div>
+    </div>
+
+    ${groupsHtml("assign", [
+      { key: "base", html: baseGroup },
+      { key: "strategy", html: strategyGroup },
+      { key: "paths", html: pathsGroup },
+      { key: "diag", html: diagGroup },
+    ])}
   `;
   bindAssign();
 }
@@ -2538,25 +3415,9 @@ function renderMemory() {
   const kindOptions = `<option value="">全部</option>${KINDS.map((k) => `<option value="${esc(k)}" ${m.kind === k ? "selected" : ""}>${esc(k)}</option>`).join("")}`;
   const claim = m.claim;
 
-  $("#page").innerHTML = `
-    <div class="page-head">
-      <div>
-        <p class="eyebrow">CONTROL · 04</p>
-        <h1>记忆中心</h1>
-        <p class="lead">直接看 memory-eternal：统计、检索、卡片正文。写卡只走审核，提交后是 pending，页面不会调用 approve/reject。</p>
-      </div>
-      <div class="head-meta">${badge(sourceLabel(source), source === "local" ? "good" : (source === "cloud" ? "warn" : ""))}${badge("写卡 → pending", "accent")}</div>
-    </div>
-
-    <div class="code-line" style="margin-bottom:6px"><span class="grow">${esc(S.settings.memoryBase || "未配置 memoryBase")}</span>${S.settings.memoryBase ? copyBtn(S.settings.memoryBase, "复制地址") : ""}</div>
-
-    <section class="section" aria-labelledby="h-m-stats">
-      <h2 id="h-m-stats"><span class="num">1</span>统计<span class="count">${esc(sourceLabel(source))}</span></h2>
-      ${statsHtml}
-    </section>
-
+  const baseGroup = `
     <section class="section" aria-labelledby="h-m-search">
-      <h2 id="h-m-search"><span class="num">2</span>检索<span class="count">${m.cards ? m.cards.length + " 张" : ""}</span></h2>
+      <h2 id="h-m-search"><span class="num">1</span>检索<span class="count">${m.cards ? m.cards.length + " 张" : ""}</span></h2>
       <form id="memorySearch" class="card soft" novalidate>
         <div class="form-grid">
           <label class="field"><span>关键词</span><input id="mQ" data-focus="mQ" type="search" value="${esc(m.q)}" placeholder="技能 / 项目 / 关键词"></label>
@@ -2568,12 +3429,13 @@ function renderMemory() {
     </section>
 
     <section class="section" aria-labelledby="h-m-detail">
-      <h2 id="h-m-detail"><span class="num">3</span>卡片详情</h2>
+      <h2 id="h-m-detail"><span class="num">2</span>卡片详情</h2>
       ${detail}
-    </section>
+    </section>`;
 
+  const strategyGroup = `
     <section class="section" aria-labelledby="h-m-write">
-      <h2 id="h-m-write"><span class="num">4</span>写卡 · 只走审核</h2>
+      <h2 id="h-m-write"><span class="num">3</span>写卡 · 只走审核</h2>
       <form id="claimForm" class="card" novalidate>
         <div class="form-grid">
           <label class="field"><span>标题 <span class="req">*</span></span><input id="wTitle" data-focus="wTitle" type="text" maxlength="200" value="${esc(claim.title)}" placeholder="这张卡解决什么问题"></label>
@@ -2591,7 +3453,37 @@ function renderMemory() {
           <span class="hint">提交成功不会自动出现在上方检索结果，直到审核通过。</span>
         </div>
       </form>
-    </section>
+    </section>`;
+
+  const pathsGroup = `
+    <section class="section" aria-labelledby="h-m-base">
+      <h2 id="h-m-base"><span class="num">4</span>记忆服务地址 ${badge("高级", "warn")}</h2>
+      <div class="code-line"><span class="grow">${esc(S.settings.memoryBase || "未配置 memoryBase")}</span>${S.settings.memoryBase ? copyBtn(S.settings.memoryBase, "复制地址") : ""}</div>
+      <p class="hint" style="margin-top:6px">只读展示；改地址与令牌去设置页。当前来源：${esc(sourceLabel(source))}。</p>
+    </section>`;
+
+  const diagGroup = `
+    <section class="section" aria-labelledby="h-m-stats">
+      <h2 id="h-m-stats"><span class="num">5</span>统计<span class="count">${esc(sourceLabel(source))}</span></h2>
+      ${statsHtml}
+    </section>`;
+
+  $("#page").innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">CONTROL · 04</p>
+        <h1>记忆中心</h1>
+        <p class="lead">直接看 memory-eternal：统计、检索、卡片正文。写卡只走审核，提交后是 pending，页面不会调用 approve/reject。</p>
+      </div>
+      <div class="head-meta">${badge(sourceLabel(source), source === "local" ? "good" : (source === "cloud" ? "warn" : ""))}${badge("写卡 → pending", "accent")}</div>
+    </div>
+
+    ${groupsHtml("memory", [
+      { key: "base", html: baseGroup },
+      { key: "strategy", html: strategyGroup },
+      { key: "paths", html: pathsGroup },
+      { key: "diag", html: diagGroup },
+    ])}
   `;
   bindMemory();
 }
@@ -2804,6 +3696,7 @@ async function saveSettings() {
   renderPage();
   try {
     const res = await persistSettings(input);
+    S.settings.draft = {};
     S.settings.ok = res.unsaved.length
       ? "设置已保存；以下字段服务端当前未持久化，刷新后会回退：" + res.unsaved.join("、") + "。"
       : "设置已保存。令牌不会回显；留空表示保持不变。";
@@ -2812,6 +3705,7 @@ async function saveSettings() {
     if (isAgreementError(e)) return;
   } finally {
     S.settings.saving = false;
+    S.settings.draft.memoryToken = "";
     renderPage();
     const token = $("#sToken");
     if (token) token.value = "";
@@ -2875,36 +3769,32 @@ async function resetAgreement() {
 
 function renderSettings() {
   const s = S.settings;
+  const draft = s.draft || {};
   const agreement = (S.state && S.state.agreement) || { accepted: false, version: "", at: "", signer: "" };
   const tokenSet = !!s.memoryToken;
   const dataFile = s.dataDir ? s.dataDir.replace(/[\\/]?$/, "") + "/state.json" : "data/state.json";
+  const val = (key, fallback) => (Object.prototype.hasOwnProperty.call(draft, key) ? draft[key] : (fallback || ""));
   const testHtml = s.test.state === "ok"
     ? okBox(s.test.message, s.test.hint)
     : s.test.state === "bad"
       ? alertBox(s.test.message, s.test.hint)
       : `<p class="hint" id="sTestOutHint">测试会先保存当前地址与令牌，再请求 /api/memory/stats；令牌不会回显。</p>`;
 
-  $("#page").innerHTML = `
-    <div class="page-head">
-      <div>
-        <p class="eyebrow">CONTROL · 05</p>
-        <h1>设置</h1>
-        <p class="lead">只改本机的这一份配置。记忆中心地址与令牌用于读卡；令牌留空表示保持不变，保存后不回显明文。</p>
-      </div>
-      <div class="head-meta">${badge("本机配置", "accent")}${badge("v" + (S.version || "—"), "")}</div>
-    </div>
-
-    <section class="section" aria-labelledby="h-s-memory">
-      <h2 id="h-s-memory"><span class="num">1</span>记忆中心</h2>
+  const baseGroup = `
+    <section class="section" aria-labelledby="h-s-conn">
+      <h2 id="h-s-conn"><span class="num">1</span>连接与语言</h2>
       <form id="settingsForm" class="card" novalidate>
-        <label class="field"><span>API 地址</span>
-          <input id="sBase" data-focus="sBase" type="text" value="${esc(s.memoryBase)}" placeholder="http://127.0.0.1:7999/memory-eternal/api" spellcheck="false">
-          <span class="help">本地优先；填 https 远端地址即切到云端。页头来源按地址推断为 local / cloud。</span>
-        </label>
-        <label class="field"><span>令牌（可选${tokenSet ? "，已设置；留空保持不变" : ""}）</span>
-          <input id="sToken" data-focus="sToken" type="password" autocomplete="new-password" value="" placeholder="${tokenSet ? "••••••••（已设置，留空保持不变）" : "没有令牌就留空"}">
-          <span class="help">只发送 Bearer 令牌，不在页面回显；保存后输入框会清空。</span>
-        </label>
+        <div class="form-grid">
+          <label class="field"><span>界面语言</span>
+            <select id="sLang" data-focus="sLang"><option value="zh" ${val("language", s.language) !== "en" ? "selected" : ""}>简体中文</option><option value="en" disabled>English（当前版本未提供）</option></select>
+            ${fieldDefault("language", val("language", s.language), FIELD_DEFAULTS.language)}
+            <span class="help">当前版本只提供简体中文文案；语言值会保存在 state.json。</span>
+          </label>
+          <label class="field"><span>服务端口</span>
+            <input type="text" value="${esc(location.port || (location.protocol === "https:" ? "443" : "80"))}" readonly>
+            <span class="help">只读；要换端口改启动参数。</span>
+          </label>
+        </div>
         <div id="settingsError">${s.error ? alertBox(s.error.message, s.error.hint) : ""}</div>
         ${s.ok ? okBox(s.ok) : ""}
         <div class="actions">
@@ -2913,30 +3803,37 @@ function renderSettings() {
         </div>
         <div id="sTestOut" style="margin-top:9px">${testHtml}</div>
       </form>
-    </section>
+    </section>`;
 
+  const pathsGroup = `
     <section class="section" aria-labelledby="h-s-runtime">
-      <h2 id="h-s-runtime"><span class="num">2</span>运行环境</h2>
+      <h2 id="h-s-runtime"><span class="num">2</span>路径与文件 ${badge("高级", "warn")}</h2>
       <form id="runtimeForm" class="card" novalidate>
-        <div class="form-grid">
-          <label class="field"><span>AutoKill 插件路径</span>
-            <input id="sPluginPath" data-focus="sPluginPath" type="text" value="${esc(s.pluginPath)}" placeholder="F:\\...\\purge.wasm" spellcheck="false">
-          </label>
-          <label class="field"><span>break 工作目录</span>
-            <input id="sBreakDir" data-focus="sBreakDir" type="text" value="${esc(s.breakDir)}" placeholder="F:\\MyApp\\eternal\\autokill-purge\\break" spellcheck="false">
-          </label>
-          <label class="field"><span>界面语言</span>
-            <select id="sLang" data-focus="sLang"><option value="zh" ${s.language !== "en" ? "selected" : ""}>简体中文</option><option value="en" disabled>English（当前版本未提供）</option></select>
-            <span class="help">当前版本只提供简体中文文案；语言值会保存在 state.json。</span>
-          </label>
-          <label class="field"><span>服务端口</span>
-            <input type="text" value="${esc(location.port || (location.protocol === "https:" ? "443" : "80"))}" readonly>
-          </label>
-        </div>
+        <label class="field"><span>记忆服务地址</span>
+          <input id="sBase" data-focus="sBase" type="text" value="${esc(val("memoryBase", s.memoryBase))}" placeholder="http://127.0.0.1:7999/memory-eternal/api" spellcheck="false">
+          ${fieldDefault("memoryBase", val("memoryBase", s.memoryBase), FIELD_DEFAULTS.memoryBase)}
+          <span class="help">本地优先；填远端地址即切到云端。页头来源按地址推断为 local / cloud。</span>
+        </label>
+        <label class="field"><span>令牌（可选${tokenSet ? "，已设置；留空保持不变" : ""}）</span>
+          <input id="sToken" data-focus="sToken" type="password" autocomplete="new-password" value="" placeholder="${tokenSet ? "••••••••（已设置，留空保持不变）" : "没有令牌就留空"}">
+          <span class="field-default">${badge(tokenSet ? "已设置（不回显）" : "未设置", tokenSet ? "good" : "", "mono")}<button type="button" class="small" data-reset-field="memoryToken">清空输入</button></span>
+          <span class="help">只发送 Bearer 令牌，不在页面回显；保存后输入框会清空。</span>
+        </label>
+        <label class="field"><span>AutoKill 插件路径 ${badge("高级", "warn")}</span>
+          <input id="sPluginPath" data-focus="sPluginPath" type="text" value="${esc(val("pluginPath", s.pluginPath))}" placeholder="F:\\...\\purge.wasm" spellcheck="false">
+          ${fieldDefault("pluginPath", val("pluginPath", s.pluginPath), FIELD_DEFAULTS.pluginPath)}
+          <span class="help">留空则使用内置默认。</span>
+        </label>
+        <label class="field"><span>break 工作目录 ${badge("高级", "warn")}</span>
+          <input id="sBreakDir" data-focus="sBreakDir" type="text" value="${esc(val("breakDir", s.breakDir))}" placeholder="F:\\MyApp\\eternal\\autokill-purge\\break" spellcheck="false">
+          ${fieldDefault("breakDir", val("breakDir", s.breakDir), FIELD_DEFAULTS.breakDir)}
+          <span class="help">留空则使用内置默认（仓库内的 break 目录）。</span>
+        </label>
         <div class="actions"><button class="primary" type="submit" ${s.saving ? "disabled" : ""}>保存运行环境</button><span class="hint">保存后以服务端返回的 settings 为准；未持久化的字段会提示并在刷新后回退。</span></div>
       </form>
-    </section>
+    </section>`;
 
+  const diagGroup = `
     <section class="section" aria-labelledby="h-s-agreement">
       <h2 id="h-s-agreement"><span class="num">3</span>协议</h2>
       <div class="card">
@@ -2966,7 +3863,23 @@ function renderSettings() {
         </div>
         <p class="hint" style="margin-top:8px">state.json 由服务端原子写；协议、设置、装备、分配与尝试记录都在里面。页面不直接改文件。</p>
       </div>
-    </section>
+    </section>`;
+
+  $("#page").innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">CONTROL · 05</p>
+        <h1>设置</h1>
+        <p class="lead">只改本机的这一份配置。记忆中心地址与令牌用于读卡；令牌留空表示保持不变，保存后不回显明文。</p>
+      </div>
+      <div class="head-meta">${badge("本机配置", "accent")}${badge("v" + (S.version || "—"), "")}</div>
+    </div>
+
+    ${groupsHtml("settings", [
+      { key: "base", html: baseGroup },
+      { key: "paths", html: pathsGroup },
+      { key: "diag", html: diagGroup },
+    ])}
   `;
   bindSettings();
 }
@@ -2984,20 +3897,22 @@ function bindSettings() {
   if (cancel) cancel.addEventListener("click", () => { S.settings.resetArmed = false; renderPage(); });
   const confirm = $("#sResetConfirm");
   if (confirm) confirm.addEventListener("click", () => resetAgreement());
+  /* 草稿：切换模式 / 重渲染都不丢未保存的输入 */
+  const bindDraft = (id, key) => {
+    const el = $(id);
+    if (el) el.addEventListener("input", () => { S.settings.draft[key] = el.value; });
+  };
+  bindDraft("#sBase", "memoryBase");
+  bindDraft("#sToken", "memoryToken");
+  bindDraft("#sPluginPath", "pluginPath");
+  bindDraft("#sBreakDir", "breakDir");
+  const lang = $("#sLang");
+  if (lang) lang.addEventListener("change", () => { S.settings.draft.language = lang.value; S.settings.language = lang.value; });
 }
 
 /* ------------------------------------------------------------------ about */
 function renderAbout() {
-  $("#page").innerHTML = `
-    <div class="page-head">
-      <div>
-        <p class="eyebrow">CONTROL · 06</p>
-        <h1>关于</h1>
-        <p class="lead">autokill-purge —— 面向二进制破甲、模型红队研究、智能体装备与记忆分发的本机工作台。</p>
-      </div>
-      <div class="head-meta">${badge("v" + (S.version || "—"), "accent")}${badge("MIT", "")}${badge("本地优先", "good")}</div>
-    </div>
-
+  const baseGroup = `
     <section class="section" aria-labelledby="h-a-project">
       <h2 id="h-a-project"><span class="num">1</span>项目</h2>
       <div class="card">
@@ -3034,8 +3949,38 @@ function renderAbout() {
         <p class="muted">使用者对自己的一切操作与后果负全部责任。发现用于非法用途，将保留证据并依法移交有关部门。</p>
         <p class="hint">AutoKill 只看不改；改字节只发生在 break，且只改副本。Web 只做编排与呈现，自己不写字节。</p>
       </div>
-    </section>
+    </section>`;
+
+  $("#page").innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">CONTROL · 06</p>
+        <h1>关于</h1>
+        <p class="lead">autokill-purge —— 面向二进制破甲、模型红队研究、智能体装备与记忆分发的本机工作台。</p>
+      </div>
+      <div class="head-meta">${badge("v" + (S.version || "—"), "accent")}${badge("MIT", "")}${badge("本地优先", "good")}</div>
+    </div>
+
+    ${groupsHtml("about", [{ key: "base", html: baseGroup }])}
   `;
+  bindGroups();
+}
+
+/* ------------------------------------------------------------------ field reset */
+function resetField(what) {
+  if (!what) return;
+  const value = FIELD_DEFAULTS[what];
+  if (what === "role") { S.breach.role = value; }
+  else if (what === "output") { S.breach.output = value; }
+  else if (what === "task") { S.breach.task = value; }
+  else if (what === "memoryToken") { S.settings.draft.memoryToken = ""; }
+  else if (Object.prototype.hasOwnProperty.call(FIELD_DEFAULTS, what)) {
+    S.settings.draft[what] = value;
+    if (what === "language") S.settings.language = value || "zh";
+    if (what === "memoryBase" && value) S.settings.memoryBase = value;
+  } else return;
+  toast("已恢复默认");
+  renderPage();
 }
 
 /* ------------------------------------------------------------------ init */
@@ -3080,7 +4025,23 @@ function init() {
       boot();
       return;
     }
+    const hint = event.target.closest("[data-tech-hint]");
+    if (hint) {
+      lsSet(LS_TECH_HINT, "1");
+      S.techHintOpen = false;
+      renderPage();
+      return;
+    }
+    const reset = event.target.closest("[data-reset-field]");
+    if (reset) {
+      resetField(reset.dataset.resetField);
+      return;
+    }
   });
+
+  const modeSwitch = $("#modeSwitch");
+  if (modeSwitch) modeSwitch.addEventListener("click", () => setUiMode(modeIsTechnical() ? "simple" : "technical"));
+  updateModeSwitch();
 
   window.addEventListener("hashchange", onRoute);
   boot();
