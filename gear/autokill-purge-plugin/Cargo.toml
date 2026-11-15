@@ -1,0 +1,22 @@
+[package]
+name = "autokill-purge-plugin"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Armour-piercing gear for AutoKill: packer markers, check ranking, unpack plans, claim audit."
+
+# Stands on its own: it builds for wasm32-unknown-unknown, outside the AutoKill workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.63"
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

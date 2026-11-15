@@ -1,0 +1,8 @@
+需求方：autokill-purge（web 端要判断装备条目在库里的状态）。四件事，不改 recall。
+1) 给 cards 加 card_key TEXT（唯一索引，值取 frontmatter 的 key:，缺则 id:），并建 status/source/kind 索引。
+2) 加存在性查询：dsh-memory lookup <key...> --json 与 POST /api/lookup {keys,filter}；返回四态 approved|pending|rejected|missing（pending 必须能查到），一次最多 200 个，≤100ms，顺序与请求一致。
+3) capture 改成 upsert：返回 {action:created|updated, key, id, state, path}，同 key 重复提交不新建；提交后立即能 lookup 到 pending。
+4) GET /api/health 返回唯一 version + vault/port/alive/writable/cards/pending；alive 以端口能否服务为准（现在同时出现 0.15.0/0.40.1/0.45.0，且 alive:false 但端口在服务）。
+不要做：不改 recall 排序/算法、不加第二套库、不为存在性引向量或 FTS、不自动批准。
+可选：lookup 支持 filter {source,kind,prefix}，我只查 source=autokill-purge。
+验收：lookup 未登记 key → missing；capture 后立即 lookup → pending；再 capture → updated 且卡数不变；200 keys ≤100ms；重启不丢。

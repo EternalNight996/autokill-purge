@@ -1,0 +1,364 @@
+﻿{
+  "ok": true,
+  "vaultDir": "C:\\Users\\Administrator\\.dsh\\memory-vault",
+  "status": "pending",
+  "total": 23,
+  "returned": 23,
+  "count": 23,
+  "limit": null,
+  "hasMore": false,
+  "cards": [
+    {
+      "path": "03-Knowledge/memory-eternal写入类操作日志覆盖writeupsertimportimport-fail.md",
+      "title": "memory-eternal：写入类操作日志覆盖（write/upsert/import/import-fail）",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "memory-eternal",
+        "日志",
+        "审计",
+        "批量导入",
+        "踩坑"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/memory-eternal-配额缺口评估与-self-check-端点方案.md",
+      "title": "Memory Eternal 配额缺口评估与 self-check 端点方案",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "memory-eternal",
+        "配额",
+        "caps",
+        "认证",
+        "API设计",
+        "风险评估"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/活动日志自动清理保留天数可配与双触发点.md",
+      "title": "活动日志自动清理：保留天数可配与双触发点",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "日志清理",
+        "自动清理",
+        "配置",
+        "memory-eternal",
+        "节流",
+        "SQLite"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/memory-eternal-卡片同步状态标记cloud-synced-at-前端灰显.md",
+      "title": "memory-eternal 卡片同步状态标记（cloud_synced_at + 前端灰显）",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "memory-eternal",
+        "卡片同步",
+        "cloud_synced_at",
+        "前端灰显",
+        "UNION ALL 踩坑"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/mengbot-商户视图图标自定义与-cardset-保存-bug.md",
+      "title": "mengbot 商户视图图标自定义与 cardSet 保存 Bug",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "mengbot",
+        "商户视图",
+        "merchantViews",
+        "cardSets",
+        "购物/订阅模板",
+        "debug"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/订阅模板板块化弹窗编辑与数据库覆盖机制.md",
+      "title": "订阅模板板块化弹窗编辑与数据库覆盖机制",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "MengBot",
+        "订阅模板",
+        "管理台",
+        "数据库",
+        "权限"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "07-Tools/ego-lite-bridge-守护进程启动参数与订阅页商户定制约定.md",
+      "title": "ego-lite-bridge 守护进程启动参数与订阅页商户定制约定",
+      "kind": "tool",
+      "status": "pending",
+      "tags": [
+        "ego-lite-bridge",
+        "Chrome CDP",
+        "订阅页",
+        "商户定制",
+        "浏览器自动化"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "08-Mistakes/oidc-设备授权确认页按钮缺失修复.md",
+      "title": "OIDC 设备授权确认页按钮缺失修复",
+      "kind": "mistake",
+      "status": "pending",
+      "tags": [
+        "oidc-provider",
+        "设备授权",
+        "device-flow",
+        "xsrf",
+        "模板"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "08-Mistakes/多皮肤下-css-优先级冲突导致-primary-按钮文字色被覆盖.md",
+      "title": "多皮肤下 CSS 优先级冲突导致 primary 按钮文字色被覆盖",
+      "kind": "mistake",
+      "status": "pending",
+      "tags": [
+        "DSH",
+        "CSS",
+        "皮肤",
+        "按钮",
+        "对比度",
+        "优先级"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "07-Tools/解包计划v2.md",
+      "title": "解包计划（v2）",
+      "kind": "tool",
+      "status": "pending",
+      "tags": [],
+      "reason": "",
+      "submittedBy": ""
+    },
+    {
+      "path": "07-Tools/mengbot-windows-打包绕过与产物流程.md",
+      "title": "MengBot Windows 打包绕过与产物流程",
+      "kind": "tool",
+      "status": "pending",
+      "tags": [
+        "electron-builder",
+        "pnpm",
+        "windows",
+        "esbuild",
+        "打包",
+        "mengbot",
+        "preference"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/memory-eternal-本地库云端租户库导入方案复制显式触发幂等分片.md",
+      "title": "memory-eternal 本地库→云端租户库导入方案（复制+显式触发+幂等分片）",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "memory-eternal",
+        "数据同步",
+        "SQLite",
+        "多租户",
+        "幂等导入",
+        "设计决策"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/dsh-云登录回跳不可行与轮询取票方案含切换账号-token-未清-bug.md",
+      "title": "DSH 云登录回跳不可行与轮询取票方案（含切换账号 token 未清 bug）",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "DSH",
+        "云登录",
+        "轮询取票",
+        "localStorage",
+        "自定义协议"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "08-Mistakes/mengbot-设备码登录二维码自研失败改用-qrcode-库.md",
+      "title": "MengBot 设备码登录：二维码自研失败改用 qrcode 库",
+      "kind": "mistake",
+      "status": "pending",
+      "tags": [
+        "mengbot",
+        "oidc",
+        "device-code",
+        "qrcode",
+        "踩坑"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/设备码流程rfc-8628无弹窗排查浏览器不回跳弹窗由客户端轮询触发.md",
+      "title": "设备码流程（RFC 8628）无弹窗排查：浏览器不回跳，弹窗由客户端轮询触发",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "OAuth",
+        "DeviceCode",
+        "RFC8628",
+        "memory-eternal",
+        "排查"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "08-Mistakes/memory-eternal-云端面板三态互斥重构与-tdz-反复踩坑教训.md",
+      "title": "memory-eternal 云端面板三态互斥重构与 TDZ 反复踩坑教训",
+      "kind": "mistake",
+      "status": "pending",
+      "tags": [
+        "memory-eternal",
+        "React",
+        "TDZ",
+        "UI重构",
+        "CRLF",
+        "防回归测试",
+        "preference"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/oidc-设备码授权成功页按-ua-区分来源-确认页自动提交.md",
+      "title": "OIDC 设备码授权成功页按 UA 区分来源 + 确认页自动提交",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "OIDC",
+        "device-code",
+        "UA",
+        "memory-eternal",
+        "MengBot",
+        "DSH",
+        "授权流程"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/破甲知识是否切库的评估与逻辑隔离方案.md",
+      "title": "破甲知识是否切库的评估与逻辑隔离方案",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "记忆库",
+        "memory-eternal",
+        "架构决策",
+        "隔离",
+        "阈值"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "07-Tools/本机硬件跑-freetoken-的可行性与配置要点.md",
+      "title": "本机硬件跑 FreeToken 的可行性与配置要点",
+      "kind": "tool",
+      "status": "pending",
+      "tags": [
+        "FreeToken",
+        "本地推理",
+        "硬件配置",
+        "WSL2",
+        "GGUF",
+        "MoE"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/freetoken-vs-ollama语义嵌入选型.md",
+      "title": "FreeToken vs Ollama：语义嵌入选型",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "embedding",
+        "ollama",
+        "freetoken",
+        "语义检索",
+        "选型"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "08-Mistakes/云端专属接口必须走绝对地址相对前缀-api-的-404-陷阱.md",
+      "title": "云端专属接口必须走绝对地址（相对前缀 API 的 404 陷阱）",
+      "kind": "mistake",
+      "status": "pending",
+      "tags": [
+        "MengBot",
+        "memory-eternal",
+        "前端路由",
+        "设备码登录",
+        "踩坑"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "08-Mistakes/react-组件内-tdz-踩坑useeffect-依赖数组同步求值导致cannot-access-x-before-initialization.md",
+      "title": "React 组件内 TDZ 踩坑：useEffect 依赖数组同步求值导致「Cannot access X before initialization」",
+      "kind": "mistake",
+      "status": "pending",
+      "tags": [
+        "React",
+        "TDZ",
+        "useEffect",
+        "调试方法",
+        "Electron",
+        "esbuild",
+        "回归测试"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    },
+    {
+      "path": "03-Knowledge/源码不压缩仅构建产物可选压缩的边界约定.md",
+      "title": "源码不压缩、仅构建产物可选压缩的边界约定",
+      "kind": "knowledge",
+      "status": "pending",
+      "tags": [
+        "memory-eternal",
+        "构建",
+        "esbuild",
+        "源码与产物"
+      ],
+      "reason": "AI 自动沉淀（蒸馏卡）",
+      "submittedBy": "deepseek-harness"
+    }
+  ]
+}

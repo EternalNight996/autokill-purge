@@ -1,0 +1,12 @@
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+const q = (s, ...a) => db.prepare(s).all(...a);
+const cols = q('pragma table_info(cards)').map(c => c.name);
+console.log('has_card_key:', cols.includes('card_key'));
+console.log('indexes:', JSON.stringify(q("select name from sqlite_master where type='index' and name like 'idx_cards%'").map(r => r.name)));
+console.log('schema_version:', JSON.stringify(q("select value from config where key='schema_version'")));
+console.log('status:', JSON.stringify(q('select status, count(*) c from cards group by status')));
+console.log('purge cards:', JSON.stringify(q("select card_key, status, path from cards where card_key like 'purge.%'")));
+console.log('quarantine total:', JSON.stringify(q('select count(*) n from quarantine')));
+console.log('quarantine purge:', JSON.stringify(q("select card_key, reason from quarantine where card_key like 'purge.%' or path like '%解包计划%' limit 10")));
+console.log('null keys:', JSON.stringify(q('select count(*) n from cards where card_key is null')));

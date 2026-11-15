@@ -1,0 +1,13 @@
+const base = 'http://127.0.0.1:8001/memory-eternal/api';
+const keys = ['purge.gear.scan_packer_markers','purge.gear.rank_check_candidates','purge.gear.plan_unpack','purge.gear.audit_claims','purge.skill.autokill-purge','purge.flow.gear-install'];
+const h = await (await fetch(base + '/health')).json();
+console.log('health:', JSON.stringify({version: h.version, alive: h.alive, writable: h.writable, cards: h.cards, pending: h.pending, schema: h.schema_version}));
+const t0 = performance.now();
+const l1 = await (await fetch(base + '/lookup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ keys, filter: { source: 'autokill-purge' } }) })).json();
+console.log('lookup before:', (performance.now() - t0).toFixed(1) + 'ms', JSON.stringify(l1.results.map(r => r.key.replace('purge.', '') + '=' + r.state)));
+const up = await (await fetch(base + '/upsert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ card: { key: 'purge.gear.plan_unpack', kind: 'tool', source: 'autokill-purge', title: '解包计划：按格式给出有序工具链', body: '# 解包计划\n\n按格式（pe/elf/macho/apk/asar/js）给出有序工具链，每步带通过条件。\n' } }) })).json();
+console.log('upsert:', JSON.stringify({action: up.action, state: up.state, key: up.key, path: up.path, hash: up.content_hash}));
+const l2 = await (await fetch(base + '/lookup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ keys }) })).json();
+console.log('lookup after:', JSON.stringify(l2.results.map(r => r.key.replace('purge.', '') + '=' + r.state)));
+const up2 = await (await fetch(base + '/upsert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ card: { key: 'purge.gear.plan_unpack', kind: 'tool', source: 'autokill-purge', title: '解包计划（v2）', body: '# 解包计划 v2\n' } }) })).json();
+console.log('upsert again:', up2.action, 'state=' + up2.state);

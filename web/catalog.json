@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "note": "装备清单：装进 AutoKill 的东西，以及它们该在记忆库里留下的卡片。状态由 memory-eternal 的 /lookup 给出（四态）。",
+  "items": [
+    {
+      "id": "purge.gear.scan_packer_markers",
+      "kind": "tool",
+      "title": "壳识别：扫描加壳标记",
+      "query": "壳识别 加壳标记 扫描",
+      "source": "gear/autokill-purge-plugin/src/lib.rs"
+    },
+    {
+      "id": "purge.gear.rank_check_candidates",
+      "kind": "tool",
+      "title": "授权判定候选排序",
+      "query": "授权判定 候选 排序 打分",
+      "source": "gear/autokill-purge-plugin/src/lib.rs"
+    },
+    {
+      "id": "purge.gear.plan_unpack",
+      "kind": "tool",
+      "title": "解包计划（按格式）",
+      "query": "解包计划 格式 工具链 通过条件",
+      "source": "gear/autokill-purge-plugin/src/lib.rs"
+    },
+    {
+      "id": "purge.gear.audit_claims",
+      "kind": "tool",
+      "title": "结论审计：证据有无",
+      "query": "结论审计 证据 待办 降级",
+      "source": "gear/autokill-purge-plugin/src/lib.rs"
+    },
+    {
+      "id": "purge.skill.autokill-purge",
+      "kind": "skill",
+      "title": "autokill-purge 能力卡",
+      "query": "autokill-purge 破甲 装备 插件",
+      "source": "SKILL.md"
+    },
+    {
+      "id": "purge.flow.gear-install",
+      "kind": "workflow",
+      "title": "装车流程：编译→config→plugins_refresh",
+      "query": "plugins.wasm 装车 编译 组件 安装",
+      "source": "gear/README.md"
+    }
+  ]
+}

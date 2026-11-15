@@ -1,0 +1,13 @@
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync(process.argv[2], { readOnly: false });
+const q = (s, ...a) => db.prepare(s).all(...a);
+const cols = q('pragma table_info(cards)').map(c => c.name);
+console.log('cards has card_key:', cols.includes('card_key'));
+console.log('quarantine has card_key:', q('pragma table_info(quarantine)').map(c => c.name).includes('card_key'));
+console.log('indexes:', JSON.stringify(q("select name from sqlite_master where type='index' and (name like 'idx_cards%' or name like 'idx_quar%')").map(r => r.name)));
+console.log('schema_version:', JSON.stringify(q("select value from config where key='schema_version'")));
+console.log('status:', JSON.stringify(q('select status, count(*) c from cards group by status')));
+console.log('purge cards:', JSON.stringify(q("select card_key, status, path from cards where card_key like 'purge.%'")));
+console.log('purge quarantine:', JSON.stringify(q("select card_key, reason, path from quarantine where card_key like 'purge.%' limit 10")));
+console.log('quarantine total:', JSON.stringify(q('select count(*) n from quarantine')));
+console.log('recent quarantine reasons:', JSON.stringify(q('select reason, count(*) c from quarantine group by reason order by c desc limit 6')));

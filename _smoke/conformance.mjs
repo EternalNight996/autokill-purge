@@ -1,0 +1,17 @@
+const base = 'http://127.0.0.1:7999/memory-eternal/api';
+const post = async (body) => { const r = await fetch(base + '/lookup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); let j = {}; try { j = await r.json(); } catch {} return { status: r.status, j }; };
+const keys6 = ['purge.gear.plan_unpack','purge.gear.audit_claims','purge.gear.plan_unpack','nope.bad..key','purge.skill.autokill-purge'];
+const r1 = await post({ keys: keys6 });
+console.log('order+dup+invalid:', r1.status, JSON.stringify(r1.j.results ? r1.j.results.map((x, i) => i + ':' + x.key + '=' + x.state) : r1.j));
+const big = Array.from({ length: 201 }, (_, i) => 'purge.bulk.k' + i);
+const t0 = performance.now();
+const r2 = await post({ keys: big });
+console.log('201 keys:', r2.status, (performance.now() - t0).toFixed(1) + 'ms', JSON.stringify(r2.j).slice(0, 120));
+const twohundred = Array.from({ length: 200 }, (_, i) => 'purge.bulk.k' + i);
+const t1 = performance.now();
+const r3 = await post({ keys: twohundred });
+console.log('200 keys:', r3.status, (performance.now() - t1).toFixed(1) + 'ms', 'count=' + (r3.j.count));
+const r4 = await post({ keys: ['purge.gear.plan_unpack'], filter: { source: 'someone-else' } });
+console.log('filter mismatch:', r4.status, JSON.stringify(r4.j.results));
+const r5 = await post({ keys: ['PURGE.LOUD.KEY'] });
+console.log('uppercase key:', r5.status, JSON.stringify(r5.j).slice(0, 140));

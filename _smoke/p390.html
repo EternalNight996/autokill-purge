@@ -1,0 +1,47 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>viewport 496x751</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>autokill<em>purge</em></h1>
+      <p id="lede">记忆库在线 · v0.45.0 · schema 2</p>
+    </div>
+    <button id="openSettings" class="quiet" type="button">设置</button>
+  </header>
+
+  <section class="meter" aria-hidden="true"><div id="bar" style="width: 0%;"></div></section>
+  <p id="summary" class="summary"><b>6</b> 项装备 · 已入库 <b>0</b> · 待处理 <b>6</b> — 点「补齐 6 项」把它们登记进记忆库，之后等人审核。</p>
+
+  <ul id="list" class="list"><li class="row need"><i class="dot missing"></i><div class="name"><b>壳识别：扫描加壳标记</b><span>tool</span></div><div class="state missing">缺失</div><button class="quiet sm">登记</button></li><li class="row need"><i class="dot missing"></i><div class="name"><b>授权判定候选排序</b><span>tool</span></div><div class="state missing">缺失</div><button class="quiet sm">登记</button></li><li class="row need"><i class="dot rejected"></i><div class="name"><b>解包计划（按格式）</b><span>tool · 07-Tools/解包计划v2.md</span></div><div class="state rejected">已驳回 · 接口未同步</div><button class="quiet sm">登记</button></li><li class="row need"><i class="dot rejected"></i><div class="name"><b>结论审计：证据有无</b><span>tool · 07-Tools/结论审计证据有无.md</span></div><div class="state rejected">已驳回 · 接口未同步</div><button class="quiet sm">登记</button></li><li class="row need"><i class="dot missing"></i><div class="name"><b>autokill-purge 能力卡</b><span>skill</span></div><div class="state missing">缺失</div><button class="quiet sm">登记</button></li><li class="row need"><i class="dot missing"></i><div class="name"><b>装车流程：编译→config→plugins_refresh</b><span>workflow</span></div><div class="state missing">缺失</div><button class="quiet sm">登记</button></li></ul>
+
+  <div class="actions">
+    <button id="fill" class="primary" type="button">补齐 6 项</button>
+    <button id="openLib" class="quiet" type="button">打开知识库</button>
+    <button id="refresh" class="quiet" type="button">重新自检</button>
+  </div>
+
+  <details id="settings" class="settings">
+    <summary>连接与存储</summary>
+    <div class="grid">
+      <label><span>记忆库地址</span><input id="base" type="text" placeholder="http://127.0.0.1:7999"></label>
+      <label><span>端口</span><input id="port" type="number" placeholder="7999"></label>
+      <label class="check"><input id="discovery" type="checkbox"><span>自动发现端口</span></label>
+      <label><span>云端地址</span><input id="cloudBase" type="text" placeholder="https://memory.example.com"></label>
+      <label class="check"><input id="cloudOn" type="checkbox"><span>使用云端</span></label>
+    </div>
+    <div class="actions tight">
+      <button id="save" class="primary sm" type="button">保存</button>
+      <button id="watchdog" class="quiet sm" type="button">启动/保活服务</button>
+    </div>
+    <p id="meta" class="meta">地址来源 config.port · 配置 C:\Users\Administrator\.autokill-purge\config.json · 写入日志 C:\Users\Administrator\.autokill-purge\writes.log</p>
+  </details>
+</main>
+<script src="/app.js"></script>
+
+</body></html>
