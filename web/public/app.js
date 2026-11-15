@@ -162,6 +162,8 @@ const S = {
     rules: null, skills: null, netScope: null,
     ruleEdit: { name: "", text: "", dirty: false },
     skillView: { name: "", text: "" },
+    skillEdit: { name: "", text: "" },
+    kb: { stats: null, mode: "poc", q: "", items: [], detail: null, error: null },
     netScopeDraft: null,
     loading: false, tried: false, error: null, busy: false, message: "",
     promptDraft: null, promptDirty: false,
@@ -1365,6 +1367,50 @@ async function deleteSkillFile(name) {
   } catch (e) { toast(simpleReason(e)); }
 }
 
+async function saveSkill() {
+  const e = S.host.skillEdit || {};
+  const name = String(e.name || "").trim();
+  if (!name) { toast("先写技能目录名，例如 my-skill"); return; }
+  if (!String(e.text || "").trim()) { toast("SKILL.md 正文不能为空"); return; }
+  try {
+    const d = await request("/api/host/skill", { method: "POST", body: { confirm: true, name: name, text: String(e.text || "") } });
+    if (!d || d.ok === false) throw payloadError(d, "保存技能失败");
+    toast("技能已保存");
+    S.host.skillView = { name: d.name, text: String(e.text || "") };
+    await reloadHostExtras();
+  } catch (err) { toast(simpleReason(err)); }
+}
+
+/* 知识库：只读搜索 + 查看详情 */
+async function searchKb(q, mode) {
+  const kb = S.host.kb = Object.assign({}, S.host.kb);
+  kb.q = q;
+  kb.mode = mode || kb.mode || "poc";
+  kb.error = null;
+  try {
+    const base = kb.mode === "note" ? "/api/kb/notes" : "/api/kb/poc";
+    const d = await request(base + "?q=" + encodeURIComponent(kb.q) + "&limit=30");
+    kb.items = (d && d.items) || [];
+    kb.detail = null;
+    if (!kb.stats) kb.stats = await request("/api/kb/stats").catch(() => null);
+  } catch (e) {
+    kb.error = e;
+    kb.items = [];
+  }
+  if (S.tab === "breach") renderPage();
+}
+
+async function openKbItem(id) {
+  const kb = S.host.kb;
+  if (!kb) return;
+  try {
+    const base = kb.mode === "note" ? "/api/kb/notes" : "/api/kb/poc";
+    const d = await request(base + "?id=" + encodeURIComponent(id));
+    kb.detail = (d && d.item) || null;
+    renderPage();
+  } catch (e) { toast(simpleReason(e)); }
+}
+
 /* 统一流程里的公共控件（两模式共用）：注入/卸载/还原、重新识别、注入正文编辑 */
 function bindFlowControls() {
   $$("#page [data-simple-host]").forEach((el) => {
@@ -1392,6 +1438,22 @@ function bindFlowControls() {
   // 技能
   $$("#page [data-skill-open]").forEach((el) => el.addEventListener("click", () => openSkill(el.dataset.skillOpen)));
   $$("#page [data-skill-del]").forEach((el) => el.addEventListener("click", () => deleteSkillFile(el.dataset.skillDel)));
+  $$("#page [data-skill-save]").forEach((el) => el.addEventListener("click", () => saveSkill()));
+  const skillNameEl = $("#skillName");
+  if (skillNameEl) skillNameEl.addEventListener("input", () => { S.host.skillEdit = Object.assign({}, S.host.skillEdit, { name: skillNameEl.value }); });
+  const skillTextEl = $("#skillText");
+  if (skillTextEl) skillTextEl.addEventListener("input", () => { S.host.skillEdit = Object.assign({}, S.host.skillEdit, { text: skillTextEl.value }); });
+  // 知识库
+  $$("#page [data-kb-search]").forEach((el) => el.addEventListener("click", () => {
+    const q = ($("#kbQuery") || {}).value || "";
+    const mode = ($("#kbMode") || {}).value || "poc";
+    searchKb(q, mode);
+  }));
+  const kbQueryEl = $("#kbQuery");
+  if (kbQueryEl) kbQueryEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); searchKb(kbQueryEl.value, ($("#kbMode") || {}).value || "poc"); }
+  });
+  $$("#page [data-kb-open]").forEach((el) => el.addEventListener("click", () => openKbItem(el.dataset.kbOpen)));
   const hp = $("#hostPrompt");
   if (hp) {
     hp.addEventListener("input", () => {
@@ -2037,6 +2099,7 @@ function renderFlowExtraPanels() {
   const ns = h.netScope || { exists: false, text: "", lines: 0 };
   const re = h.ruleEdit || { name: "", text: "" };
   const sv = h.skillView || { name: "", text: "" };
+  const se = h.skillEdit || { name: "", text: "" };
   const nsDraft = h.netScopeDraft != null ? h.netScopeDraft : (ns.text || "");
 
   const ruleRows = (rules.files || []).map((f) => `<div class="s-row">
@@ -2051,8 +2114,40 @@ function renderFlowExtraPanels() {
         <button type="button" class="small" data-skill-del="${esc(s.name)}">删除</button></div>
     </div>`).join("");
 
+  const kb = h.kb || { stats: null, mode: "poc", q: "", items: [], detail: null, loading: false, error: null };
+  const kbStats = kb.stats;
+  const kbRows = (kb.items || []).map((it) => `<div class="s-row">
+      <div class="s-row-main"><strong>${esc(it.title || it.code || it.id)}</strong>
+        <span class="mono small">${esc([it.category, it.cve, it.component, it.source || "", it.posted_at || ""].filter(Boolean).join(" · "))}</span></div>
+      <div class="actions"><button type="button" class="small" data-kb-open="${esc(String(it.id))}">查看</button></div>
+    </div>`).join("");
+  const kbDetail = kb.detail ? `<div class="card" style="margin-top:8px">
+      <div class="s-row"><div class="s-row-main"><strong>${esc(kb.detail.title || kb.detail.code || kb.detail.id)}</strong>
+        <span class="mono small">${esc([kb.detail.source, kb.detail.cve, kb.detail.component, kb.detail.category].filter(Boolean).join(" · "))}</span></div></div>
+      ${kb.detail.url ? `<p class="small muted mono">${esc(kb.detail.url)}</p>` : ""}
+      <textarea rows="12" readonly spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px;width:100%">${esc([kb.detail.description, kb.detail.usage, kb.detail.content, kb.detail.body].filter(Boolean).join("\n\n"))}</textarea>
+    </div>` : "";
+  const kbBlock = `<details class="grp" data-group="extra:kb">
+      <summary><span class="grp-title">知识库</span><span class="grp-hint">${kbStats ? `POC ${fmtNum(kbStats.poc)} · 笔记 ${fmtNum(kbStats.notes)} · ${(kbStats.bytes / 1048576).toFixed(1)} MB` : "读取中…"}</span></summary>
+      <div class="grp-body">
+        ${kbStats && kbStats.byCategory ? `<p class="small muted">分类：${kbStats.byCategory.slice(0, 8).map((c) => esc(c.category) + " " + fmtNum(c.n)).join(" · ")}</p>` : ""}
+        <div class="s-choices" style="grid-template-columns:1fr 1fr 1fr;align-items:end">
+          <label class="field"><span>查什么</span><input id="kbQuery" type="text" value="${esc(kb.q || "")}" placeholder="例：shiro / weblogic / 脱壳"></label>
+          <label class="field"><span>范围</span><select id="kbMode">
+            <option value="poc"${kb.mode === "poc" ? " selected" : ""}>POC / 模板</option>
+            <option value="note"${kb.mode === "note" ? " selected" : ""}>论坛笔记</option>
+          </select></label>
+          <div class="actions"><button type="button" class="primary" data-kb-search>搜索</button></div>
+        </div>
+        ${kb.error ? alertBox("知识库读不到", simpleReason(kb.error)) : ""}
+        ${kbRows || `<p class="small muted">${kb.q ? "没有命中。" : "输入关键词搜索，或直接看下面。"}</p>`}
+        ${kbDetail}
+        <p class="hint">只读 knowledge.db（dsh-purge 的 POC / 笔记库），写库仍走它自己的工具。</p>
+      </div>
+    </details>`;
+
   return `<section class="section">
-    <h2><span class="num">3+</span>其他三栏<span class="count">规则 ${(rules.files || []).length} · 技能 ${(skills.skills || []).length} · 白名单 ${ns.lines || 0} 行</span></h2>
+    <h2><span class="num">3+</span>其他四栏<span class="count">规则 ${(rules.files || []).length} · 技能 ${(skills.skills || []).length} · 白名单 ${ns.lines || 0} 行 · POC ${kbStats ? fmtNum(kbStats.poc) : "?"}</span></h2>
 
     <details class="grp" data-group="extra:rules">
       <summary><span class="grp-title">规则集</span><span class="grp-hint">~/.dsh/rules/*.md · ${(rules.files || []).length} 个${rules.exists ? "" : "（目录还没建，保存时自动建）"}</span></summary>
@@ -2079,11 +2174,19 @@ function renderFlowExtraPanels() {
       <summary><span class="grp-title">技能</span><span class="grp-hint">~/.dsh/skills · ${(skills.skills || []).length} 篇</span></summary>
       <div class="grp-body">
         ${skillRows || `<p class="small muted">还没有技能。</p>`}
+        <label class="field" style="margin-top:8px"><span>新建 / 覆盖技能（目录名）</span>
+          <input id="skillName" type="text" value="${esc(se.name || "")}" placeholder="例：my-skill"></label>
+        <label class="field"><span>SKILL.md 正文</span>
+          <textarea id="skillText" rows="8" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(se.text || "")}</textarea></label>
+        <div class="actions"><button type="button" class="primary" data-skill-save>保存技能</button>
+          <span class="hint">保存前自动备份；查看只读那份在下面。</span></div>
         <label class="field"><span>查看：${esc(sv.name || "未选择")}</span>
           <textarea rows="10" readonly spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(sv.text)}</textarea>
         </label>
       </div>
     </details>
+
+    ${kbBlock}
   </section>`;
 }
 
@@ -2218,13 +2321,14 @@ async function loadHostStatus(force = false) {
   S.host.loadPromise = (async () => {
     try {
       // 并行取：status 最慢（要扫宿主），其余一起发，别串成 6 次等待
-      const [status, prompt0, inventory0, rules0, skills0, netScope0] = await Promise.all([
+      const [status, prompt0, inventory0, rules0, skills0, netScope0, kbStats0] = await Promise.all([
         request("/api/host/status"),
         request("/api/host/prompt").catch(() => null),
         request("/api/host/inventory").catch(() => null),
         request("/api/host/rules").catch(() => null),
         request("/api/host/skills").catch(() => null),
         request("/api/host/net-scope").catch(() => null),
+        request("/api/kb/stats").catch(() => null),
       ]);
       S.host.data = status;
       S.host.error = null;
@@ -2233,6 +2337,7 @@ async function loadHostStatus(force = false) {
       S.host.rules = rules0;
       S.host.skills = skills0;
       S.host.netScope = netScope0;
+      S.host.kb = Object.assign({}, S.host.kb, { stats: kbStats0 || null });
     } catch (e) {
       S.host.error = e;
     } finally {

@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
 import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
 import { detectLiveModels } from './models-live.mjs';
+import { kbStats, searchPoc, readPoc, searchNotes, readNote, recentPoc } from './kb.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -844,6 +845,30 @@ async function handleApi(req, res, url, state) {
       try { return send(res, 200, await deleteSkill(DATA_DIR, body.name || '')); }
       catch (e) { return send(res, 400, { ok: false, error: 'skill_delete_failed', detail: publicError(e) }); }
     });
+  }
+
+  // ---- 知识库（只读 dsh-purge 的 knowledge.db） ------------------------------------
+  if (p === '/api/kb/stats' && method === 'GET') {
+    try { return send(res, 200, kbStats()); }
+    catch (e) { return send(res, 503, { ok: false, error: 'kb_unavailable', detail: publicError(e) }); }
+  }
+  if (p === '/api/kb/poc' && method === 'GET') {
+    try {
+      const id = url.searchParams.get('id');
+      if (id) return send(res, 200, readPoc(id));
+      return send(res, 200, searchPoc({ q: url.searchParams.get('q') || '', category: url.searchParams.get('category') || '', limit: url.searchParams.get('limit') || 30 }));
+    } catch (e) { return send(res, 503, { ok: false, error: 'kb_poc_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/kb/notes' && method === 'GET') {
+    try {
+      const id = url.searchParams.get('id');
+      if (id) return send(res, 200, readNote(id));
+      return send(res, 200, searchNotes({ q: url.searchParams.get('q') || '', source: url.searchParams.get('source') || '', limit: url.searchParams.get('limit') || 30 }));
+    } catch (e) { return send(res, 503, { ok: false, error: 'kb_notes_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/kb/recent' && method === 'GET') {
+    try { return send(res, 200, recentPoc(url.searchParams.get('limit') || 8)); }
+    catch (e) { return send(res, 503, { ok: false, error: 'kb_recent_failed', detail: publicError(e) }); }
   }
 
   // breach (FR-2)
