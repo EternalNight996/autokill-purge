@@ -174,7 +174,6 @@ const S = {
     testMessage: "",
     resignArmed: false,
     detailOpen: null,
-    showAllModels: false,
   },
   breach: {
     model: "",
@@ -1075,41 +1074,6 @@ function simpleSteps() {
   }).join("")}</ol>`;
 }
 
-/* 第 2 步（与技术模式同一流程）：让破甲生效 —— 应用宿主补丁 / 先备份 */
-function renderSimpleApplyStep() {
-  const h = S.host;
-  const d = h.data;
-  const c = (d && d.counts) || {};
-  const applied = c.applied || 0;
-  const total = c.total || 0;
-  const pending = c.pending || 0;
-  const ready = applied > 0 && pending === 0;
-  const snaps = (d && Array.isArray(d.snapshots)) ? d.snapshots.length : 0;
-  const busy = h.busy;
-  const msg = h.message ? (h.error ? alertBox(h.message, "") : okBox(h.message)) : "";
-  if (!d) {
-    return `<section class="section"><h2><span class="num">2</span>让破甲生效</h2>${spinner("检查宿主状态…")}</section>`;
-  }
-  if (d.available === false) {
-    return `<section class="section"><h2><span class="num">2</span>让破甲生效</h2>${alertBox("这台机器的宿主侧用不了", "破甲内容仍能生成；要用宿主破甲，得先在本机装好 dsh-purge。")}</section>`;
-  }
-  return `<section class="section" aria-labelledby="s-apply-h">
-    <h2 id="s-apply-h"><span class="num">2</span>让破甲生效<span class="count">${ready ? "已生效" : `还差 ${total - applied} 处`}</span></h2>
-    <div class="s-status ${ready ? "green" : "yellow"}">
-      <div class="s-status-body">
-        <strong>${ready ? "破甲已经生效" : "破甲还没全部生效"}</strong>
-        <span class="s-status-detail">${fmtNum(applied)}/${fmtNum(total)} 处已应用${pending ? ` · ${pending} 处待应用` : ""} · 备份 ${snaps} 份</span>
-      </div>
-    </div>
-    <div class="actions" style="margin-top:10px">
-      <button type="button" class="primary" data-simple-host="apply"${busy ? " disabled" : ""}>${busy ? "处理中…" : "应用破甲"}</button>
-      <button type="button" class="ghost" data-simple-host="snapshot"${busy ? " disabled" : ""}>先备份</button>
-    </div>
-    ${msg}
-    <p class="s-tip">改的是本机 dsh 安装，重启 dsh 之后生效；每次应用前会先自动备份一份，随时能撤销。</p>
-  </section>`;
-}
-
 async function simpleHostAction(kind) {
   const h = S.host;
   if (h.busy) return;
@@ -1346,12 +1310,6 @@ function bindFlowControls() {
       if (save) save.disabled = false;
     });
   }
-  $$("#page [data-expand-models]").forEach((el) => {
-    el.addEventListener("click", () => { S.simple.showAllModels = true; renderPage(); });
-  });
-  $$("#page [data-collapse-models]").forEach((el) => {
-    el.addEventListener("click", () => { S.simple.showAllModels = false; renderPage(); });
-  });
   bindGroups();
 }
 
@@ -1871,37 +1829,29 @@ function renderFlowModelStep(mode) {
   const tech = mode === "technical";
   const live = S.modelsLive;
   const liveCount = (live && live.count) || 0;
+  const all = (S.models || []).filter((m) => m && m.id && !NON_CHAT_MODEL.test(m.id));
   const rec = recommendedModels();
+  // 不再折叠：把要选的模型直接平铺出来（普通模式最多 6 个，技术模式全量）
+  const picked = tech ? all : (() => {
+    const out = rec.slice();
+    for (const m of all) {
+      if (out.length >= 6) break;
+      if (!out.some((x) => x.id === m.id) && m.live) out.push(m);
+    }
+    return out;
+  })();
   const card = (m) => {
     const on = m.id === S.breach.model;
     return `<button type="button" class="pick" data-model="${esc(m.id)}" data-focus="model-${esc(m.id)}" aria-pressed="${on}">
-      <span class="pick-top"><span class="pick-name">${esc(simpleText(m.name))}</span>${m.live ? badge("实时", "") : ""}${m.dshDefault ? badge("当前默认", "good") : ""}${on ? badge("已选", "accent") : ""}</span>
+      <span class="pick-top"><span class="pick-name">${esc(simpleText(m.name))}</span>${on ? badge("已选", "accent") : ""}</span>
       <span class="pick-note">${esc(simpleText(m.tagline || m.notes || m.family || ""))}</span>
-      ${m.live && m.liveProvider ? `<span class="pick-meta">${esc(m.liveProvider)}</span>` : ""}
+      ${m.liveProvider ? `<span class="pick-meta">${esc(m.liveProvider)}</span>` : ""}
     </button>`;
   };
-  const all = (S.models || []).filter((m) => m && m.id && !NON_CHAT_MODEL.test(m.id));
-  // 实时识别到模型时，首屏只放推荐位；点开才渲染完整矩阵（避免几十张卡把首屏撑爆）。
-  // 识别不到模型时直接展开——这就是「没有识别则通过展开的方式获取」。
-  const showAll = tech || !liveCount || !!S.simple.showAllModels;
-  const moreBlock = showAll
-    ? `<div class="grid models">${all.map(card).join("")}</div>
-       ${tech ? "" : `<div class="actions"><button type="button" class="ghost" data-collapse-models>收起</button></div>`}`
-    : `<div class="actions"><button type="button" class="ghost" data-expand-models>展开全部模型（${all.length} 个）</button>
-       <span class="hint">${liveCount ? "当前只显示推荐位" : "还没识别到本机模型，展开后可选全部，或点「重新识别」"}</span></div>`;
   return `<section class="section" aria-labelledby="f-model-h">
-    <h2 id="f-model-h"><span class="num">1</span>选模型<span class="count">${liveCount ? `实时识别 ${liveCount} 个` : "还没识别到"}</span></h2>
-    <div class="simple-models">${rec.map(card).join("")}</div>
-    <details class="grp" data-group="flow:models"${showAll ? " open" : ""}>
-      <summary><span class="grp-title">全部模型</span><span class="grp-hint">${all.length} 个${liveCount ? "" : " · 点「重新识别」按本机配置重新扫"}</span></summary>
-      <div class="grp-body">
-        <div class="actions" style="margin-bottom:8px">
-          <button type="button" class="ghost" data-live-refresh>重新识别</button>
-          <span class="hint">读 ~/.dsh 的配置、用量账本与 Ollama。</span>
-        </div>
-        ${showAll ? `<div class="grid models">${all.map(card).join("")}</div>` : `<div class="actions"><button type="button" class="ghost" data-expand-models>展开全部模型（${all.length} 个）</button></div>`}
-      </div>
-    </details>
+    <h2 id="f-model-h"><span class="num">1</span>选模型<span class="count">${liveCount ? `实时识别 ${liveCount} 个 · 这里 ${picked.length} 个` : "还没识别到，显示目录"}</span></h2>
+    <div class="grid models">${picked.map(card).join("")}</div>
+    ${liveCount ? "" : `<div class="actions" style="margin-top:8px"><button type="button" class="ghost" data-live-refresh>重新识别</button><span class="hint">读 ~/.dsh 的配置、用量账本与 Ollama。</span></div>`}
   </section>`;
 }
 
@@ -1957,11 +1907,9 @@ function renderFlowApplyStep() {
     <div class="actions">
       <button type="button" class="primary" data-simple-host="apply"${busy ? " disabled" : ""}>${busy ? "处理中…" : "一键注入"}</button>
       <button type="button" class="ghost" data-simple-host="uninstall"${busy ? " disabled" : ""}>一键卸载</button>
-      <button type="button" class="ghost" data-simple-host="factory"${busy ? " disabled" : ""}>一键还原</button>
-      <button type="button" class="ghost" data-simple-host="snapshot"${busy ? " disabled" : ""}>先备份</button>
+      <span class="hint">注入前自动备份；卸载会先把宿主还原成原版再清插件文件。重启 dsh 生效。</span>
     </div>
     ${msg}
-    <p class="s-tip">注入 / 卸载 / 还原都改本机 dsh 安装，重启后生效；每次操作前会自动备份，可随时撤销。</p>
     ${promptBox}
   </section>`;
 }
