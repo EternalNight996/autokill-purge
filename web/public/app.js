@@ -1071,15 +1071,30 @@ function simpleSteps() {
   }).join("")}</ol>`;
 }
 
-/* 普通模式的推荐位：只列 dsh-purge 1.1.71 口径内的模型
-   （default = 它配置里用的 deepseek-flash；supported = 同厂可用）；
-   其余模型留在技术模式的完整矩阵里。 */
+/* 普通模式的推荐位：跟实时识别同步
+   优先级：当前默认模型 > dsh-purge 口径（default/supported）> 与默认模型同 provider 的实时模型 > 其它实时模型。
+   语音/图像/音乐类模型不进普通模式（它们不是拿来跑破甲的）。 */
+const NON_CHAT_MODEL = /(asr|tts|voiceclone|voicedesign|^image-|^music-|^speech-|embed|harness)/i;
+/* provider 归一：deepseek-account / deepseek-official / deepseek 视为同一族 */
+const normProvider = (p) => String(p || "").toLowerCase().replace(/-(account|official|cn|plan)$/, "");
+
 function recommendedModels() {
-  const list = Array.isArray(S.models) ? S.models.filter((m) => m && m.id) : [];
-  const purge = list.filter((m) => m.dshPurge === "default" || m.dshPurge === "supported");
-  return (purge.length ? purge : list)
-    .map((m, i) => ({ m, rank: typeof m.recommended === "number" ? m.recommended : 99 + i }))
-    .sort((a, b) => a.rank - b.rank)
+  const list = (Array.isArray(S.models) ? S.models : []).filter((m) => m && m.id && !NON_CHAT_MODEL.test(m.id));
+  const live = S.modelsLive || null;
+  const defId = live && live.default ? live.default.model : null;
+  const defProvider = normProvider(live && live.default ? live.default.provider : null);
+  const rank = (m) => {
+    if ((defId && m.id === defId) || m.dshDefault) return 0;
+    if (m.dshPurge === "default") return 1;
+    if (m.dshPurge === "supported" && m.live) return 2;
+    if (m.dshPurge === "supported") return 3;
+    if (m.live && defProvider && normProvider(m.liveProvider) === defProvider) return 4;
+    if (m.live) return 5;
+    return 9;
+  };
+  return list
+    .map((m, i) => ({ m, r: rank(m), i }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
     .slice(0, 3)
     .map((x) => x.m);
 }

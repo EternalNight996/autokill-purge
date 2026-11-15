@@ -62,8 +62,9 @@ export function parseCordisModels(text) {
     }
 
     if (lastModel) {
+      // pi-ai provider 下的字段缩进 12，llm-deepseek 下的缩进 8 —— 都收（>=6）
       const mName = line.match(/^name:\s*["']?(.+?)["']?\s*$/);
-      if (mName && indent >= 10 && !lastModel.name) { lastModel.name = mName[1]; continue; }
+      if (mName && indent >= 6 && !lastModel.name) { lastModel.name = mName[1]; continue; }
       const mCtx = line.match(/^contextWindow:\s*(\d+)/);
       if (mCtx) { lastModel.contextWindow = Number(mCtx[1]); continue; }
       const mMax = line.match(/^maxTokens:\s*(\d+)/);
