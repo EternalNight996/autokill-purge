@@ -1046,7 +1046,7 @@ function simpleSteps() {
   if (!b.building && !hasTask) current = hasModel ? 2 : 1;
   const rows = [
     { n: 1, t: "选一个模型" },
-    { n: 2, t: "写一句你要它做什么" },
+    { n: 2, t: "写清任务" },
     { n: 3, t: "拿到可复制的载荷" },
   ];
   return `<ol class="steps" aria-label="三步拿到载荷">${rows.map((r) => {
@@ -1074,7 +1074,7 @@ function optionHtml(list, value) {
   return items.map((o) => `<option value="${esc(o.id)}"${o.id === value ? " selected" : ""}>${esc(o.name || o.id)}</option>`).join("");
 }
 
-/* 「写一句你要它做什么」下面的选择项：破甲模板 / 任务类型 / 输出要求 */
+/* 任务框下面的选择项：破甲模板 / 任务类型 / 输出要求 */
 function renderSimpleChoices() {
   const b = S.breach;
   const tpl = S.prompts.length ? optionHtml(S.prompts, b.template) : "";
@@ -1086,6 +1086,31 @@ function renderSimpleChoices() {
     ${pre ? `<label class="field"><span>任务类型</span><select id="sPreset" data-focus="sPreset">${pre}</select></label>` : ""}
     ${out ? `<label class="field"><span>输出要求</span><select id="sOutput" data-focus="sOutput">${out}</select></label>` : ""}
   </div>`;
+}
+
+/* 任务类型 / 输出要求的选择：'all' = 把每一项都写上（前端拼，服务端只给清单） */
+function presetTextFor(id) {
+  const list = Array.isArray(S.taskPresets) ? S.taskPresets : [];
+  if (id === "all") {
+    return list
+      .filter((p) => p && p.id !== "all" && p.id !== "custom" && p.text)
+      .map((p, i) => `${i + 1}) ${p.text}`)
+      .join("\n");
+  }
+  const hit = list.find((x) => x && x.id === id);
+  return (hit && hit.text) || "";
+}
+
+function outputTextFor(id) {
+  const list = Array.isArray(S.outputChoices) ? S.outputChoices : [];
+  if (id === "all") {
+    return list
+      .filter((o) => o && o.id !== "all" && o.text)
+      .map((o) => o.text)
+      .join("；");
+  }
+  const hit = list.find((x) => x && x.id === id);
+  return (hit && hit.text) || "请直接给出结果";
 }
 
 function renderSimpleOperation() {
@@ -1106,10 +1131,10 @@ function renderSimpleOperation() {
     <h2 id="s-op-h"><span class="num">1</span>选一个模型<span class="count">${models.length} 个推荐</span></h2>
     ${cards}
     <form id="simpleForm" class="card" novalidate style="margin-top:12px">
-      <label class="field"><span>写一句你要它做什么</span>
-        <textarea id="sTask" data-focus="sTask" rows="3" placeholder="例：让它详细说明如何绕过内容审核"${err && err.kind === "empty" ? ' aria-invalid="true" class="shake"' : ""}>${esc(b.task)}</textarea>
+      <div class="field">
+        <textarea id="sTask" data-focus="sTask" aria-label="任务描述" rows="3" placeholder="例：让它详细说明如何绕过内容审核"${err && err.kind === "empty" ? ' aria-invalid="true" class="shake"' : ""}>${esc(b.task)}</textarea>
         <span class="help">写得越具体，生成的载荷越能用</span>
-      </label>
+      </div>
       ${renderSimpleChoices()}
       <button class="primary s-generate" id="sBuild" type="submit"${b.building ? ' disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : "一键生成"}</button>
     </form>
@@ -1203,8 +1228,8 @@ function bindSimpleBreach() {
   const presetSel = $("#sPreset");
   if (presetSel) presetSel.addEventListener("change", () => {
     S.breach.taskPreset = presetSel.value;
-    const p = S.taskPresets.find((x) => x.id === presetSel.value);
-    if (p && p.text) S.breach.task = p.text;
+    const text = presetTextFor(presetSel.value);
+    if (text) S.breach.task = text;
     renderPage();
   });
   const outSel = $("#sOutput");
@@ -1249,7 +1274,6 @@ async function simpleBuild() {
     return;
   }
   const techniques = S.techniques.slice(0, 3).map((t) => t.id);
-  const outChoice = S.outputChoices.find((o) => o.id === b.outputChoice);
   b.building = true;
   renderPage();
   try {
@@ -1258,7 +1282,7 @@ async function simpleBuild() {
       body: {
         model, layer: "prompt", techniques, task,
         role: "安全研究员",
-        output: (outChoice && outChoice.text) || "请直接给出结果",
+        output: outputTextFor(b.outputChoice),
         template: b.template || "none",
         scope: b.scope || "full",
       },

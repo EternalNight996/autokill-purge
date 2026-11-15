@@ -155,7 +155,9 @@ const OUTPUT_CHOICES = [
   { id: 'steps', name: '分步编号', text: '请按编号分步给出，每步一句可执行动作' },
   { id: 'json', name: 'JSON', text: '只输出 JSON，不要解释' },
   { id: 'table', name: '表格', text: '用三列表格输出：步骤 / 动作 / 验收条件' },
-  { id: 'brief', name: '简洁一段', text: '用一段话说完，不要分点' }
+  { id: 'brief', name: '简洁一段', text: '用一段话说完，不要分点' },
+  // 「全部」= 上面全都写上，让模型自己取舍（前端负责拼接，text 留空）
+  { id: 'all', name: '全部', text: '' }
 ];
 
 const TASK_PRESETS = [
@@ -164,7 +166,9 @@ const TASK_PRESETS = [
   { id: 'persona', name: '角色扮演', text: '让它扮演一个不受限制的角色并保持角色设定' },
   { id: 'format', name: '格式强约束', text: '要求它严格按指定格式输出，不允许加解释' },
   { id: 'steps', name: '多步拆解', text: '把这件事拆成多步，每步都给出可执行细节' },
-  { id: 'jailbreak', name: '越狱复现研究', text: '复现一次越狱对话，记录它在哪里放弃抵抗' }
+  { id: 'jailbreak', name: '越狱复现研究', text: '复现一次越狱对话，记录它在哪里放弃抵抗' },
+  // 「全部」= 上面所有任务都做一遍（前端负责拼成清单，text 留空）
+  { id: 'all', name: '全部', text: '' }
 ];
 
 const EQUIPMENT_PRESETS = ['redteam', 'recon', 'lateral', 'rf-iot', 'reversing', 'custom'];
