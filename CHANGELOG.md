@@ -2,6 +2,20 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [unreleased] — 2026-11-16（文档清理 + 与 dsh-purge 1.1.71 的对比评分）
+
+### Removed（文档清理，按用户要求）
+- 删除 `docs/ACCEPTANCE.md`、`docs/API.md`、`docs/DECISIONS.md`、`docs/PRODUCT-UX-2LAYER.md`、`docs/UX-2LAYER-CONTRACT.md`、`docs/memory-eternal-*.md`（4 份）、`docs/message-to-memory-eternal.txt`、根目录 `REQUIREMENTS.md`。
+- 保留 `README.md`、`CHANGELOG.md`、`SKILL.md`、`docs/shots-ux2/`（截图证据）。
+- 本地恢复副本：`_archive/docs-before-2026-11-16/`（已被 `.gitignore` 忽略）；仓库内恢复走 git 历史（旧文件在 `555759a` 及更早提交）。
+
+### Added
+- `docs/破甲对比与评分.md`：唯一的说明性文档。含机制差异表、载荷"破甲要素"覆盖度实测（不套模板 2/6 · 45 字符 → 套 dsh-purge 模板 6/6 · 21246 字符）、10 个维度打分与三套权重总分（默认 6.58 vs 8.10；评测者 7.03 vs 7.88；红队全链 8.30 vs 6.05）、双方硬伤与改进优先级。
+
+### 实测（复用 dsh-purge 1.1.71 本机安装）
+- 用其 `lib/table-read.js#openSlot()` 解出默认提示词 21194 字符；`lib/core.js:5624/5655` 确认注入位置为系统提示词头部；`lib/core.js` 内 `modelPrompts/perModel/promptForModel` 零命中，证实"一模型一提示词"未实现。
+- 同一任务、同一模型，仅换 `template`：`none` → 45 字符 / 要素 2/6；`sauce-1171` → 21246 字符 / 要素 6/6。
+
 ## [unreleased] — 2026-11-16（模型目录更新 + 破甲照搬 dsh-purge 1.1.71 + 任务区选择项）
 
 ### Changed（模型目录：9 → 24，国内全覆盖）

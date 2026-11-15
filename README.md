@@ -98,5 +98,5 @@ node _ui-test/ac-check.mjs            # 19 条：真实 server + break 内核 + 
 四个脚本都用 `PURGE_WEB_BASE` 指定被测实例（默认 `http://127.0.0.1:8792`），退出码 `0` = 全过。
 `test/ux2layer-ui.mjs` 需要本机 Chrome（`C:\Program Files\Google\Chrome\Application\chrome.exe`），零依赖自建 CDP 驱动。
 
-接口契约见 `docs/UX-2LAYER-CONTRACT.md`，双层体验规格见 `docs/PRODUCT-UX-2LAYER.md`，
-验收清单映射见 `docs/ACCEPTANCE.md`。
+与 [dsh-purge 1.1.71 的对比与评分（10 个维度、三套权重）](docs/破甲对比与评分.md) 见 `docs/`；
+此前的 `docs/*.md` 与 `REQUIREMENTS.md` 已按要求删除，恢复方式写在那份文档的「文档清理」一节。
