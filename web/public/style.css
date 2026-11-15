@@ -730,3 +730,27 @@ details.grp[open] > summary { border-bottom: 1px solid var(--line); border-radiu
   html { scroll-behavior: auto; }
   .page, .spinner, .dot.loading { animation: none; }
 }
+
+/* ---- 普通模式：任务区的选择项（破甲模板 / 任务类型 / 输出要求） ---- */
+.s-choices {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 10px;
+}
+.s-choices .field { margin: 0; }
+.s-choices select {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line, #2b3242);
+  background: var(--bg-2, #131722);
+  color: inherit;
+  font: inherit;
+}
+.s-choices .help { display: block; margin-top: 4px; }
+.s-tip { margin: 6px 0 10px; color: var(--muted, #8b93a7); font-size: 13px; }
+@media (max-width: 720px) {
+  .s-choices { grid-template-columns: 1fr; }
+}

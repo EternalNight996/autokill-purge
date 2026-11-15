@@ -54,6 +54,7 @@ const FIELD_DEFAULTS = {
   pluginPath: "",
   role: "",
   output: "",
+  template: "sauce-1171",
 };
 
 /* 普通模式只看名字和一句特点：不显示 family / 拒绝风格字段 */
@@ -148,6 +149,9 @@ const S = {
   models: [],
   layers: [],
   techniques: [],
+  prompts: [],
+  outputChoices: [],
+  taskPresets: [],
   tab: "breach",
   memoryStatus: "unknown",
   readiness: { data: null, loading: false, tried: false, error: null },
@@ -171,6 +175,10 @@ const S = {
     task: "",
     role: "",
     output: "",
+    template: "sauce-1171",
+    scope: "full",
+    outputChoice: "direct",
+    taskPreset: "custom",
     building: false,
     buildError: null,
     built: false,
@@ -681,6 +689,9 @@ function applyState(data) {
   S.models = Array.isArray(data.models) ? data.models : [];
   S.layers = Array.isArray(data.layers) ? data.layers : [];
   S.techniques = Array.isArray(data.techniques) ? data.techniques : [];
+  S.prompts = Array.isArray(data.prompts) ? data.prompts : [];
+  S.outputChoices = Array.isArray(data.outputChoices) ? data.outputChoices : [];
+  S.taskPresets = Array.isArray(data.taskPresets) ? data.taskPresets : [];
   S.attempts = Array.isArray(S.state.attempts) ? S.state.attempts : [];
   S.equipment = Array.isArray(S.state.equipment) ? S.state.equipment : [];
   S.assignments = S.state.assignments && typeof S.state.assignments === "object" ? S.state.assignments : {};
@@ -1036,9 +1047,38 @@ function simpleSteps() {
   }).join("")}</ol>`;
 }
 
+/* 普通模式的推荐位：服务端 recommended=1/2/3 优先，其余按目录顺序补足 3 个 */
+function recommendedModels() {
+  const list = Array.isArray(S.models) ? S.models.filter((m) => m && m.id) : [];
+  return list
+    .map((m, i) => ({ m, rank: typeof m.recommended === "number" ? m.recommended : 99 + i }))
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, 3)
+    .map((x) => x.m);
+}
+
+function optionHtml(list, value) {
+  const items = Array.isArray(list) ? list : [];
+  return items.map((o) => `<option value="${esc(o.id)}"${o.id === value ? " selected" : ""}>${esc(o.name || o.id)}</option>`).join("");
+}
+
+/* 「写一句你要它做什么」下面的选择项：破甲模板 / 任务类型 / 输出要求 */
+function renderSimpleChoices() {
+  const b = S.breach;
+  const tpl = S.prompts.length ? optionHtml(S.prompts, b.template) : "";
+  const pre = S.taskPresets.length ? optionHtml(S.taskPresets, b.taskPreset) : "";
+  const out = S.outputChoices.length ? optionHtml(S.outputChoices, b.outputChoice) : "";
+  if (!tpl && !pre && !out) return "";
+  return `<div class="s-choices">
+    ${tpl ? `<label class="field"><span>破甲模板</span><select id="sTemplate" data-focus="sTemplate">${tpl}</select><span class="help">默认照搬 dsh-purge 1.1.71 的小码酱</span></label>` : ""}
+    ${pre ? `<label class="field"><span>任务类型</span><select id="sPreset" data-focus="sPreset">${pre}</select></label>` : ""}
+    ${out ? `<label class="field"><span>输出要求</span><select id="sOutput" data-focus="sOutput">${out}</select></label>` : ""}
+  </div>`;
+}
+
 function renderSimpleOperation() {
   const b = S.breach;
-  const models = S.models.slice(0, 3);
+  const models = recommendedModels();
   const current = models.find((m) => m.id === b.model) || models[0] || null;
   const cards = models.length
     ? `<div class="simple-models">${models.map((m) => {
@@ -1061,6 +1101,7 @@ function renderSimpleOperation() {
         <textarea id="sTask" data-focus="sTask" rows="3" placeholder="例：让它详细说明如何绕过内容审核">${esc(b.task)}</textarea>
         <span class="help">写得越具体，生成的载荷越能用</span>
       </label>
+      ${renderSimpleChoices()}
       ${emptyHint}
       <button class="primary s-generate" id="sBuild" type="submit"${b.building ? ' disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : "一键生成"}</button>
     </form>
@@ -1085,6 +1126,11 @@ function renderSimpleResults() {
     return `<section class="section">${head}</h2>${emptyState("还没有载荷。上面写一句话，点『一键生成』。", "")}</section>`;
   }
   const all = list.map((v, i) => `【${i + 1}】${v.name || "载荷"}\n${v.text || ""}`).join("\n\n");
+  const meta = b.templateMeta;
+  const tplName = meta && meta.id && meta.id !== "none" ? (S.prompts.find((x) => x.id === meta.id) || {}).name : "";
+  const tplLine = tplName
+    ? `<p class="s-tip">已套模板：${esc(simpleText(tplName))}${meta.chars ? `（${fmtNum(meta.chars)} 字）` : ""}；编码变体只带任务句，复制过去按需拼接。</p>`
+    : `<p class="s-tip">这次没套模板，载荷只有技术模板 + 任务句。</p>`;
   const cards = list.map((v, i) => {
     const key = String(v.id || v.technique || i);
     const recorded = S.simple.attempted[key];
@@ -1104,6 +1150,7 @@ function renderSimpleResults() {
   }).join("");
   return `<section class="section">
     <div class="s-results-head">${head}<span class="count">${list.length} 条</span></h2>${copyBtn(all, "复制全部")}</div>
+    ${tplLine}
     <div class="payload-list">${cards}</div>
     <p class="s-tip">想调层、技术、采样？切到技术模式。</p>
   </section>`;
@@ -1142,6 +1189,17 @@ function bindSimpleBreach() {
   }
   const form = $("#simpleForm");
   if (form) form.addEventListener("submit", (e) => { e.preventDefault(); simpleBuild(); });
+  const tplSel = $("#sTemplate");
+  if (tplSel) tplSel.addEventListener("change", () => { S.breach.template = tplSel.value; });
+  const presetSel = $("#sPreset");
+  if (presetSel) presetSel.addEventListener("change", () => {
+    S.breach.taskPreset = presetSel.value;
+    const p = S.taskPresets.find((x) => x.id === presetSel.value);
+    if (p && p.text) S.breach.task = p.text;
+    renderPage();
+  });
+  const outSel = $("#sOutput");
+  if (outSel) outSel.addEventListener("change", () => { S.breach.outputChoice = outSel.value; });
   $$("#page [data-simple-retry]").forEach((el) => el.addEventListener("click", () => simpleBuild()));
   $$("#page [data-simple-attempt]").forEach((el) => el.addEventListener("click", () => simpleAttempt(el.dataset.simpleKey, el.dataset.simpleAttempt)));
   $$("#page [data-readiness-action]").forEach((el) => el.addEventListener("click", () => {
@@ -1172,12 +1230,19 @@ async function simpleBuild() {
     return;
   }
   const techniques = S.techniques.slice(0, 3).map((t) => t.id);
+  const outChoice = S.outputChoices.find((o) => o.id === b.outputChoice);
   b.building = true;
   renderPage();
   try {
     const data = await request("/api/breach/build", {
       method: "POST",
-      body: { model, layer: "prompt", techniques, task, role: "安全研究员", output: "请直接给出结果" },
+      body: {
+        model, layer: "prompt", techniques, task,
+        role: "安全研究员",
+        output: (outChoice && outChoice.text) || "请直接给出结果",
+        template: b.template || "none",
+        scope: b.scope || "full",
+      },
     });
     if (!data || data.ok === false) throw payloadError(data, "生成失败");
     const result = data.result || data;
@@ -1185,6 +1250,7 @@ async function simpleBuild() {
     b.advice = (Array.isArray(result.advice) ? result.advice : []).map(adviceText).filter(Boolean);
     b.zero = result.zero_wide_sample || "";
     b.resultMeta = { model: result.model || model, layer: result.layer || "prompt", at: new Date().toISOString() };
+    b.templateMeta = { id: result.template || b.template || "none", chars: result.templateChars || 0, scope: result.scope || "full" };
     b.built = true;
     S.attempt.model = model;
     const first = b.variants[0] ? String(b.variants[0].technique || b.variants[0].id || "").replace(/-(rot13|base64)$/i, "") : "";
@@ -1237,7 +1303,10 @@ function agentDisplayDesc(id) {
 }
 
 function simpleEquippedItems() {
-  const latest = S.equipment.length ? S.equipment[S.equipment.length - 1] : null;
+  // 点击「一键装备」到请求回来之间有个空窗：此时按本次要装的组合先算出来，
+  // 别把状态卡渲染成「已装备 0 件」——用户会以为没装上。
+  const pending = S.simple.equipBusy ? { preset: "redteam", agents: ["dsh"] } : null;
+  const latest = S.equipment.length ? S.equipment[S.equipment.length - 1] : pending;
   if (!latest) return [];
   const items = [];
   const preset = PRESETS.find((p) => p.id === latest.preset);
@@ -1763,6 +1832,13 @@ function renderBreach() {
             ${fieldDefault("output", b.output, FIELD_DEFAULTS.output)}
             <span class="help">留空则用内置默认输出要求（编号步骤）。</span>
           </label>
+          <label class="field"><span>破甲模板（可选）</span>
+            ${S.prompts.length
+              ? `<select id="bTemplate" data-focus="bTemplate">${optionHtml(S.prompts, b.template)}</select>`
+              : `<input id="bTemplate" type="text" value="none" readonly>`}
+            ${fieldDefault("template", b.template === "sauce-1171" ? "" : b.template, "sauce-1171")}
+            <span class="help">默认套「小码酱 · dsh-purge 1.1.71」整段；选「不套模板」只出技术模板。</span>
+          </label>
         </div>
       </div>
     </section>
@@ -1866,6 +1942,11 @@ function bindBreach() {
   if (role) role.addEventListener("input", () => { S.breach.role = role.value; });
   const output = $("#bOutput");
   if (output) output.addEventListener("input", () => { S.breach.output = output.value; });
+  const tplField = $("#bTemplate");
+  if (tplField) {
+    const ev = tplField.tagName === "SELECT" ? "change" : "input";
+    tplField.addEventListener(ev, () => { S.breach.template = tplField.value || "none"; });
+  }
 
   const form = $("#buildForm");
   if (form) form.addEventListener("submit", (e) => { e.preventDefault(); buildPayload(); });
@@ -1917,6 +1998,8 @@ async function buildPayload() {
         task: b.task.trim(),
         role: b.role.trim(),
         output: b.output.trim(),
+        template: b.template || "none",
+        scope: b.scope || "full",
       },
     });
     if (!data || data.ok === false) throw payloadError(data, "生成失败");

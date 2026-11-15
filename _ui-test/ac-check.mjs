@@ -47,7 +47,7 @@ if (state.status === 403) {
   state = await api('/api/state');
 }
 check('state 200 and signed', state.status === 200 && state.data?.state?.agreement?.accepted === true, 'HTTP ' + state.status);
-check('catalog 9 models / 3 layers / 12 techniques', state.data?.models?.length === 9 && state.data?.layers?.length === 3 && state.data?.techniques?.length === 12,
+check('catalog 24 models / 3 layers / 12 techniques', state.data?.models?.length === 24 && state.data?.layers?.length === 3 && state.data?.techniques?.length === 12,
   `${state.data?.models?.length} / ${state.data?.layers?.length} / ${state.data?.techniques?.length}`);
 
 const info = await br('info', S);

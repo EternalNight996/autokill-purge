@@ -2,6 +2,35 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [unreleased] — 2026-11-16（模型目录更新 + 破甲照搬 dsh-purge 1.1.71 + 任务区选择项）
+
+### Changed（模型目录：9 → 24，国内全覆盖）
+- `MODELS` 重写为 **24 个**（国内 18 / 国外 6），按 2026-11 公开版本维护：DeepSeek **V4.1 Flash（`deepseek-flash`，V4.1-Flash-1017，多模态 / 1M 上下文 / 384K 输出 / thinking 三档）** 与 **V4 Pro（`deepseek-v4-pro`）**、Qwen3.5-Max / Qwen3-Max / Qwen3-Coder、GLM-5 / GLM-4.6、Kimi K2.5 / K2、豆包 2.0、文心 ERNIE 5.0、混元 TurboS、MiniMax M2、Step-3.5、星火 4.0 Ultra、Yi-Large、Baichuan4、本机 Ollama/vLLM；国外更新为 GPT-5.1、o4 / o4-mini、Claude Sonnet 4.5、Gemini 3 Pro、Llama 4。
+- 每条模型新增 `vendor / domestic / api / tagline / notes`，其中 `api` 只写**已核实**的官方调用名（DeepSeek 两个取自官方 changelog：V4.1 Flash 用 `deepseek-flash`，旧名 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 仍路由到它；V4 Pro 用 `deepseek-v4-pro`）。
+- 普通模式推荐位改为读服务端 `recommended`：**DeepSeek V4.1 Flash / 通义千问 Qwen3.5-Max / 月之暗面 Kimi K2.5**。
+- `TECHNIQUES[].models` 与 `MODEL_ADVICE` 全量对齐新 id（12 项技术的适用模型、24 条采样建议）。
+
+### Added（破甲照搬 dsh-purge v1.1.71）
+- `web/prompts/sauce-1171.md`（232 行 / 25.5 KB）：从 dsh-purge **v1.1.71** 的内置默认提示词槽（`lib/default-prompt-inject.md` → `lib/asset-table.js`，用其 `table-read.js#openSlot` 解开）原样导出，头部标注来源与署名（MIT，<https://github.com/YuJunZhiXue/dsh-purge>）。
+- 后端 `PROMPTS` 登记两套模板（`sauce-1171` / `none`），`readPromptScope()` 支持 `full` 与 `identity`（截到 Scoped Rules 之前）两种范围；正文按需读盘，不进 `/api/state`。
+- `POST /api/breach/build` 新增 `template` / `scope`：套模板时文本载荷 = 模板 + `---` + 技术模板(任务) + 输出要求；Base64 / ROT13 只编码任务句。响应新增 `result.template / scope / templateChars`。
+
+### Added（任务区选择项）
+- 普通模式「写一句你要它做什么」下方三列选择项：**破甲模板** / **任务类型**（自己写、内容边界说明、角色扮演、格式强约束、多步拆解、越狱复现研究，选中即写入输入框可再改）/ **输出要求**（直接给结果、分步编号、JSON、表格、简洁一段）。
+- 技术模式「角色与输出要求」组新增「破甲模板」下拉，带默认值徽标与恢复默认；两种模式的模板选择共用 `S.breach.template`，切换模式不丢。
+- 结果区新增一行模板说明（哪套模板 + 字符数）；装备页 busy 空窗按本次要装的组合先算件数，不再闪「已装备 0 件」。
+
+### 实测（2026-11-16，8792）
+- `POST /api/state`：`models=24 / techniques=12 / prompts=2 / outputChoices=5 / taskPresets=6`，国内 18，推荐位 = DeepSeek V4.1 Flash · Qwen3.5-Max · Kimi K2.5。
+- `POST /api/breach/build {template:'sauce-1171', scope:'full'}`：`variants=3`、`templateChars=21194`、首条载荷 21228 字符（模板 21194 + 任务）。
+- `node test/ux2layer-ui.mjs`：**16/16 PASS / 0 SKIP**（#3 首屏可交互 8 个、#4 禁用词 0 命中、#7 剪贴板 20895 字符与卡片全文一致 = 整段模板可复制）。
+- `node test/acceptance.mjs` **21/21**、`node test/ux2layer.mjs` **18/18**、`node _ui-test/ac-check.mjs` **19/19**（断言同步为 24 models）。
+- 截图 `docs/shots-ux2/` 已更新为带选择项的版本。
+
+### 还缺什么
+- 其余国内厂商的 `api` 调用名未逐一核实（只登记了 DeepSeek 两个），界面与技术模式不展示 `api`，不影响生成。
+- 模板目前只有 dsh-purge 1.1.71 一份；「不同模型换不同提示词」还需后续按模型登记多套。
+
 ## [unreleased] — 2026-11-16（双层体验交付：普通模式 / 技术模式一键切换）
 
 用户版（引导式流水线）+ 技术版（可配置项全）合并进同一个 web 端，顶栏一个开关切换；
