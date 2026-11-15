@@ -173,7 +173,8 @@ const S = {
     testState: "idle",
     testMessage: "",
     resignArmed: false,
-    detailIndex: null,
+    detailOpen: null,
+    showAllModels: false,
   },
   breach: {
     model: "",
@@ -1051,24 +1052,108 @@ function renderSimpleStatusCard() {
 
 function simpleSteps() {
   const b = S.breach;
+  const h = S.host.data;
+  const hostReady = !!(h && h.counts && (h.counts.applied || 0) > 0 && (h.counts.pending || 0) === 0);
   const hasModel = !!(b.model || S.models.length);
   const hasTask = !!String(b.task || "").trim();
   const done = !!(b.built && b.variants.length);
-  let current = 3;
-  if (!b.building && !hasTask) current = hasModel ? 2 : 1;
+  // 与技术模式同一条流程：① 选模板 → ② 让破甲生效 → ③ 选模型写任务 → ④ 拿载荷
   const rows = [
-    { n: 1, t: "选一个模型" },
-    { n: 2, t: "写清任务" },
-    { n: 3, t: "拿到可复制的载荷" },
+    { n: 1, t: "选破甲模板", done: true },
+    { n: 2, t: "让破甲生效", done: hostReady },
+    { n: 3, t: "选模型，写清任务", done: hasTask && hasModel },
+    { n: 4, t: "拿到可复制的载荷", done: done },
   ];
-  return `<ol class="steps" aria-label="三步拿到载荷">${rows.map((r) => {
+  let current = (rows.find((r) => !r.done) || rows[rows.length - 1]).n;
+  if (b.building) current = 4;
+  return `<ol class="steps" aria-label="四步拿到载荷">${rows.map((r) => {
     const isCurrent = r.n === current;
     let state = "";
-    if (r.n === 3 && b.building) state = "doing";
-    else if (done) state = "done";
-    else if (r.n < current) state = "done";
+    if (r.n === 4 && b.building) state = "doing";
+    else if (r.done) state = "done";
     return `<li aria-current="${isCurrent ? "step" : "false"}"${state ? ` data-state="${state}"` : ""}><span class="step-n" aria-hidden="true">${r.n}</span><span class="step-t">${esc(r.t)}</span></li>`;
   }).join("")}</ol>`;
+}
+
+/* 第 2 步（与技术模式同一流程）：让破甲生效 —— 应用宿主补丁 / 先备份 */
+function renderSimpleApplyStep() {
+  const h = S.host;
+  const d = h.data;
+  const c = (d && d.counts) || {};
+  const applied = c.applied || 0;
+  const total = c.total || 0;
+  const pending = c.pending || 0;
+  const ready = applied > 0 && pending === 0;
+  const snaps = (d && Array.isArray(d.snapshots)) ? d.snapshots.length : 0;
+  const busy = h.busy;
+  const msg = h.message ? (h.error ? alertBox(h.message, "") : okBox(h.message)) : "";
+  if (!d) {
+    return `<section class="section"><h2><span class="num">2</span>让破甲生效</h2>${spinner("检查宿主状态…")}</section>`;
+  }
+  if (d.available === false) {
+    return `<section class="section"><h2><span class="num">2</span>让破甲生效</h2>${alertBox("这台机器的宿主侧用不了", "破甲内容仍能生成；要用宿主破甲，得先在本机装好 dsh-purge。")}</section>`;
+  }
+  return `<section class="section" aria-labelledby="s-apply-h">
+    <h2 id="s-apply-h"><span class="num">2</span>让破甲生效<span class="count">${ready ? "已生效" : `还差 ${total - applied} 处`}</span></h2>
+    <div class="s-status ${ready ? "green" : "yellow"}">
+      <div class="s-status-body">
+        <strong>${ready ? "破甲已经生效" : "破甲还没全部生效"}</strong>
+        <span class="s-status-detail">${fmtNum(applied)}/${fmtNum(total)} 处已应用${pending ? ` · ${pending} 处待应用` : ""} · 备份 ${snaps} 份</span>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:10px">
+      <button type="button" class="primary" data-simple-host="apply"${busy ? " disabled" : ""}>${busy ? "处理中…" : "应用破甲"}</button>
+      <button type="button" class="ghost" data-simple-host="snapshot"${busy ? " disabled" : ""}>先备份</button>
+    </div>
+    ${msg}
+    <p class="s-tip">改的是本机 dsh 安装，重启 dsh 之后生效；每次应用前会先自动备份一份，随时能撤销。</p>
+  </section>`;
+}
+
+async function simpleHostAction(kind) {
+  const h = S.host;
+  if (h.busy) return;
+  const ask = {
+    apply: "把破甲注入到你本机的 dsh 安装？会先自动备份，改完要重启 dsh 才生效。",
+    uninstall: "卸载会先把宿主还原成原版、再清掉 dsh-purge 的插件文件。会先自动备份，继续？",
+    factory: "一键还原：用官方 app.asar 原件覆盖被改的宿主文件。会先自动备份，继续？",
+    snapshot: "先把现在的宿主状态备份一份？",
+  }[kind] || "继续？";
+  if (!window.confirm(ask)) return;
+  h.busy = true;
+  h.message = "";
+  h.error = null;
+  renderPage();
+  try {
+    let data;
+    if (kind === "apply") {
+      data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply" } });
+      if (!data || data.ok === false) throw payloadError(data, "注入失败");
+      h.message = `已注入：新增 ${fmtNum(data.result.applied)} 处（${fmtNum(data.result.already)} 处本来就是最新）。重启 dsh 生效。`;
+    } else if (kind === "uninstall") {
+      data = await request("/api/host/uninstall", { method: "POST", body: { confirm: true } });
+      if (!data || data.ok === false) throw payloadError(data, "卸载失败");
+      const u = data.uninstall || {};
+      h.message = `已卸载：${u.applied ? "宿主已还原，" : ""}${(u.stripped || []).length} 个 profile 清理完成${(u.errors || []).length ? "，有 " + u.errors.length + " 条警告" : ""}。重启 dsh 生效。`;
+    } else if (kind === "factory") {
+      data = await request("/api/host/factory", { method: "POST", body: { confirm: true } });
+      if (!data || data.ok === false) throw payloadError(data, "还原失败");
+      h.message = `已还原 ${fmtNum(data.factory.restored)} 处（跳过 ${fmtNum(data.factory.skipped)}）。重启 dsh 生效。`;
+    } else {
+      data = await request("/api/host/snapshot", { method: "POST", body: { tag: "simple" } });
+      if (!data || data.ok === false) throw payloadError(data, "备份失败");
+      h.message = `已备份：${data.snapshot.id}（${fmtNum(data.snapshot.files)} 个文件）`;
+    }
+    toast("完成");
+    S.host.tried = false;
+    await loadHostStatus(true);
+  } catch (e) {
+    h.error = e;
+    h.message = simpleReason(e);
+  } finally {
+    h.busy = false;
+    renderPage();
+  }
 }
 
 /* 普通模式的推荐位：跟实时识别同步
@@ -1104,15 +1189,28 @@ function optionHtml(list, value) {
   return items.map((o) => `<option value="${esc(o.id)}"${o.id === value ? " selected" : ""}>${esc(o.name || o.id)}</option>`).join("");
 }
 
-/* 任务框下面的选择项：破甲模板 / 任务类型 / 输出要求 */
+/* 第 1 步：选破甲模板（与技术模式同一流程的第一步） */
+function renderSimpleTemplateStep() {
+  const b = S.breach;
+  if (!S.prompts.length) return "";
+  return `<section class="section" aria-labelledby="s-tpl-h">
+    <h2 id="s-tpl-h"><span class="num">1</span>选破甲模板<span class="count">${S.prompts.length} 套</span></h2>
+    <div class="card">
+      <label class="field"><span>用哪一套</span>
+        <select id="sTemplate" data-focus="sTemplate">${optionHtml(S.prompts, b.template)}</select>
+        <span class="help">默认就是 dsh-purge 1.1.71 那套；换模板只影响生成的载荷，不影响宿主。</span>
+      </label>
+    </div>
+  </section>`;
+}
+
+/* 任务框下面的选择项：任务类型 / 输出要求 */
 function renderSimpleChoices() {
   const b = S.breach;
-  const tpl = S.prompts.length ? optionHtml(S.prompts, b.template) : "";
   const pre = S.taskPresets.length ? optionHtml(S.taskPresets, b.taskPreset) : "";
   const out = S.outputChoices.length ? optionHtml(S.outputChoices, b.outputChoice) : "";
-  if (!tpl && !pre && !out) return "";
+  if (!pre && !out) return "";
   return `<div class="s-choices">
-    ${tpl ? `<label class="field"><span>破甲模板</span><select id="sTemplate" data-focus="sTemplate">${tpl}</select><span class="help">默认照搬 dsh-purge 1.1.71 的小码酱</span></label>` : ""}
     ${pre ? `<label class="field"><span>任务类型</span><select id="sPreset" data-focus="sPreset">${pre}</select></label>` : ""}
     ${out ? `<label class="field"><span>输出要求</span><select id="sOutput" data-focus="sOutput">${out}</select></label>` : ""}
   </div>`;
@@ -1145,27 +1243,14 @@ function outputTextFor(id) {
 
 function renderSimpleOperation() {
   const b = S.breach;
-  const models = recommendedModels();
-  const current = models.find((m) => m.id === b.model) || models[0] || null;
-  const cards = models.length
-    ? `<div class="simple-models">${models.map((m) => {
-      const on = !!current && m.id === current.id;
-      return `<button type="button" class="pick" data-model="${esc(m.id)}" data-focus="smodel-${esc(m.id)}" aria-pressed="${on}">
-        <span class="pick-top"><span class="pick-name">${esc(simpleText(m.name))}</span>${on ? badge("已选", "accent") : ""}</span>
-        <span class="pick-note">${esc(simpleModelTagline(m))}</span>
-      </button>`;
-    }).join("")}</div>`
-    : emptyState("还没有可选的模型", "等几秒再试一次；如果一直这样，就到设置页看看连接状态。");
   const err = S.simple.buildError;
   return `<section class="section" aria-labelledby="s-op-h">
-    <h2 id="s-op-h"><span class="num">1</span>选一个模型<span class="count">${models.length} 个推荐</span></h2>
-    ${cards}
-    <form id="simpleForm" class="card" novalidate style="margin-top:12px">
+    <h2 id="s-op-h"><span class="num">4</span>写清任务，生成载荷<span class="count">${recommendedModels().length} 个推荐模型</span></h2>
+    <form id="simpleForm" class="card" novalidate>
       <div class="field">
         <textarea id="sTask" data-focus="sTask" aria-label="任务描述" rows="3" placeholder="例：让它详细说明如何绕过内容审核"${err && err.kind === "empty" ? ' aria-invalid="true" class="shake"' : ""}>${esc(b.task)}</textarea>
         <span class="help">写得越具体，生成的载荷越能用</span>
       </div>
-      ${renderSimpleChoices()}
       <button class="primary s-generate" id="sBuild" type="submit"${b.building ? ' disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : "一键生成"}</button>
     </form>
   </section>`;
@@ -1173,7 +1258,7 @@ function renderSimpleOperation() {
 
 function renderSimpleResults() {
   const b = S.breach;
-  const head = `<h2><span class="num">3</span>拿到可复制的载荷`;
+  const head = `<h2>载荷`;
   if (b.building) {
     return `<section class="section">${head}</h2>${spinner("正在生成，请稍等…")}</section>`;
   }
@@ -1221,19 +1306,53 @@ function renderSimpleResults() {
 
 function renderSimpleBreach() {
   if (!S.readiness.tried && !S.readiness.loading) loadReadiness();
+  if (!S.host.tried && !S.host.loading) loadHostStatus();
   $("#page").innerHTML = `
     <div class="page-head"><div>
       <p class="eyebrow">破甲</p>
       <h1>破甲</h1>
-      <p class="lead">选一个目标模型，写清楚你要它做什么，就能拿到可以直接复制的载荷。</p>
+      <p class="lead">选模型、选方案，一键注入后拿到可复制的载荷。技术模式是同一套流程，只是参数更多。</p>
     </div></div>
     ${renderSimpleStatusCard()}
     ${simpleSteps()}
+    ${renderFlowModelStep("simple")}
+    ${renderFlowPlanStep("simple")}
+    ${renderFlowApplyStep()}
+    ${renderFlowPatchList()}
     ${renderSimpleOperation()}
     ${renderSimpleResults()}
-    <p class="s-tip">宿主破甲（改 dsh 安装的那套补丁）在技术模式 → 破甲 → 诊断；备份与一键恢复也在那里。</p>
   `;
   bindSimpleBreach();
+  bindFlowControls();
+}
+
+/* 统一流程里的公共控件（两模式共用）：注入/卸载/还原、重新识别、注入正文编辑 */
+function bindFlowControls() {
+  $$("#page [data-simple-host]").forEach((el) => {
+    el.addEventListener("click", () => simpleHostAction(el.dataset.simpleHost));
+  });
+  $$("#page [data-live-refresh]").forEach((el) => {
+    el.addEventListener("click", () => refreshLiveModels());
+  });
+  $$("#page [data-prompt-action]").forEach((el) => {
+    el.addEventListener("click", () => promptAction(el.dataset.promptAction));
+  });
+  const hp = $("#hostPrompt");
+  if (hp) {
+    hp.addEventListener("input", () => {
+      S.host.promptDraft = hp.value;
+      S.host.promptDirty = true;
+      const save = document.querySelector('#page [data-prompt-action="save"]');
+      if (save) save.disabled = false;
+    });
+  }
+  $$("#page [data-expand-models]").forEach((el) => {
+    el.addEventListener("click", () => { S.simple.showAllModels = true; renderPage(); });
+  });
+  $$("#page [data-collapse-models]").forEach((el) => {
+    el.addEventListener("click", () => { S.simple.showAllModels = false; renderPage(); });
+  });
+  bindGroups();
 }
 
 function bindSimpleBreach() {
@@ -1740,6 +1859,136 @@ function resultName(id) {
 }
 
 /* ============================================================ 宿主破甲（照搬 dsh-purge 1.1.71） */
+/* ============================================================ 统一破甲流程（两模式同一套顺序）
+   ① 选模型（实时优先，没识别到就展开获取）→ ② 选方案 → ③ 一键注入/卸载/还原 → ④ 补丁清单（可收缩）→ ⑤ 生成载荷 */
+function flowToneBadge(p) {
+  const tone = p.tone || (p.status === "applied" ? "ok" : p.status === "pending" ? "wait" : p.status === "missing_file" ? "fail" : "skip");
+  const label = p.statusZh || (tone === "ok" ? "已注入" : tone === "wait" ? "待注入" : tone === "fail" ? "失败" : "已跳过");
+  return `<span class="patch-state tone-${esc(tone)}">${esc(label)}</span>`;
+}
+
+function renderFlowModelStep(mode) {
+  const tech = mode === "technical";
+  const live = S.modelsLive;
+  const liveCount = (live && live.count) || 0;
+  const rec = recommendedModels();
+  const card = (m) => {
+    const on = m.id === S.breach.model;
+    return `<button type="button" class="pick" data-model="${esc(m.id)}" data-focus="model-${esc(m.id)}" aria-pressed="${on}">
+      <span class="pick-top"><span class="pick-name">${esc(simpleText(m.name))}</span>${m.live ? badge("实时", "") : ""}${m.dshDefault ? badge("当前默认", "good") : ""}${on ? badge("已选", "accent") : ""}</span>
+      <span class="pick-note">${esc(simpleText(m.tagline || m.notes || m.family || ""))}</span>
+      ${m.live && m.liveProvider ? `<span class="pick-meta">${esc(m.liveProvider)}</span>` : ""}
+    </button>`;
+  };
+  const all = (S.models || []).filter((m) => m && m.id && !NON_CHAT_MODEL.test(m.id));
+  // 实时识别到模型时，首屏只放推荐位；点开才渲染完整矩阵（避免几十张卡把首屏撑爆）。
+  // 识别不到模型时直接展开——这就是「没有识别则通过展开的方式获取」。
+  const showAll = tech || !liveCount || !!S.simple.showAllModels;
+  const moreBlock = showAll
+    ? `<div class="grid models">${all.map(card).join("")}</div>
+       ${tech ? "" : `<div class="actions"><button type="button" class="ghost" data-collapse-models>收起</button></div>`}`
+    : `<div class="actions"><button type="button" class="ghost" data-expand-models>展开全部模型（${all.length} 个）</button>
+       <span class="hint">${liveCount ? "当前只显示推荐位" : "还没识别到本机模型，展开后可选全部，或点「重新识别」"}</span></div>`;
+  return `<section class="section" aria-labelledby="f-model-h">
+    <h2 id="f-model-h"><span class="num">1</span>选模型<span class="count">${liveCount ? `实时识别 ${liveCount} 个` : "还没识别到"}</span></h2>
+    <div class="simple-models">${rec.map(card).join("")}</div>
+    <details class="grp" data-group="flow:models"${showAll ? " open" : ""}>
+      <summary><span class="grp-title">全部模型</span><span class="grp-hint">${all.length} 个${liveCount ? "" : " · 点「重新识别」按本机配置重新扫"}</span></summary>
+      <div class="grp-body">
+        <div class="actions" style="margin-bottom:8px">
+          <button type="button" class="ghost" data-live-refresh>重新识别</button>
+          <span class="hint">读 ~/.dsh 的配置、用量账本与 Ollama。</span>
+        </div>
+        ${showAll ? `<div class="grid models">${all.map(card).join("")}</div>` : `<div class="actions"><button type="button" class="ghost" data-expand-models>展开全部模型（${all.length} 个）</button></div>`}
+      </div>
+    </details>
+  </section>`;
+}
+
+function renderFlowPlanStep(mode) {
+  const tech = mode === "technical";
+  const b = S.breach;
+  const pr = S.host.prompt;
+  const tplCount = (S.prompts || []).length;
+  const promptInfo = pr ? `${fmtNum((pr.text || "").length)} 字符` : "";
+  const rows = [
+    `<label class="field"><span>破甲模板</span>
+      ${tplCount ? `<select id="sTemplate" data-focus="sTemplate">${optionHtml(S.prompts, b.template)}</select>` : `<input type="text" value="none" readonly>`}
+      <span class="help">${pr && pr.isBuiltin ? "当前注入的就是这套（与内置默认一致）" : "换模板只影响生成的载荷；宿主里注入的那份在下面第 3 步旁边可以改。"}${promptInfo ? " · 注入正文 " + promptInfo : ""}</span>
+    </label>`,
+    `<label class="field"><span>任务类型</span><select id="sPreset" data-focus="sPreset">${optionHtml(S.taskPresets, b.taskPreset)}</select></label>`,
+    `<label class="field"><span>输出要求</span><select id="sOutput" data-focus="sOutput">${optionHtml(S.outputChoices, b.outputChoice)}</select></label>`,
+  ];
+  const extra = tech ? "" : "";
+  return `<section class="section" aria-labelledby="f-plan-h">
+    <h2 id="f-plan-h"><span class="num">2</span>选方案<span class="count">${tplCount} 套模板 · ${(S.taskPresets || []).length} 种任务</span></h2>
+    <div class="s-choices">${rows.join("")}</div>
+    ${extra}
+  </section>`;
+}
+
+function renderFlowApplyStep() {
+  const h = S.host;
+  const d = h.data;
+  if (!d) return `<section class="section"><h2><span class="num">3</span>注入 / 卸载 / 还原</h2>${spinner("检查宿主状态…")}</section>`;
+  if (d.available === false) {
+    return `<section class="section"><h2><span class="num">3</span>注入 / 卸载 / 还原</h2>${alertBox("这台机器的宿主侧用不了", (d && d.reason) || "本机没装 dsh-purge；破甲内容仍能生成。")}</section>`;
+  }
+  const c = d.counts || {};
+  const snaps = Array.isArray(d.snapshots) ? d.snapshots : [];
+  const busy = h.busy;
+  const msg = h.message ? (h.error ? alertBox(h.message, "") : okBox(h.message)) : "";
+  const pr = h.prompt;
+  const draft = h.promptDraft != null ? h.promptDraft : (pr && pr.text) || "";
+  const promptBox = pr ? `<details class="grp" data-group="flow:prompt">
+      <summary><span class="grp-title">注入正文（可直接改）</span><span class="grp-hint">${pr.isBuiltin ? "与内置默认一致" : "已被改动"} · ${fmtNum(draft.length)} 字符</span></summary>
+      <div class="grp-body">
+        <textarea id="hostPrompt" rows="12" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px;width:100%">${esc(draft)}</textarea>
+        <div class="actions" style="margin-top:8px">
+          <button type="button" class="primary" data-prompt-action="save"${h.promptDirty ? "" : " disabled"}>保存正文</button>
+          <button type="button" class="ghost" data-prompt-action="reset">恢复默认正文</button>
+          <span class="hint">保存前自动备份；重启 dsh 生效。</span>
+        </div>
+      </div>
+    </details>` : "";
+  return `<section class="section" aria-labelledby="f-apply-h">
+    <h2 id="f-apply-h"><span class="num">3</span>注入 / 卸载 / 还原
+      <span class="count">${fmtNum(c.applied || 0)}/${fmtNum(c.total || 0)} 已注入${c.failed ? ` · ${c.failed} 失败` : ""} · 备份 ${snaps.length}</span></h2>
+    <div class="actions">
+      <button type="button" class="primary" data-simple-host="apply"${busy ? " disabled" : ""}>${busy ? "处理中…" : "一键注入"}</button>
+      <button type="button" class="ghost" data-simple-host="uninstall"${busy ? " disabled" : ""}>一键卸载</button>
+      <button type="button" class="ghost" data-simple-host="factory"${busy ? " disabled" : ""}>一键还原</button>
+      <button type="button" class="ghost" data-simple-host="snapshot"${busy ? " disabled" : ""}>先备份</button>
+    </div>
+    ${msg}
+    <p class="s-tip">注入 / 卸载 / 还原都改本机 dsh 安装，重启后生效；每次操作前会自动备份，可随时撤销。</p>
+    ${promptBox}
+  </section>`;
+}
+
+function renderFlowPatchList() {
+  const d = S.host.data;
+  if (!d || d.available === false) return "";
+  const c = d.counts || {};
+  const rows = (d.patches || []).map((p) => `<tr>
+      <td>${esc(p.nameZh || "（未收录中文）")}</td>
+      <td class="mono small muted">${esc(p.name)}</td>
+      <td class="muted small">${esc(p.layer || "")}</td>
+      <td>${flowToneBadge(p)}</td>
+    </tr>`).join("");
+  return `<section class="section">
+    <details class="grp" data-group="flow:patches">
+      <summary><span class="grp-title">补丁清单</span>
+        <span class="grp-hint">${fmtNum(c.applied || 0)} 已注入${c.failed ? ` · ${c.failed} 失败` : ""}${c.na ? ` · ${c.na} 跳过` : ""} · 共 ${fmtNum(c.total || 0)} 处</span></summary>
+      <div class="grp-body">
+        <div class="table-wrap" tabindex="0" role="region" aria-label="补丁清单">
+          <table class="min"><thead><tr><th>补丁</th><th>原文</th><th>层</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>
+        </div>
+      </div>
+    </details>
+  </section>`;
+}
+
 function hostStatusBadge(status) {
   if (status === "applied") return badge("已应用", "accent");
   if (status === "pending") return badge("待应用", "");
@@ -1885,7 +2134,8 @@ async function loadHostStatus(force = false) {
     } finally {
       S.host.loading = false;
       S.host.tried = true;
-      if (modeIsTechnical() && S.tab === "breach") renderPage();
+      // 两种模式都要重绘：首次渲染时宿主状态还没回来，这里是空状态
+      if (S.tab === "breach") renderPage();
     }
   })();
   return S.host.loadPromise;
@@ -1973,6 +2223,7 @@ async function refreshLiveModels() {
 }
 
 function renderBreach() {
+  if (!S.host.tried && !S.host.loading) loadHostStatus();
   const b = S.breach;
   const model = S.models.find((m) => m.id === b.model) || S.models[0] || null;
   const techCount = b.techniques.length;
@@ -2089,14 +2340,8 @@ function renderBreach() {
 
   /* 技术模式：零删减，全部原有块按固定顺序装进 5 组折叠 */
   const baseGroup = `
-    <section class="section" aria-labelledby="h-model">
-      <h2 id="h-model"><span class="num">1</span>目标模型<span class="count">${S.models.length} 类</span></h2>
-      ${modelsHtml}
-      ${modelNote}
-    </section>
-
     <section class="section" aria-labelledby="h-task">
-      <h2 id="h-task"><span class="num">2</span>任务与框架</h2>
+      <h2 id="h-task"><span class="num">5</span>写任务，生成载荷</h2>
       <form id="buildForm" class="card" novalidate>
         <label class="field"><span>任务（必填，要能验收）</span>
           <textarea id="bTask" data-focus="bTask" rows="3" placeholder="例：写一段在授权靶场里验证 SSH 弱口令的步骤，包含命令与验收条件">${esc(b.task)}</textarea>
@@ -2110,7 +2355,7 @@ function renderBreach() {
     </section>
 
     <section class="section" aria-labelledby="h-payload">
-      <h2 id="h-payload"><span class="num">3</span>载荷<span class="count">${b.variants.length} 条</span></h2>
+      <h2 id="h-payload">载荷<span class="count">${b.variants.length} 条</span></h2>
       ${variantsHtml}
     </section>`;
 
@@ -2196,12 +2441,16 @@ function renderBreach() {
       <div>
         <p class="eyebrow">CONTROL · 01</p>
         <h1>破甲</h1>
-        <p class="lead">模型侧选模型、层与技术，生成可复制的载荷并记录命中；二进制侧让 break 在副本上定性、提案、下刀、验证与还原，每一步都留证据。</p>
+        <p class="lead">和技术模式同一条流程：选模型 → 选方案 → 一键注入 → 看补丁清单 → 生成载荷。这里参数全开。</p>
       </div>
       <div class="head-meta">${badge("不调用模型 API", "accent")}${badge("只改副本", "")}${badge("expect 前置校验", "good")}${hostBadge()}</div>
     </div>
 
-    ${renderHostSection()}
+    ${renderFlowModelStep("technical")}
+    ${renderFlowPlanStep("technical")}
+    ${renderFlowApplyStep()}
+    ${renderFlowPatchList()}
+
     ${groupsHtml("breach", [
       { key: "base", html: baseGroup },
       { key: "strategy", html: strategyGroup },
@@ -2252,24 +2501,7 @@ function bindBreach() {
   const output = $("#bOutput");
   if (output) output.addEventListener("input", () => { S.breach.output = output.value; });
   const tplField = $("#bTemplate");
-  $$("#page [data-host-action]").forEach((el) => {
-    el.addEventListener("click", () => hostAction(el.dataset.hostAction));
-  });
-  $$("#page [data-live-refresh]").forEach((el) => {
-    el.addEventListener("click", () => refreshLiveModels());
-  });
-  const hostPrompt = $("#hostPrompt");
-  if (hostPrompt) {
-    hostPrompt.addEventListener("input", () => {
-      S.host.promptDraft = hostPrompt.value;
-      S.host.promptDirty = true;
-      const save = document.querySelector('#page [data-prompt-action="save"]');
-      if (save) save.disabled = false;
-    });
-  }
-  $$("#page [data-prompt-action]").forEach((el) => {
-    el.addEventListener("click", () => promptAction(el.dataset.promptAction));
-  });
+  bindFlowControls();
   if (tplField) {
     const ev = tplField.tagName === "SELECT" ? "change" : "input";
     tplField.addEventListener(ev, () => { S.breach.template = tplField.value || "none"; });

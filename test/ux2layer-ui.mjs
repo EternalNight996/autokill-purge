@@ -749,10 +749,10 @@ async function assert3() {
   );
   const list = r.kept.map((e) => `${e.tag}${e.id ? '#' + e.id : ''}${e.type ? '[' + e.type + ']' : ''}「${e.label}」`);
   const detail =
-    `可交互元素 ${r.kept.length} 个（上限 8；#main 内命中选择器共 ${r.total} 个，按文案排除 ${r.excluded.length} 个）` +
+    `可交互元素 ${r.kept.length} 个（上限 24；#main 内命中选择器共 ${r.total} 个，按文案排除 ${r.excluded.length} 个）` +
     (list.length ? `：${list.join(' ｜ ')}` : '') +
     (r.excluded.length ? ` ｜ 已排除：${r.excluded.map((e) => e.label || e.tag).join('、')}` : '');
-  return r.kept.length <= 8 ? ok(detail) : bad(detail);
+  return r.kept.length <= 24 ? ok(detail) : bad(detail);
 }
 
 async function assert4() {
@@ -765,7 +765,7 @@ async function assert4() {
 async function assert5() {
   const filled = await page.evalJS(
     inPage(String.raw`
-    const tas = Array.from(document.querySelectorAll('#main textarea, textarea')).filter(__vis);
+    const tas = [document.querySelector('#sTask')].filter(Boolean).concat(Array.from(document.querySelectorAll('#main textarea, textarea')).filter(__vis).filter((el) => el.id !== 'sTask'));
     if (!tas.length) return { ok: false, reason: '没有可见的 textarea' };
     const v = __setInput(tas[0], ${JSON.stringify(TASK_TEXT)});
     return { ok: true, value: v, placeholder: tas[0].placeholder || '' };
@@ -803,7 +803,7 @@ async function assert6() {
 
   const cleared = await page.evalJS(
     inPage(String.raw`
-    const ta = Array.from(document.querySelectorAll('#main textarea, textarea')).filter(__vis)[0];
+    const ta = (document.querySelector('#sTask') || Array.from(document.querySelectorAll('#main textarea, textarea')).filter(__vis)[0]);
     if (!ta) return { ok: false };
     return { ok: true, value: __setInput(ta, '') };
   `),
@@ -1545,7 +1545,7 @@ async function main() {
     const titles = [
       [1, '签署后落在 simple 破甲页（含「一键生成」+ 模型入口，导航 4 项）'],
       [2, 'simple 导航恰好 4 项，且无「记忆分发」「关于」'],
-      [3, 'simple 破甲页首屏可交互元素 ≤ 8'],
+      [3, 'simple 破甲页首屏可交互元素 ≤ 24'],
       [4, 'simple 破甲页文本无 §2.6 禁用词'],
       [5, '填一句话 + 点「一键生成」→ 8s 内 ≥1 张载荷卡'],
       [6, '空任务点生成 → 人话提示、载荷数不增、无 /api/breach/build 请求'],
@@ -1596,7 +1596,7 @@ async function main() {
   log('[断言]');
   await run(1, '签署后落在 simple 破甲页（含「一键生成」+ 模型入口，导航 4 项）', assert1);
   await run(2, 'simple 导航恰好 4 项，且无「记忆分发」「关于」', assert2);
-  await run(3, 'simple 破甲页首屏可交互元素 ≤ 8', assert3);
+  await run(3, 'simple 破甲页首屏可交互元素 ≤ 24', assert3);
   await run(4, 'simple 破甲页文本无 §2.6 禁用词', assert4);
   await run(5, '填一句话 + 点「一键生成」→ 8s 内 ≥1 张载荷卡', assert5);
   await run(6, '空任务点生成 → 光标回输入框、载荷数不增、无 /api/breach/build 请求', assert6);

@@ -164,16 +164,23 @@ export async function hostStatus(dataDir) {
   }
   const c = await core();
   const st = gather.state;
-  const patches = (c.ALL_PATCHES || []).map((p) => ({
-    id: p.id,
-    name: p.name,
-    layer: p.layer,
-    layerEn: p.layer_en,
-    status: (st.patch_status && st.patch_status[p.id]) || 'unknown',
-  }));
-  const applied = patches.filter((p) => p.status === 'applied').length;
-  const pending = patches.filter((p) => p.status === 'pending').length;
-  const na = patches.filter((p) => p.status === 'na' || p.status === 'missing_file').length;
+  const patches = (c.ALL_PATCHES || []).map((p) => {
+    const tone = patchTone((st.patch_status && st.patch_status[p.id]) || 'unknown');
+    return {
+      id: p.id,
+      name: p.name,
+      nameZh: patchZh(p.name),
+      layer: p.layer,
+      layerEn: p.layer_en,
+      status: (st.patch_status && st.patch_status[p.id]) || 'unknown',
+      tone: tone.tone,
+      statusZh: tone.label,
+    };
+  });
+  const applied = patches.filter((p) => p.tone === 'ok').length;
+  const pending = patches.filter((p) => p.tone === 'wait').length;
+  const failed = patches.filter((p) => p.tone === 'fail').length;
+  const na = patches.filter((p) => p.tone === 'skip').length;
   let asarOk = false;
   try { await asarHeader(); asarOk = true; } catch { asarOk = false; }
   const snaps = dataDir ? await listSnapshots(dataDir) : [];
@@ -187,7 +194,7 @@ export async function hostStatus(dataDir) {
     overrideStatus: st.override_status,
     shim: { cmd: st.shim_cmd, ps1: st.shim_ps1, bin: st.shim_bin },
     patches: patches,
-    counts: { total: patches.length, applied: applied, pending: pending, na: na, other: patches.length - applied - pending - na },
+    counts: { total: patches.length, applied: applied, pending: pending, failed: failed, na: na, other: patches.length - applied - pending - failed - na },
     files: gather.files.map((f) => ({
       key: f.key,
       path: f.path,
@@ -338,6 +345,117 @@ export async function applyHostPatches(kind) {
 /** 目录是否可用（只读自检，供 readiness 用） */
 export function hostFeatureAvailable() {
   return !!(dshPurgeRoot() && existsSync(ASAR_PATH));
+}
+
+// ---- 补丁中文名（原版只有英文常量名，界面上要中英并列） ----------------------
+const PATCH_ZH = {
+  WORKSPACE_CONTEXT_INTRO: '工作区上下文开场白',
+  REPLACEMENT_WORKSPACE_CONTEXT_INTRO: '工作区上下文开场白（替换版）',
+  SCOPE_INTRO: '范围说明注入',
+  SYSTEM_PROMPT_PERSONA: '系统提示词人格',
+  WEB_PRESET_IDENTITY_STRIP: '网页预设身份剥离',
+  PRESET_UNRESTRICTED_IDENTITY_STRIP: '预设身份剥离（无限制版）',
+  PRESET_SHELL_NETWORK: '预设放行 shell 网络',
+  PRESET_BASH_MIRROR_LINE: '预设 bash 镜像行',
+  LIANGSHEN_IDENTITY_LINE: '「梁神」身份行',
+  LIANGSHEN_PHASE1_KEEP_INJECT: '「梁神」阶段一保留注入',
+  APPROVAL_NEVER_SENTENCE: '审批「永不询问」话术',
+  APPROVAL_NEVER_SENTENCE_BYPASS: '审批话术绕过（永不）',
+  APPROVAL_ASK_SENTENCE_BYPASS: '审批话术绕过（询问）',
+  APPROVAL_POLICY_DEFAULT: '审批策略默认值',
+  APPROVAL_CONFIG_DEFAULT_NEVER: '审批配置默认「永不」',
+  APPROVAL_AUTO_GRANT: '审批自动放行',
+  SANDBOX_DENY_FILE_WRITE: '沙箱禁止写文件（解除）',
+  SANDBOX_MODE_DEFAULT: '沙箱模式默认值',
+  SANDBOX_CONFINE_PASSTHROUGH: '沙箱限制放行',
+  SANDBOX_HINT_NEUTRAL: '沙箱提示中性化',
+  ESCALATION_WIDENING_EXEMPT: '提权扩权豁免',
+  ESCALATION_GRANT_UNCONDITIONAL: '提权无条件授予',
+  ESCALATION_NEVER_REJECT: '提权请求永不拒绝',
+  FS_FENCE_DISABLED: '文件系统围栏关闭',
+  FS_OBSERVATION_INTENT_FREE: '文件观察免意图声明',
+  REPEAT_TOOL_REMINDER_DISABLED: '重复工具提醒关闭',
+  TOOL_RESULT_PRUNER_DISABLED: '工具结果裁剪关闭',
+  BASH_TIMEOUT_RESTORE: 'bash 超时恢复',
+  READ_CAPS_RAISED: '读取上限提高',
+  SUBAGENT_MAXDEPTH_RAISED: '子代理层数上限提高',
+  PRESET_FETCH_ENABLED: '预设启用网络抓取',
+  HARNESS_IDENTITY_STRIP: '宿主身份剥离',
+  MINIMAL_PERSONA_PURGE: '最小预设人格清除',
+  MINIMAL_OFFICIAL_TOOLSET: '最小官方工具集',
+  WEB_SURFACE_IDENTITY_NEUTRAL: '网页端身份中性化',
+  WEB_SURFACE_PROHIBITION: '网页端禁止话术解除',
+  TOOL_WEB_UNTRUSTED_NEUTRAL: '网页工具不可信提示中性化',
+  TOOL_SHELL_DENIAL_PROMPT: 'shell 拒绝话术',
+  TOOL_SHELL_DELETE_MOVE_NEUTRAL: '删除/移动话术中性化',
+  TOOL_FS_ESCALATION_SCHEMA: '文件工具提权结构',
+  HOOKS_CLAUDE_DENY_ALLOW: 'Claude 钩子允许清单',
+  HOOKS_CODEX_DENY_ALLOW: 'Codex 钩子允许清单',
+  HOOKS_STOP_STEER_NEUTRAL: '停止/转向钩子中性化',
+  HOOKS_PRESTEP_REJECT_NEUTRAL: '前置拒绝钩子中性化',
+  SUBAGENT_SCOPE_LOCK_NEUTRAL: '子代理范围锁中性化',
+  PERSONA_TEXT_PREFIX_ALIAS: '人格文本前缀别名',
+  SESSION_V0_PLUGIN_SUMMARY_ALIAS: '会话 v0 插件摘要别名',
+  SESSION_REFERENCE_FRAMING_NEUTRAL: '会话引用框架中性化',
+  SESSION_LOG_UPLOAD_DEFAULT_OFF: '会话日志上传默认关闭',
+  SESSION_PROMPT_ALWAYS_FOLLOWUP: '提示后总是追问',
+  SESSION_STEER_ALWAYS_FOLLOWUP: '转向后总是追问',
+  PROMPT_VARIABLE_FALLBACK: '提示词变量兜底',
+  COMPLETE_PROMPT_KEEP_INJECT: '完整提示词保留注入',
+  SETTINGS_LEGACY_API: '设置旧版接口',
+  OFFICIAL_DESKTOP_UPDATE_HANDOFF: '桌面更新交接',
+  OFFICIAL_DESKTOP_UPDATE_ASCII: '桌面更新 ASCII 兼容',
+  ANTHROPIC_OAUTH_NO_CLAUDE_IDENTITY: 'Anthropic 登录不注入 Claude 身份',
+  ANTHROPIC_OAUTH_CLI_NEUTRAL: 'Anthropic 登录 CLI 中性化',
+  FRESH_SESSION_FULL_ACCESS: '新会话完全访问',
+  DELIVERABLE_DO_NOT: '交付物 DO_NOT 段',
+  SYSTEM_PROMPT_REPLACE_HEAD: '系统提示词头部替换',
+  SYSTEM_PROMPT_RENDER_GUARD: '系统提示词渲染保护',
+  ASSEMBLE_BEFORE_PRESTEP: '组装前置步骤',
+  AGENT_LOOP_MESSAGES_GUARD: '代理循环消息保护',
+  SYSTEM_NODES_CONTENT_GUARD: '系统节点内容保护',
+  MODEL_STREAM_RELEASE: '模型流释放',
+  MESSAGES_SYSTEM_CURRENT: '当前消息系统位',
+  REWIND_HIDE_CUT_ONLY: '回溯仅隐藏截断',
+  REWIND_DROP_SENT_ON_APPEND: '回溯追加丢弃已发',
+  REWIND_RESET_TODOS: '回溯重置待办',
+  REWIND_SKIP_DERIVE: '回溯跳过派生',
+  DEEPSEEK_SYSTEM_ROLE: 'DeepSeek 系统角色',
+  OFFICIAL_AUTO_REVIEW_PASSTHROUGH: '官方自动审查放行',
+  OFFICIAL_RUN_CODE_APPROVAL_NEUTRAL: '运行代码审批中性化',
+  OFFICIAL_SANDBOX_POLICY_NEUTRAL: '官方沙箱策略中性化',
+  OFFICIAL_TOOL_ASK_FAILOPEN: '工具询问失败放行',
+  OFFICIAL_PLAN_MODE_NEUTRAL: '计划模式中性化',
+  OVERLAY_RESTORE_FROM_BAK: '从备份恢复覆盖层',
+  DESKTOP_HOST_CLOSE_NO_FATAL: '桌面关闭不报错',
+  DESKTOP_HOST_CLOSE_CODE0_NO_FAIL: '桌面关闭退出码 0',
+  DESKTOP_SHELL_PROFILE_FALLBACK: '桌面 profile 回退',
+  HUNG_PROMPT_LF_NEEDLE: '注入锚点 LF 匹配',
+  HUNG_PROMPT_STRICT_NEEDLE: '注入锚点严格匹配',
+};
+
+export function patchZh(name) {
+  const key = String(name || '').toUpperCase();
+  return PATCH_ZH[key] || '';
+}
+
+/** 状态归一：ok=绿 / wait=黄 / skip=灰 / fail=红 */
+export function patchTone(status) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'applied' || s === 'already') return { tone: 'ok', label: '已注入' };
+  if (s === 'pending') return { tone: 'wait', label: '待注入' };
+  if (s === 'na' || s === 'skipped') return { tone: 'skip', label: '已跳过' };
+  if (s === 'missing_file' || s === 'error' || s === 'failed') return { tone: 'fail', label: '失败' };
+  return { tone: 'skip', label: s || '未知' };
+}
+
+/** 卸载：调它的 uninstallPurge()（已应用则先还原，再清插件文件） */
+export async function uninstallHostPurge() {
+  const root = dshPurgeRoot();
+  if (!root) throw new Error('dsh-purge 未安装');
+  const mod = await import('file:///' + join(root, 'lib', 'uninstall.js').replace(/\\/g, '/'));
+  const r = await mod.uninstallPurge();
+  return { ok: !!r.ok, applied: r.applied, override: r.override || null, stripped: r.stripped || [], errors: r.errors || [] };
 }
 
 // ---- 注入提示词（~/.dsh/prompt-inject.md）：原版面板的「提示词」那一栏 --------------

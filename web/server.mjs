@@ -10,7 +10,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
-import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory } from './host.mjs';
+import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge } from './host.mjs';
 import { detectLiveModels } from './models-live.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -768,6 +768,18 @@ async function handleApi(req, res, url, state) {
         return send(res, 200, Object.assign({ ok: true }, r, { restartRequired: true }));
       } catch (e) { return send(res, 500, { ok: false, error: 'prompt_reset_failed', detail: publicError(e) }); }
     });
+  }
+
+  if (p === '/api/host/uninstall' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '卸载会先还原宿主再清插件文件，传 confirm:true' });
+    const guard = await createSnapshot(DATA_DIR, 'pre-uninstall');
+    try {
+      const r = await uninstallHostPurge();
+      return send(res, 200, { ok: true, uninstall: r, guardSnapshot: guard.id, restartRequired: true });
+    } catch (e) {
+      return send(res, 500, { ok: false, error: 'uninstall_failed', detail: publicError(e), guardSnapshot: guard.id });
+    }
   }
 
   // breach (FR-2)
