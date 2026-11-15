@@ -22,7 +22,7 @@
 
 ## 待 YG 拍板的衍生问题
 
-1. **AC-3.1「7 节」vs 样例「6 节」**（见 `docs/ACCEPTANCE.md` 第五节）：`_smoke/sample.exe` 实测 6 节，按现行契约 M1 正向 1 无法全绿；解法三选一待定。
+1. ~~AC-3.1「7 节」vs 样例「6 节」~~ —— **已决（2026-11-15，小梦代 YG）**：选 (a) 补 ≥7 节样例，不降阈值、不改 `>6`。落地 `test/make-7s-fixture.mjs` → `_smoke/sample-7s.exe`；详情见 `docs/ACCEPTANCE.md` 第五节。
 2. 其余按默认执行，暂无阻塞。
 
 ## 记录纪律

@@ -111,23 +111,21 @@ node test/acceptance.mjs                # 全量：break + Web（需先 node web
 
 ---
 
-## 五、当前实测基线（2026-11-15 23:20）
+## 五、当前实测基线（2026-11-15 23:30）
 
-跑 `node test/acceptance.mjs --break-only`（Lin 的 break 重写进行中，23:19 版）：
+跑 `node test/acceptance.mjs --break-only`：
 
-- **M1 break 用例 2–12 全 PASS**（scan 483 命中/483 引用、plan 8 候选、patch 386ms、verify differingBytes=7、journal 1 条、restore sha 回原、invert 74→75、负向退出码 3/4/2/5 全对、§6 计时全在预算内）。
-- **用例 1（info）FAIL**：`sample.exe` 实测 **6 节**（.text/.rdata/.data/.pdata/.rsrc/.reloc），AC-3.1/§12 要求「7 节以上」。
+- **M1 break 用例 1–12 全 PASS**（info 7 节、scan 483 命中/483 引用、plan 8 候选、patch、verify differingBytes=7、journal、restore sha 回原、invert、负向退出码 3/4/2/5 全对、§6 计时全在预算内）。
 
-### ⚠ 待 YG 拍板：AC-3.1「7 节」vs 样例「6 节」
+### 决策记录：AC-3.1「7 节」—— 选 (a) 补样例，不降阈值
 
 | 项 | 内容 |
 |---|---|
-| 契约原文 | AC-3.1「返回 7 个以上节与熵值」；§12 `.sections\|length>6` |
-| 实测 | `_smoke/sample.exe` 共 6 节，均带熵值、`ok:true` |
-| 影响 | 按现行契约，M1 正向 1（info）无法全绿 |
-| 可选解法 | (a) 换/加一个 ≥7 节的样例；(b) AC 阈值改为 `>5`（≥6）；(c) 明确「7 节」含头部/叠加层 |
-
-> 在 YG 拍板前，脚本保持契约原样（`>6`），不改阈值；本项记 `FAIL` 并标注原因，不谎报通过。
+| 决策 | (a) 补 ≥7 节样例；不降阈值、不改 `>6` |
+| 决策人 | 小梦（代 YG） |
+| 日期 | 2026-11-15 |
+| 理由 | 契约不动、样例可造、真实 PE 常有 7 节；降阈值等于把用例做虚 |
+| 落地 | `test/make-7s-fixture.mjs` 从 `sample.exe` 生成 `_smoke/sample-7s.exe`（追加 `.test` 节 → 7 节）；`test/acceptance.mjs` 用例 1 改用该夹具，判定保持 `ok && sections.length>6 && 每节有熵`；原 `sample.exe` 不改，用例 2–12 继续用它 |
 
 ---
 

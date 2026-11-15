@@ -11,3 +11,6 @@ node_modules/
 
 # live vault copy kept under _smoke for manual probing
 _smoke/vault-live/
+
+# generated 7-section fixture (reproducible via test/make-7s-fixture.mjs)
+_smoke/sample-7s.exe

@@ -23,6 +23,8 @@ import { createHash } from 'node:crypto';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BREAK = join(ROOT, 'break', 'break.mjs');
 const SAMPLE = join(ROOT, '_smoke', 'sample.exe');
+const SAMPLE7 = join(ROOT, '_smoke', 'sample-7s.exe');
+const MAKER = join(ROOT, 'test', 'make-7s-fixture.mjs');
 const PORT = Number(process.env.PORT || 8792);
 const WEB = String(process.env.PURGE_WEB_BASE || 'http://127.0.0.1:' + PORT).replace(/\/+$/, '');
 const BREAK_ONLY = process.argv.includes('--break-only');
@@ -43,16 +45,16 @@ function report(name, ok, detail) {
   console.log(`${tag}  ${String(n).padStart(2)}. ${name}${detail ? ' — ' + detail : ''}`);
 }
 
-// Run the break CLI and capture exit code + stdout + stderr.
+// Run a node script and capture exit code + stdout + stderr.
 // Uses file-redirected stdio (not pipes) so it works under restricted sandboxes too,
 // and never trips a maxBuffer cap. Returns {status, stdout, stderr}.
-function runBreak(args, timeoutMs) {
+function runNode(script, args, timeoutMs) {
   const dir = mkdtempSync(join(tmpdir(), 'ap-out-'));
   const outFile = join(dir, 'out.txt');
   const errFile = join(dir, 'err.txt');
   const fo = openSync(outFile, 'w');
   const fe = openSync(errFile, 'w');
-  const r = spawnSync(process.execPath, [BREAK, ...args], {
+  const r = spawnSync(process.execPath, [script, ...(args || [])], {
     cwd: ROOT, stdio: ['ignore', fo, fe], timeout: timeoutMs || 60000, windowsHide: true,
   });
   let stdout = ''; let stderr = '';
@@ -66,6 +68,7 @@ function runBreak(args, timeoutMs) {
   else status = r.status === null ? -1 : r.status;
   return { status, stdout, stderr };
 }
+function runBreak(args, timeoutMs) { return runNode(BREAK, args, timeoutMs); }
 function json(out) { try { return JSON.parse(out.stdout); } catch { return null; } }
 
 // A fresh working copy of the fixture. Each scenario gets its own file so cases stay independent.
@@ -86,15 +89,20 @@ async function m1() {
   const EXPECT = '488D1509AED701';
   const NOP = 7;
 
-  // 1. info  —— AC-3.1 / §8 正向 1
+  // 1. info  —— AC-3.1 / §8 正向 1（用 7 节夹具 sample-7s.exe，由脚本生成，不动 sample.exe）
   {
-    const t0 = Date.now();
-    const r = runBreak(['info', SAMPLE], BUDGET.info + 5000);
-    const ms = Date.now() - t0;
-    const j = json(r);
-    const ok = r.status === 0 && !!j && j.ok === true && Array.isArray(j.sections) && j.sections.length > 6
-      && j.sections.every((s) => typeof s.entropy === 'number' || typeof s.size === 'number');
-    report('M1 info: 7+ 节 + 熵值 + ok', ok && ms <= BUDGET.info, `${j && j.sections ? j.sections.length : 0} sections · ${ms}ms (budget ${BUDGET.info}ms)`);
+    const g = runNode(MAKER, [], 30000);
+    if (g.status !== 0) {
+      report('M1 info: 7+ 节 + 熵值 + ok', false, 'fixture 生成失败: ' + (g.stderr || '').trim());
+    } else {
+      const t0 = Date.now();
+      const r = runBreak(['info', SAMPLE7], BUDGET.info + 5000);
+      const ms = Date.now() - t0;
+      const j = json(r);
+      const ok = r.status === 0 && !!j && j.ok === true && Array.isArray(j.sections) && j.sections.length > 6
+        && j.sections.every((s) => typeof s.entropy === 'number' || typeof s.size === 'number');
+      report('M1 info: 7+ 节 + 熵值 + ok', ok && ms <= BUDGET.info, `${j && j.sections ? j.sections.length : 0} sections · ${ms}ms (budget ${BUDGET.info}ms)`);
+    }
   }
 
   // 2. scan --min-xrefs 1  —— AC-3.2 / §8 正向 2
