@@ -2,6 +2,20 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [unreleased] — 2026-11-16（普通模式去掉空任务提示文案）
+
+### Removed
+- 普通模式空任务时那两行提示（「先写一句你要它做什么。」/「写完这一句，再点『一键生成』。」）已删除，`S.simple.buildError.kind==='empty'` 不再渲染任何 `alert` 节点。
+
+### Changed
+- 空任务点「一键生成」改为**无文案反馈**：光标自动回到输入框，输入框抖动两次并短暂标红（`textarea.shake`，CSS 动画，1 秒后自动清除 `aria-invalid`）；仍然**不发任何请求**。
+- `test/ux2layer-ui.mjs` 第 6 条判定同步改为「光标回输入框 / 抖动标记 + 载荷数不增 + 无 `/api/breach/build` 请求 + 无 5xx」，不再要求出现人话提示。
+
+### 实测
+- `node test/ux2layer-ui.mjs` → **16/16 PASS**，第 6 条实测：`反馈（光标回到输入框）；载荷数 9 → 9；/api/breach/build 请求 0 次；5xx 0 个`。
+- `acceptance` 21/21、`ux2layer` 18/18、`ac-check` 19/19 不受影响。
+- 服务端返回的 `app.js` 里已无 `emptyHint`，也无「先写一句你要它做什么」字样。
+
 ## [unreleased] — 2026-11-16（整套破甲照抄 dsh-purge 1.1.71 + 宿主破甲备份/恢复闭环）
 
 ### Added（宿主破甲：驱动 dsh-purge 1.1.71 的补丁引擎，不复制它的 344 KB 代码）

@@ -1102,19 +1102,15 @@ function renderSimpleOperation() {
     }).join("")}</div>`
     : emptyState("还没有可选的模型", "等几秒再试一次；如果一直这样，就到设置页看看连接状态。");
   const err = S.simple.buildError;
-  const emptyHint = err && err.kind === "empty"
-    ? `<div class="alert warn" role="alert"><strong>${esc(err.message)}</strong><span class="hint">写完这一句，再点『一键生成』。</span></div>`
-    : "";
   return `<section class="section" aria-labelledby="s-op-h">
     <h2 id="s-op-h"><span class="num">1</span>选一个模型<span class="count">${models.length} 个推荐</span></h2>
     ${cards}
     <form id="simpleForm" class="card" novalidate style="margin-top:12px">
       <label class="field"><span>写一句你要它做什么</span>
-        <textarea id="sTask" data-focus="sTask" rows="3" placeholder="例：让它详细说明如何绕过内容审核">${esc(b.task)}</textarea>
+        <textarea id="sTask" data-focus="sTask" rows="3" placeholder="例：让它详细说明如何绕过内容审核"${err && err.kind === "empty" ? ' aria-invalid="true" class="shake"' : ""}>${esc(b.task)}</textarea>
         <span class="help">写得越具体，生成的载荷越能用</span>
       </label>
       ${renderSimpleChoices()}
-      ${emptyHint}
       <button class="primary s-generate" id="sBuild" type="submit"${b.building ? ' disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : "一键生成"}</button>
     </form>
   </section>`;
@@ -1230,10 +1226,20 @@ async function simpleBuild() {
   S.simple.buildError = null;
   const task = String(b.task || "").trim();
   if (!task) {
-    S.simple.buildError = { kind: "empty", message: "先写一句你要它做什么。" };
+    // 不弹文案：直接把光标放回输入框并给一次轻微抖动（1 秒后自动消失），点了就知道要写东西。
+    S.simple.buildError = { kind: "empty", message: "" };
     renderPage();
     const el = $("#sTask");
-    if (el) el.focus();
+    if (el) {
+      el.focus();
+      setTimeout(() => {
+        if (S.simple.buildError && S.simple.buildError.kind === "empty") {
+          S.simple.buildError = null;
+          const box = $("#sTask");
+          if (box) { box.classList.remove("shake"); box.removeAttribute("aria-invalid"); }
+        }
+      }, 1000);
+    }
     return;
   }
   const model = b.model || (S.models[0] && S.models[0].id) || "";

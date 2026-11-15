@@ -814,18 +814,17 @@ async function assert6() {
   const mark = page.netMark();
   await page.click('一键生成');
 
-  let hint = null;
+  let feedback = null;
   try {
-    hint = await page.waitFor(
+    feedback = await page.waitFor(
       inPage(String.raw`
-      const r = __hints();
-      if (r.hints.length) return { source: 'alert/status 节点', text: r.hints.join(' ｜ ') };
-      const before = ${JSON.stringify(beforeText)};
-      const added = r.text.split('\n').map((l) => l.trim()).filter((l) => l && before.indexOf(l) < 0);
-      const hit = added.filter((l) => /写|一句/.test(l));
-      return hit.length ? { source: '清空后新增文案', text: hit.join(' ｜ ') } : null;
+      const ta = document.querySelector('#sTask') || Array.from(document.querySelectorAll('textarea')).filter(__vis)[0];
+      if (!ta) return null;
+      const active = document.activeElement === ta;
+      const marked = ta.classList.contains('shake') || ta.getAttribute('aria-invalid') === 'true';
+      return (active || marked) ? { source: active ? '光标回到输入框' : '输入框抖动标记' } : null;
     `),
-      { timeout: 4000, interval: 150, label: '空任务点生成后出现含「写」/「一句」的人话提示' },
+      { timeout: 4000, interval: 120, label: '空任务点生成后把光标放回输入框（或给出抖动标记）' },
     );
   } catch (e) {
     const net = page.netSince(mark);
@@ -837,11 +836,11 @@ async function assert6() {
   const build = net.requests.filter((q) => /\/api\/breach\/build/.test(q.url || ''));
   const s5xx = net.responses.filter((r) => Number(r.status) >= 500);
   const problems = [];
-  if (!hint || !hint.text) problems.push('没有出现人话提示');
+  if (!feedback) problems.push('点击后既没有把光标放回输入框，也没有抖动标记');
   if (after.copyCount > before.copyCount) problems.push(`载荷数增加（${before.copyCount} → ${after.copyCount}）`);
   if (build.length) problems.push(`发出了 /api/breach/build 请求 ${build.length} 次`);
   if (s5xx.length) problems.push(`出现 5xx：${s5xx.map((r) => r.status + ' ' + r.url).join(', ')}`);
-  const detail = `提示（${(hint && hint.source) || '?'}）：${clip(hint && hint.text, 130)}；载荷数 ${before.copyCount} → ${after.copyCount}；/api/breach/build 请求 ${build.length} 次；5xx ${s5xx.length} 个`;
+  const detail = `反馈（${(feedback && feedback.source) || '?'}）；载荷数 ${before.copyCount} → ${after.copyCount}；/api/breach/build 请求 ${build.length} 次；5xx ${s5xx.length} 个`;
   return problems.length === 0 ? ok(detail) : bad(`${problems.join('；')} ｜ ${detail}`);
 }
 
@@ -1600,7 +1599,7 @@ async function main() {
   await run(3, 'simple 破甲页首屏可交互元素 ≤ 8', assert3);
   await run(4, 'simple 破甲页文本无 §2.6 禁用词', assert4);
   await run(5, '填一句话 + 点「一键生成」→ 8s 内 ≥1 张载荷卡', assert5);
-  await run(6, '空任务点生成 → 人话提示、载荷数不增、无 /api/breach/build 请求', assert6);
+  await run(6, '空任务点生成 → 光标回输入框、载荷数不增、无 /api/breach/build 请求', assert6);
   await run(7, '第一张卡「复制」内容与卡片全文一致', assert7);
   await run(8, '「这次成功了」/「被拒绝了」各让 attempts +1', assert8);
   await run(9, '装备页恰好 1 个主按钮，点后出现「已装备」', assert9);
