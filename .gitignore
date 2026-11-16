@@ -32,3 +32,6 @@ test/ux2layer-ui-results.txt
 
 # local archive of deleted docs (kept for recovery, not tracked)
 _archive/
+
+# npm token (written temporarily by scripts/publish.mjs)
+.npmrc

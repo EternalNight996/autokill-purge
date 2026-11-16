@@ -2,6 +2,33 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.0] — 2026-11-16（开源发布版）
+
+### Added
+- 私有部署：库名与端口由 data/deploy.json 决定，设置页「私有部署」可一键切换（停旧 → 可选迁移 db → 起新 → 核对 vault → 落盘，失败自动回滚）。
+- scripts/mem-keepalive.mjs：自研保活。每 10s 探 /health，不通就用显式 --vault 拉起，拉起后核对 vault 并纠正误连（memory-eternal 自带 watchdog 因 vault-pref 优先会起在运营库）。
+- scripts/install-desktop.mjs + assets/autokill-purge.ico：桌面图标与开机自启（军工橙榴莲图标，另附四款备选 assets/icon-variants/）。
+- web/memcli.mjs：把 dsh-memory 的 status / audit list / ledger / restart / stop 接进设置页（重启与停止写死 --port + --vault，audit/ledger 注入 MEMORY_VAULT_DIR）。
+- web/peer.mjs + 设置页「MEM Pair」：实例配对、局域网发现、凭匹配码重连、推卡/拉卡（进对方待审）。
+- web/mcp.mjs + MCP 页：MCP 服务器管理，真握手测试（initialize → tools/list）与导出 JSON。
+- 7 套主题（军工橙默认 / 终端黑 / 工程灰 / 矩阵绿 / 赛博青 / 琥珀 CRT / 默认蓝），顶栏下拉切换并持久化。
+- 装备：6 个装备包可多选，能力按包分页，装备项挂真实技能名，并可选「已破甲模型」。
+- 破甲：模型多选（多选显示智能匹配、单选显示该模型支持的模板），一键注入/卸载改两段式确认 + 五态配色。
+- README 中英双语重写（顶部图标 + 两张截图 + 徽章），LICENSE（MIT），package.json（npm 发布骨架）。
+
+### Changed
+- #/memory 整页只保留内嵌记忆库（同源代理 /embed/memory/，剥掉它的 CSP frame-ancestors），四边贴边。
+- 记忆库切到独立 vault：mem-purge（默认端口 7989），与运营库 7999 完全隔离。
+- 情报巡检 / 演练台 / 记忆分发 三页改为「开发中」占位（原功能代码保留）。
+
+### Fixed
+- 一键注入/卸载「点了没反应」：去掉 window.confirm 阻塞，改页面内两段式确认。
+- 浏览器端竞态：宿主状态回填后延迟重绘（输入中 1s、否则 400ms），building/busy 时跳过，避免打断点击与输入。
+- 私有部署固定入口：init() 不再在无 hash 时写死 #/breach，改由 boot() 按 deploy.entryHash 落到 #/memory。
+
+### Verify
+- acceptance 21/21 · ux2layer 18/18 · ux2layer-ui 16/16 · ac-check 17–19/19（隔离库为空时相关项 SKIP）。
+
 ## [unreleased] — 2026-11-16（普通模式去掉空任务提示文案）
 
 ### Removed
