@@ -17,6 +17,8 @@
   <img src="docs/shots-ux2/memory-full.png" width="49%" alt="记忆库" />
 </p>
 
+[English](README.en.md) · **简体中文（默认）**
+
 ## ⚡ 一行装好
 
 ```bash
