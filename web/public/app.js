@@ -5535,11 +5535,160 @@ function renderSettings() {
 
     ${groupsHtml("settings", [
       { key: "base", html: baseGroup },
+      { key: "peer", html: renderPeerBlock() },
       { key: "paths", html: pathsGroup },
       { key: "diag", html: diagGroup },
     ])}
   `;
   bindSettings();
+  bindPeer();
+}
+
+/* ============================================================ MEM Pair（实例配对 / 互相传卡） */
+function peerState() {
+  if (!S.peer) {
+    S.peer = { loaded: false, loading: false, error: null, self: null, peers: [], pending: [], isolated: null, found: null, busy: "", message: "", form: { host: "", port: "7989", code: "", mode: "connect" } };
+  }
+  return S.peer;
+}
+
+async function loadPeer(force = false) {
+  const pr = peerState();
+  if (pr.loading || (pr.loaded && !force)) return;
+  pr.loading = true;
+  pr.error = null;
+  try {
+    const d = await request("/api/peer");
+    if (d && d.ok === false) throw payloadError(d, "读取失败");
+    pr.self = (d && d.self) || null;
+    pr.peers = (d && d.peers) || [];
+    pr.pending = (d && d.pending) || [];
+    pr.isolated = (d && d.isolated) || null;
+    pr.loaded = true;
+  } catch (e) {
+    pr.error = e;
+  } finally {
+    pr.loading = false;
+    if (S.tab === "settings") renderPage();
+  }
+}
+
+async function peerAction(kind, payload) {
+  const pr = peerState();
+  pr.busy = kind;
+  pr.message = "";
+  renderPage();
+  try {
+    const d = await request("/api/peer/" + kind, { method: "POST", body: payload });
+    if (!d || d.ok === false) throw payloadError(d, kind + " 失败");
+    pr.message = kind === "pair" ? "配对请求已发出（对方要在面板上确认）"
+      : kind === "accept" ? "已接受配对"
+      : kind === "upload" ? `已推送${d.pushed != null ? " " + d.pushed + " 张" : ""}`
+      : kind === "download" ? `已拉取${d.pulled != null ? " " + d.pulled + " 张" : ""}`
+      : kind === "discover" ? `发现 ${((d.found || []).length)} 个同类实例`
+      : "完成";
+    pr.found = kind === "discover" ? (d.found || []) : pr.found;
+    await loadPeer(true);
+  } catch (e) {
+    pr.error = e;
+  } finally {
+    pr.busy = "";
+    renderPage();
+  }
+}
+
+function renderPeerBlock() {
+  const pr = peerState();
+  if (!pr.loaded && !pr.loading) loadPeer();
+  const self = pr.self;
+  const form = pr.form || {};
+  const peers = pr.peers || [];
+  const pending = pr.pending || [];
+  const isolated = pr.isolated || {};
+  const peerRows = peers.map((p) => `<div class="s-row">
+      <div class="s-row-main">
+        <span class="mcp-line"><strong>${esc(p.name || p.pairCode || p.id)}</strong>${badge(p.pairCode || "", "accent")}</span>
+        <span class="mono small">${esc(p.url || "")}</span>
+      </div>
+      <div class="actions">
+        <button type="button" class="small" data-peer-up="${esc(p.pairCode)}">推卡给对方</button>
+        <button type="button" class="small" data-peer-down="${esc(p.pairCode)}">拉对方的卡</button>
+        <button type="button" class="small" data-peer-revoke="${esc(p.pairCode)}">解除</button>
+      </div>
+    </div>`).join("");
+  const pendRows = pending.map((p) => `<div class="s-row">
+      <div class="s-row-main"><strong>${esc(p.name || p.pairCode || p.id)}</strong>${badge("请求配对", "warn")}
+        <span class="mono small">${esc(p.url || "")} · ${esc(p.fingerprint || "")}</span></div>
+      <div class="actions">
+        <button type="button" class="small primary" data-peer-accept="${esc(p.id)}">接受</button>
+        <button type="button" class="small" data-peer-revoke="${esc(p.pairCode || "")}">忽略</button>
+      </div>
+    </div>`).join("");
+  return `<section class="section" aria-labelledby="h-peer">
+      <h2 id="h-peer"><span class="num">3</span>MEM Pair<span class="count">${self && self.pairCode ? "本机匹配码 " + esc(self.pairCode) : "读取中…"}</span></h2>
+      ${pr.error ? alertBox("配对功能读取失败", simpleReason(pr.error)) : ""}
+      <div class="card soft">
+        <div class="s-row"><div class="s-row-main"><strong>本机匹配码</strong>
+          <span class="mono" style="font-size:20px;letter-spacing:.12em">${esc(self && self.pairCode ? self.pairCode : "—")}</span>
+          <span class="mono small muted">${esc(self ? [self.name, "fp " + self.fingerprint, "端口 " + self.port, "发现端口 " + self.discoveryPort].filter(Boolean).join(" · ") : "")}</span></div>
+          <div class="actions"><button type="button" class="small" data-peer-copy="${esc(self && self.pairCode ? self.pairCode : "")}">复制</button>
+            <button type="button" class="small" data-peer-discover>局域网发现</button></div>
+        </div>
+        <p class="hint">库名 ${esc(isolated.dbName || "mem-purge")} · 端口 ${esc(String(isolated.port || 7989))} · 这个码念给对方或粘到对方面板即可；首次配对要对方确认，之后只凭码重连。</p>
+      </div>
+
+      <div class="s-choices" style="margin-top:10px">
+        <label class="field"><span>对方地址（可选，主机）</span><input id="peerHost" type="text" value="${esc(form.host || "")}" placeholder="192.168.1.20"></label>
+        <label class="field"><span>端口</span><input id="peerPort" type="text" value="${esc(form.port || "7989")}" placeholder="7989"></label>
+        <label class="field"><span>对方匹配码</span><input id="peerCode" type="text" value="${esc(form.code || "")}" placeholder="XXXX-XXXX" style="text-transform:uppercase"></label>
+        <div class="actions"><button type="button" class="primary" data-peer-pair${pr.busy === "pair" ? " disabled" : ""}>${pr.busy === "pair" ? "配对中…" : "配对 / 重连"}</button></div>
+      </div>
+      <p class="hint">只填匹配码 = 重连已配对过的实例；首次配对请同时填主机与端口。</p>
+
+      ${pending.length ? `<div style="margin-top:10px"><strong>待确认（${pending.length}）</strong>${pendRows}</div>` : ""}
+      <div style="margin-top:10px"><strong>已配对（${peers.length}）</strong>${peerRows || `<p class="small muted">还没有配对实例。</p>`}</div>
+      ${pr.found && pr.found.length ? `<div style="margin-top:10px"><strong>局域网发现（${pr.found.length}）</strong>${pr.found.map((f) => `<div class="s-row"><div class="s-row-main"><strong>${esc(f.name || f.host || "")}</strong><span class="mono small">${esc(f.url || (f.host + ":" + f.port) || "")} ${esc(f.pairCode || "")}</span></div></div>`).join("")}</div>` : ""}
+      ${pr.message ? okBox(pr.message) : ""}
+    </section>`;
+}
+
+function bindPeer() {
+  const pr = peerState();
+  const field = (sel, key) => {
+    const el = $(sel);
+    if (el) el.addEventListener("input", () => { pr.form = Object.assign({ host: "", port: "7989", code: "" }, pr.form, { [key]: el.value }); });
+  };
+  field("#peerHost", "host");
+  field("#peerPort", "port");
+  field("#peerCode", "code");
+  $$("#page [data-peer-copy]").forEach((el) => el.addEventListener("click", () => {
+    const code = el.dataset.peerCopy;
+    if (!code) return;
+    copyText(code, "匹配码已复制：" + code);
+  }));
+  $$("#page [data-peer-discover]").forEach((el) => el.addEventListener("click", () => peerAction("discover", {})));
+  $$("#page [data-peer-pair]").forEach((el) => el.addEventListener("click", () => {
+    const f = pr.form || {};
+    const code = String(f.code || "").trim().toUpperCase();
+    const host = String(f.host || "").trim();
+    const port = Number(f.port) || 7989;
+    if (!code && !host) { toast(L("填对方匹配码，或主机+端口", "Enter a pair code or host+port")); return; }
+    peerAction("pair", host ? { host: host, port: port, code: code } : { code: code, mode: "connect" });
+  }));
+  $$("#page [data-peer-accept]").forEach((el) => el.addEventListener("click", () => peerAction("accept", { id: el.dataset.peerAccept })));
+  $$("#page [data-peer-revoke]").forEach((el) => el.addEventListener("click", () => {
+    const code = el.dataset.peerRevoke;
+    if (!window.confirm("解除这个配对？之后要重新配对。")) return;
+    peerAction("revoke", { confirm: true, code: code });
+  }));
+  $$("#page [data-peer-up]").forEach((el) => el.addEventListener("click", () => {
+    if (!window.confirm("把本库已审的卡推给对方？对方会进待审。")) return;
+    peerAction("upload", { confirm: true, code: el.dataset.peerUp });
+  }));
+  $$("#page [data-peer-down]").forEach((el) => el.addEventListener("click", () => {
+    if (!window.confirm("把对方的卡拉进本库？会进本库的待审。")) return;
+    peerAction("download", { confirm: true, code: el.dataset.peerDown });
+  }));
 }
 
 function bindSettings() {

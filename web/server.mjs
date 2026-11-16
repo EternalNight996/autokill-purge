@@ -16,6 +16,7 @@ import { kbStats, searchPoc, readPoc, searchNotes, readNote, recentPoc } from '.
 import { listIntelReports, readIntelReport, runIntelSweep } from './intel.mjs';
 import { readDrill, grantDrill, revokeDrill, drillLegal } from './drill.mjs';
 import { readMcpConfig, saveMcpServer, deleteMcpServer, testMcpServer, testSavedServer, exportMcpConfig } from './mcp.mjs';
+import { peerStatus, peerDiscover, peerStart, peerConnect, peerAccept, peerRevoke, peerUpload, peerDownload, isolatedInfo } from './peer.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -1022,6 +1023,49 @@ async function handleApi(req, res, url, state) {
     } catch (e) {
       return send(res, 500, { ok: false, error: 'mcp_test_failed', detail: publicError(e) });
     }
+  }
+
+
+  // ---- MEM Pair（memory-eternal 0.49.x 实例配对 / 互相传卡） -------------------------
+  if (p === '/api/peer' && method === 'GET') {
+    const s = await readState();
+    const r = await peerStatus(s);
+    return send(res, r.ok ? 200 : 503, Object.assign({ isolated: isolatedInfo() }, r));
+  }
+  if (p === '/api/peer/discover' && method === 'POST') {
+    const s = await readState();
+    return send(res, 200, await peerDiscover(s));
+  }
+  if (p === '/api/peer/pair' && method === 'POST') {
+    const body = await bodyOf(req);
+    const s = await readState();
+    const r = body.mode === 'connect'
+      ? await peerConnect(s, { code: body.code, url: body.url })
+      : await peerStart(s, { host: body.host, port: body.port, code: body.code, url: body.url });
+    return send(res, 200, r);
+  }
+  if (p === '/api/peer/accept' && method === 'POST') {
+    const body = await bodyOf(req);
+    const s = await readState();
+    return send(res, 200, await peerAccept(s, { id: body.id }));
+  }
+  if (p === '/api/peer/revoke' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    const s = await readState();
+    return send(res, 200, await peerRevoke(s, { code: body.code, id: body.id }));
+  }
+  if (p === '/api/peer/upload' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    const s = await readState();
+    return send(res, 200, await peerUpload(s, { code: body.code, limit: body.limit, status: body.status }));
+  }
+  if (p === '/api/peer/download' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    const s = await readState();
+    return send(res, 200, await peerDownload(s, { code: body.code, since: body.since }));
   }
 
   // breach (FR-2)

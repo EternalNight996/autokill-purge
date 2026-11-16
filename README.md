@@ -140,3 +140,32 @@ node scripts/install-desktop.mjs --uninstall # 卸载（只删快捷方式，不
 | 自启 | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\autokill-purge.lnk` |
 
 日志落在 `~/.dsh/autokill-purge-logs/`（memory.log / web.log）。
+
+## memory-eternal 0.49.x · MEM Pair（实例配对 / 互相传卡）
+
+0.49 起 memory-eternal 自带 **MEM Pair**，匹配码是两个实例之间的唯一凭据：
+
+```
+GET  /peer/status          本机匹配码 + 已配对 + 待确认
+POST /peer/discover        局域网广播找同类实例（UDP 7990）
+POST /peer/pair/start      配对（首次要对方确认）
+POST /peer/connect         只凭匹配码重连
+POST /peer/upload          把本库已审卡推给对方（对方进待审）
+POST /peer/download        把对方的卡拉进本库（进待审）
+POST /peer/revoke          解除配对
+```
+
+控制台「设置 → MEM Pair」就是这套的界面：显示本机匹配码、复制、局域网发现、填对方主机/端口/匹配码配对、
+待确认请求接受、已配对节点的推卡/拉卡/解除。
+
+命令行等价：
+
+```powershell
+node "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\memory-eternal\bin\dsh-memory.mjs" peer code
+node "...\bin\dsh-memory.mjs" peer discover
+node "...\bin\dsh-memory.mjs" peer pair 192.168.1.20:7989
+node "...\bin\dsh-memory.mjs" peer connect XXXX-XXXX
+node "...\bin\dsh-memory.mjs" peer upload --to XXXX-XXXX
+```
+
+隔离库：`mem-purge`（7989，vault `~/.dsh/memory-vault-mem-purge`）；运营库 7999 不受影响。
