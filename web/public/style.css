@@ -884,3 +884,99 @@ textarea.shake {
 @media (max-width: 720px) {
   .mem-full iframe { height: calc(100vh - 52px); }
 }
+
+/* 记忆库整页铺满：这一页不要 <main> 的限宽与内边距，也不要有任何 margin */
+body.mem-mode main {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+body.mem-mode #page {
+  margin: 0 !important;
+  padding: 0 !important;
+  max-width: none !important;
+}
+body.mem-mode .mem-full {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100%;
+}
+body.mem-mode .mem-full iframe {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 59px);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #0b0f18;
+}
+@media (max-width: 720px) {
+  body.mem-mode .mem-full iframe { height: calc(100vh - 53px); }
+}
+
+/* 记忆库整页：用 flex 吃掉顶栏剩下的全部高度，并清掉 #globalAlert 的占位空隙 */
+body.mem-mode {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+body.mem-mode .topbar { flex: 0 0 auto; }
+body.mem-mode #globalAlert { display: none !important; }
+body.mem-mode main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+body.mem-mode #page {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 !important;
+  padding: 0 !important;
+  max-width: none !important;
+}
+body.mem-mode .mem-full {
+  height: 100%;
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100%;
+}
+body.mem-mode .mem-full iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #0b0f18;
+}
+
+/* 修正：flex 父容器要有确定高度，否则子项吃不到剩余空间 */
+body.mem-mode {
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* #app 才是 body 的直接子元素：中间层也得变成 flex 列，main 才能吃到剩余高度 */
+body.mem-mode #app {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+body.mem-mode #app > main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}

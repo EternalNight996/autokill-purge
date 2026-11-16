@@ -977,6 +977,8 @@ function renderGlobalAlert() {
 }
 
 function renderPage() {
+  // 记忆库整页铺满的标记：切到别的页面要撤掉，否则 <main> 的限宽会一直失效
+  document.body.classList.remove("mem-mode");
   setNav();
   updateModeSwitch();
   renderGlobalAlert();
@@ -1011,7 +1013,8 @@ function renderPage() {
     else if (S.tab === "drill") renderDrillPage();
     else renderSimpleSettings();
   }
-  if (modeIsTechnical()) renderTechHint();
+  // 记忆库是整页 iframe，再插一条技术模式提示会把面板往下顶 63px、还溢出
+  if (modeIsTechnical() && S.tab !== "memory") renderTechHint();
   bindGroups();
   $$('#page pre[tabindex="0"]').forEach((pre, index) => {
     if (!pre.getAttribute("aria-label")) pre.setAttribute("aria-label", "可滚动文本内容 " + (index + 1));
@@ -1815,6 +1818,7 @@ function memoryCardTime(card) {
 
 /* 内嵌 memory-eternal 面板（同源代理 /embed/memory/，见 server.mjs 的 proxyMemoryUi） */
 function memoryFullPage() {
+  document.body.classList.add("mem-mode");
   $("#page").innerHTML = `<div class="mem-full">
     <iframe src="/embed/memory/" title="记忆库" loading="eager" referrerpolicy="no-referrer"></iframe>
   </div>`;
