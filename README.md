@@ -169,3 +169,9 @@ node "...\bin\dsh-memory.mjs" peer upload --to XXXX-XXXX
 ```
 
 隔离库：`mem-purge`（7989，vault `~/.dsh/memory-vault-mem-purge`）；运营库 7999 不受影响。
+
+## 图标
+
+`assets/autokill-purge.ico`（16–256 多尺寸）：参考 mengbot 的「水果角色」风格做的拟物图标 ——
+深色圆角底板 + 亮橙榴莲（短刺硬壳 = 破甲）+ 萌表情与腮红 + 顶部绿叶，配色走控制台的军工橙。
+生成脚本参数留在提交里，改配色/表情重跑即可。
