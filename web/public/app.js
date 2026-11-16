@@ -1493,6 +1493,7 @@ function renderSimpleBreach() {
       <h1>破甲</h1>
       <p class="lead">选模型、选方案，一键注入后拿到可复制的载荷。技术模式是同一套流程，只是参数更多。</p>
     </div></div>
+    ${renderHostSwitch()}
     ${renderSimpleStatusCard()}
     ${simpleSteps()}
     ${renderFlowModelStep("simple")}
@@ -1505,6 +1506,7 @@ function renderSimpleBreach() {
   `;
   bindSimpleBreach();
   bindFlowControls();
+  bindHostSwitch();
 }
 
 /* 原版另外三栏的动作：规则集 / 白名单 / 技能 */
@@ -2986,6 +2988,194 @@ function hostBadge() {
   return badge(`宿主破甲 ${c.applied || 0}/${c.total || 0}`, c.pending ? "" : "accent");
 }
 
+/* ============================================================ 目标宿主：DSH / MengBot */
+function mbState() {
+  if (!S.mb) S.mb = { tab: "dsh", loading: false, tried: false, status: null, bots: [], payload: null, error: null, message: "", pending: null, busy: null };
+  if (!S.mb.tab) S.mb.tab = "dsh";
+  return S.mb;
+}
+
+async function loadMengbot(force) {
+  const mb = mbState();
+  if (mb.loading) return;
+  if (mb.tried && !force) return;
+  mb.loading = true;
+  mb.error = null;
+  renderPage();
+  try {
+    const [st, bots, pay] = await Promise.all([
+      request("/api/mengbot/status").catch((e) => ({ ok: false, error: e })),
+      request("/api/mengbot/bots").catch((e) => ({ ok: false, error: e, bots: [] })),
+      request("/api/mengbot/payload").catch(() => ({ ok: false, text: "" })),
+    ]);
+    mb.status = st;
+    mb.bots = Array.isArray(bots.bots) ? bots.bots : [];
+    mb.payload = pay && pay.text ? pay.text : "";
+    mb.tried = true;
+  } catch (e) {
+    mb.error = e;
+  } finally {
+    mb.loading = false;
+    renderPage();
+  }
+}
+
+function renderHostSwitch() {
+  const mb = mbState();
+  const onMb = mb.tab === "mengbot";
+  if (onMb && !mb.tried && !mb.loading) loadMengbot(false);
+  const tabs = `<div class="host-tabs" role="tablist" aria-label="目标宿主">
+      <button type="button" class="host-tab${onMb ? "" : " on"}" role="tab" aria-selected="${!onMb}" data-host="dsh">DSH 宿主 ${badge("83 补丁", "")}</button>
+      <button type="button" class="host-tab${onMb ? " on" : ""}" role="tab" aria-selected="${onMb}" data-host="mengbot">MengBot ${mb.bots.length ? badge(String(mb.bots.length) + " 个 bot", "accent") : badge("读配置", "")}</button>
+    </div>`;
+
+  if (!onMb) {
+    return `<section class="section host-switch" aria-labelledby="h-hostswitch"><h2 id="h-hostswitch" class="sr-only">目标宿主</h2>${tabs}
+      <p class="hint">当前：DSH 宿主（注入 prompt-inject.md + 83 条补丁）。切到 MengBot 可按 bot 改 soul。</p></section>`;
+  }
+
+  const st = mb.status || {};
+  const running = st.processRunning === true;
+  const rows = mb.bots.map((b) => {
+    const busy = mb.busy === b.id;
+    const pend = mb.pending && mb.pending.id === b.id ? mb.pending.action : null;
+    const sizeTone = b.soulBytes > 16000 ? "warn" : (b.soulBytes ? "" : "muted");
+    const lock = running ? " disabled" : "";
+    return `<tr>
+      <td><strong>${esc(b.name || "(无名)")}</strong>${b.title ? `<span class="mini"> ${esc(b.title)}</span>` : ""}</td>
+      <td class="num mono ${sizeTone}">${fmtNum(b.soulBytes)} B</td>
+      <td>${b.hashOk ? badge("hash 自洽", "good") : badge("hash 不符", "warn")}${b.snapshotCount ? badge("快照 " + b.snapshotCount, "") : ""}</td>
+      <td class="mono small">${esc((b.modelSelection && b.modelSelection.model) || "—")}</td>
+      <td class="small">${esc(b.approvalMode || (b.autoApprove ? "auto" : "—"))}</td>
+      <td class="num">
+        ${pend === "inject" ? `<button type="button" class="danger" data-mb-confirm="inject" data-id="${esc(b.id)}"${busy || lock ? " disabled" : ""}>确认改写</button>` : `<button type="button" data-mb-act="inject" data-id="${esc(b.id)}"${busy || lock ? " disabled" : ""}>破甲</button>`}
+        ${pend === "restore" ? `<button type="button" class="danger" data-mb-confirm="restore" data-id="${esc(b.id)}"${busy || lock ? " disabled" : ""}>确认还原</button>` : `<button type="button" data-mb-act="restore" data-id="${esc(b.id)}"${busy || lock || !b.snapshotCount ? " disabled" : ""}>还原</button>`}
+      </td>
+    </tr>`;
+  }).join("");
+
+  const runNotice = running
+    ? `<div class="card" style="border-color:var(--warn,#d97706);margin-bottom:10px">
+        <div class="s-row"><div class="s-row-main">
+          <strong>MengBot 正在运行（pid ${esc(String(st.processPid || "在跑"))}）。</strong>
+          <span class="hint">它把 bots.json 缓存在内存里，运行中改文件会让进程直接退出（本项目实测过一次：进程消失、8799/8800 断掉）。<b>破甲/还原前先停它，改完再启动。</b></span>
+        </div>
+        <div class="actions">${mb.pending && mb.pending.id === "svc-stop"
+          ? `<button type="button" class="danger" data-mb-svc="stop"${mb.busy ? " disabled" : ""}>确认停止 MengBot</button>`
+          : `<button type="button" data-mb-svc="stop"${mb.busy ? " disabled" : ""}>停止 MengBot</button>`}</div></div>
+      </div>`
+    : `<div class="card" style="border-color:var(--good,#16a34a);margin-bottom:10px">
+        <div class="s-row"><div class="s-row-main">
+          <strong>MengBot 未运行 —— 可以安全破甲。</strong>
+          <span class="hint">改完 soul 后点右边「启动 MengBot」，等 15–25 秒服务就绪即生效。</span>
+        </div>
+        <div class="actions"><button type="button" data-mb-svc="start"${mb.busy ? " disabled" : ""}>启动 MengBot</button></div></div>
+      </div>`;
+
+  return `<section class="section host-switch" aria-labelledby="h-hostswitch">
+    <h2 id="h-hostswitch" class="sr-only">目标宿主</h2>${tabs}
+    ${runNotice}
+    <div class="card soft">
+      <div class="s-row"><div class="s-row-main">
+        <span class="mcp-line"><strong>MengBot</strong>${st.botsCount ? badge(st.botsCount + " bot", "accent") : ""}${running ? badge("客户端在跑", "warn") : badge("客户端未运行", "good")}${badge("写文件模式", "")}</span>
+        <span class="mono small muted">${esc(st.botsFile || "~/.mengbot/bots.json")}</span>
+        <span class="hint">${esc(st.whyFile || "写操作走 bots.json + SOUL.md 镜像，重启 MengBot 生效。")}</span>
+      </div></div>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="MengBot bot 列表" style="margin-top:10px">
+        <table class="min"><thead><tr><th>Bot</th><th class="num">soul</th><th>状态</th><th>模型</th><th>权限</th><th class="num">操作</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="6">${mb.loading ? "读取中…" : "没有读到 bot"}</td></tr>`}</tbody></table>
+      </div>
+      <p class="hint">破甲 = 把「执行纪律」拼在原 soul 前面（当前 ${fmtNum(new Blob([mb.payload || ""]).size)} B，上限 24000 B）；每次写入前整份 bots.json 先存快照，可一键还原。<b>改完需重启 MengBot 才生效</b>。</p>
+    </div>
+    ${mb.error ? alertBox("MengBot 读取失败", simpleReason(mb.error)) : ""}
+    ${mb.message ? okBox(mb.message) : ""}
+  </section>`;
+}
+
+async function mbAct(id, action) {
+  const mb = mbState();
+  const bot = mb.bots.find((b) => b.id === id);
+  if (!bot) return;
+  if (!mb.pending || mb.pending.id !== id || mb.pending.action !== action) {
+    mb.pending = { id: id, action: action };
+    mb.message = "";
+    renderPage();
+    return;
+  }
+  mb.pending = null;
+  mb.busy = id;
+  mb.error = null;
+  mb.message = "";
+  renderPage();
+  try {
+    if (action === "inject") {
+      const r = await request("/api/mengbot/inject", { method: "POST", body: { confirm: true, id: id, text: mb.payload, mode: "prefix" } });
+      if (!r || r.ok === false) throw payloadError(r, "破甲失败");
+      mb.message = `${bot.name || id}：soul ${r.before.bytes}B → ${r.after.bytes}B（+${r.addedBytes}B），快照已存。重启 MengBot 生效。`;
+    } else {
+      const r = await request("/api/mengbot/restore", { method: "POST", body: { confirm: true, id: id } });
+      if (!r || r.ok === false) throw payloadError(r, "还原失败");
+      mb.message = `${bot.name || id}：已还原 ${fmtNum(r.restoredBytes)}B，hash 一致=${r.hashMatches ? "是" : "否"}。重启 MengBot 生效。`;
+    }
+    await loadMengbot(true);
+  } catch (e) {
+    mb.error = e;
+  } finally {
+    mb.busy = null;
+    renderPage();
+  }
+}
+
+async function mbService(action) {
+  const mb = mbState();
+  const key = "svc-" + action;
+  if (action === "stop" && (!mb.pending || mb.pending.id !== key)) {
+    mb.pending = { id: key, action: action };
+    mb.message = "";
+    renderPage();
+    return;
+  }
+  mb.pending = null;
+  mb.busy = key;
+  mb.error = null;
+  mb.message = "";
+  renderPage();
+  try {
+    const r = await request("/api/mengbot/service", { method: "POST", body: { action: action, confirm: true } });
+    if (!r || r.ok === false) throw payloadError(r, action === "stop" ? "停止失败" : "启动失败");
+    mb.message = action === "stop"
+      ? `MengBot 已停止${r.wasPid ? "（原 pid " + r.wasPid + "）" : ""}，现在可以破甲/还原了。`
+      : "已提交启动。若 30 秒仍未就绪，请手动双击桌面 MengBot 图标 —— 从服务进程派生的 Electron 有时会被回收。";
+    if (action === "start") setTimeout(() => loadMengbot(true).catch(() => null), 20000);
+    else setTimeout(() => loadMengbot(true).catch(() => null), 800);
+  } catch (e) {
+    mb.error = e;
+  } finally {
+    mb.busy = null;
+    renderPage();
+  }
+}
+
+function bindHostSwitch() {
+  const mb = mbState();
+  $$("#page [data-host]").forEach((el) => {
+    el.addEventListener("click", () => {
+      mb.tab = el.dataset.host === "mengbot" ? "mengbot" : "dsh";
+      mb.pending = null;
+      renderPage();
+    });
+  });
+  $$("#page [data-mb-act]").forEach((el) => {
+    el.addEventListener("click", () => mbAct(el.dataset.id, el.dataset.mbAct));
+  });
+  $$("#page [data-mb-confirm]").forEach((el) => {
+    el.addEventListener("click", () => mbAct(el.dataset.id, el.dataset.mbConfirm));
+  });
+  $$("#page [data-mb-svc]").forEach((el) => {
+    el.addEventListener("click", () => mbService(el.dataset.mbSvc));
+  });
+}
+
 function renderHostSection() {
   const h = S.host;
   if (!h.tried && !h.loading) loadHostStatus();
@@ -3446,6 +3636,8 @@ function renderBreach() {
       <div class="head-meta">${badge("不调用模型 API", "accent")}${badge("只改副本", "")}${badge("expect 前置校验", "good")}${hostBadge()}</div>
     </div>
 
+    ${renderHostSwitch()}
+
     ${renderFlowModelStep("technical")}
     ${renderFlowPlanStep("technical")}
     ${renderFlowApplyStep()}
@@ -3463,6 +3655,7 @@ function renderBreach() {
   `;
   bindBreach();
   bindBinary();
+  bindHostSwitch();
 }
 
 function bindBreach() {

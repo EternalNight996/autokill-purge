@@ -1430,3 +1430,25 @@ body[data-theme="terminal"] #nav a[aria-current="page"] {
 @media (max-width: 520px) {
   .logo { width: 26px; height: 26px; border-radius: 7px; }
 }
+
+
+/* 目标宿主切换（破甲页顶部）：DSH / MengBot */
+.host-switch { padding-top: 4px; }
+.host-tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.host-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 34px; padding: 6px 14px; border-radius: 10px;
+  background: var(--panel-2, rgba(255,255,255,.04));
+  border: 1px solid var(--line, rgba(255,255,255,.1));
+  color: var(--ink); font: inherit; cursor: pointer;
+}
+.host-tab:hover { border-color: var(--accent); }
+.host-tab.on {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}

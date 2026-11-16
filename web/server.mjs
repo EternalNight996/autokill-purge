@@ -19,6 +19,7 @@ import { readMcpConfig, saveMcpServer, deleteMcpServer, testMcpServer, testSaved
 import { peerStatus, peerDiscover, peerStart, peerConnect, peerAccept, peerRevoke, peerUpload, peerDownload, isolatedInfo } from './peer.mjs';
 import { memCliStatus, memCliRestart, memCliStop, memCliLedger, memCliAuditList } from './memcli.mjs';
 import { readDeploy, switchDeploy } from './deploy.mjs';
+import { mbStatus, mbListBots, mbReadBot, mbInjectSoul, mbRestoreSoul, mbEquipBot, mbSnapshots, mbPruneSnapshots, mbServiceStop, mbServiceStart } from './mengbot.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -1026,6 +1027,81 @@ async function handleApi(req, res, url, state) {
   }
 
   // ---- MCP 服务器管理（~/.dsh/mcp-servers.json，可真握手测试） --------------------------
+
+  // ---- MengBot 破甲 / 装备（读走 8799 API，写走 bots.json + SOUL.md 镜像，重启生效）----
+  if (p === '/api/mengbot/status' && method === 'GET') {
+    try { return send(res, 200, await mbStatus()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'mb_status_failed', detail: publicError(e) }); }
+  }
+
+
+  if (p === '/api/mengbot/service' && method === 'POST') {
+    const body = await bodyOf(req);
+    const action = String(body.action || '');
+    if (action === 'stop' && body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '会强制结束 MengBot（未保存会话会丢）' });
+    return withLock(async () => {
+      try {
+        if (action === 'stop') return send(res, 200, mbServiceStop());
+        if (action === 'start') return send(res, 200, mbServiceStart());
+        return send(res, 400, { ok: false, error: 'unknown_action', action: action });
+      } catch (e) { return send(res, 500, { ok: false, error: 'mb_service_failed', detail: publicError(e) }); }
+    });
+  }
+
+  if (p === '/api/mengbot/payload' && method === 'GET') {
+    try {
+      const txt = await readFile(join(HERE, 'prompts', 'mengbot-soul.md'), 'utf8');
+      return send(res, 200, { ok: true, text: txt, bytes: Buffer.byteLength(txt, 'utf8'), limit: 24000 });
+    } catch (e) { return send(res, 500, { ok: false, error: 'mb_payload_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/mengbot/bots' && method === 'GET') {
+    try { return send(res, 200, mbListBots()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'mb_list_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/mengbot/bot' && method === 'GET') {
+    try { return send(res, 200, mbReadBot(String(url.searchParams.get('id') || ''))); }
+    catch (e) { return send(res, 500, { ok: false, error: 'mb_read_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/mengbot/inject' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '会改写 bots.json 与 SOUL.md，先备份可还原' });
+    return withLock(async () => {
+      try { return send(res, 200, mbInjectSoul(String(body.id || ''), { text: body.text, mode: body.mode === 'replace' ? 'replace' : 'prefix' })); }
+      catch (e) { return send(res, 400, { ok: false, error: 'mb_inject_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/mengbot/restore' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try { return send(res, 200, mbRestoreSoul(String(body.id || ''))); }
+      catch (e) { return send(res, 400, { ok: false, error: 'mb_restore_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/mengbot/equip' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try {
+        return send(res, 200, mbEquipBot(String(body.id || ''), {
+          modelSelection: body.modelSelection, approvalMode: body.approvalMode, autoApprove: body.autoApprove,
+        }));
+      } catch (e) { return send(res, 400, { ok: false, error: 'mb_equip_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/mengbot/snapshots' && method === 'GET') {
+    try { return send(res, 200, mbSnapshots(String(url.searchParams.get('id') || ''))); }
+    catch (e) { return send(res, 500, { ok: false, error: 'mb_snap_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/mengbot/prune' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try { return send(res, 200, mbPruneSnapshots(Number(body.keep) > 0 ? Number(body.keep) : 10)); }
+      catch (e) { return send(res, 400, { ok: false, error: 'mb_prune_failed', detail: publicError(e) }); }
+    });
+  }
+
   if (p === '/api/mcp' && method === 'GET') {
     try { return send(res, 200, await readMcpConfig()); }
     catch (e) { return send(res, 500, { ok: false, error: 'mcp_read_failed', detail: publicError(e) }); }
