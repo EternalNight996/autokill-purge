@@ -479,6 +479,51 @@ function slugify(s) {
 }
 
 // ---- API router --------------------------------------------------------------
+// ---- 内嵌 memory-eternal 的 Web UI（同源代理，顺手剥掉它的 CSP frame-ancestors） ----
+const MEM_UI_BASE = 'http://127.0.0.1:7999';
+
+function rawBody(req) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', () => resolve(Buffer.alloc(0)));
+  });
+}
+
+/**
+ * prefix='' 表示原样转发（/memory-eternal/... 这类页面内部 API 调用）；
+ * prefix='/embed/memory' 把 7999 的整个 web 根挂在同源路径下，供 iframe 使用。
+ */
+async function proxyMemoryUi(req, res, url, prefix) {
+  const rest = prefix ? url.pathname.slice(prefix.length) : url.pathname;
+  const target = MEM_UI_BASE + (rest || '/') + (url.search || '');
+  const init = { method: req.method, headers: { accept: req.headers.accept || '*/*' }, redirect: 'manual' };
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    init.headers['content-type'] = req.headers['content-type'] || 'application/json';
+    init.body = await rawBody(req);
+  }
+  let r;
+  try {
+    r = await fetch(target, init);
+  } catch (e) {
+    return send(res, 503, { ok: false, error: 'memory_ui_unreachable', detail: publicError(e) });
+  }
+  const ct = r.headers.get('content-type') || 'application/octet-stream';
+  let buf = Buffer.from(await r.arrayBuffer());
+  // 关键：不转发 CSP（它写了 frame-ancestors 'self'，会禁止被我们这层 iframe 嵌入）
+  const headers = { 'content-type': ct, 'cache-control': 'no-store' };
+  const loc = r.headers.get('location');
+  if (loc) headers.location = loc.replace(MEM_UI_BASE, prefix || '');
+  if (/text\/html/i.test(ct)) {
+    let html = buf.toString('utf8');
+    if (!/<base\s/i.test(html)) html = html.replace(/<head([^>]*)>/i, '<head$1><base href="' + (prefix || '') + '/">');
+    buf = Buffer.from(html, 'utf8');
+  }
+  res.writeHead(r.status, headers);
+  res.end(buf);
+}
+
 // ---- 实时模型识别（30s 缓存，force=true 强制重扫） ---------------------------------
 let intelRunning = false;
 let liveCache = { at: 0, data: null };
@@ -1001,6 +1046,13 @@ async function handleApi(req, res, url, state) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   try {
+    // 内嵌 memory-eternal 面板（iframe 用 /embed/memory/；页面内部 API 用 /memory-eternal/）
+    if (url.pathname === '/embed/memory' || url.pathname.startsWith('/embed/memory/')) {
+      return await proxyMemoryUi(req, res, url, '/embed/memory');
+    }
+    if (url.pathname.startsWith('/memory-eternal/')) {
+      return await proxyMemoryUi(req, res, url, '');
+    }
     if (!url.pathname.startsWith('/api/')) return await serveStatic(res, url.pathname);
     const state = await readState();
     const open = url.pathname === '/api/ping' || url.pathname === '/api/agreement';

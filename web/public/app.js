@@ -1813,6 +1813,24 @@ function memoryCardTime(card) {
   return raw ? fmtTime(raw) : "";
 }
 
+/* 内嵌 memory-eternal 面板（同源代理 /embed/memory/，见 server.mjs 的 proxyMemoryUi） */
+function memoryEmbedBlock(open) {
+  return `<section class="section" aria-labelledby="s-mem-embed">
+      <details class="grp" data-group="memory:embed"${open ? " open" : ""}>
+        <summary><span class="grp-title">记忆面板（内嵌 7999）</span><span class="grp-hint">同源代理 /embed/memory/ · 整块就是 memory-eternal 的 Web UI</span></summary>
+        <div class="grp-body">
+          <div class="actions" style="margin-bottom:8px">
+            <a class="ghost" href="/embed/memory/" target="_blank" rel="noopener">新窗口打开</a>
+            <span class="hint">面板直接作用于本机记忆库。首次打开会遇到 memory-eternal 的两步引导（「首次使用」与「Star 提示」），各点一次「稍后」/「跳过」即可，之后不再弹（记在本站 localStorage）。</span>
+          </div>
+          <iframe src="/embed/memory/" title="memory-eternal 记忆面板"
+            style="width:100%;height:760px;border:1px solid var(--line,#2b3242);border-radius:12px;background:#0b0f18"
+            loading="lazy" referrerpolicy="no-referrer"></iframe>
+        </div>
+      </details>
+    </section>`;
+}
+
 function renderSimpleMemory() {
   const m = S.memory;
   if (!m.statsLoaded && !m.statsLoading) loadMemoryStats();
@@ -1873,6 +1891,7 @@ function renderSimpleMemory() {
       ${results}
     </section>
     ${detail ? `<section class="section" aria-labelledby="s-mem-d"><h2 id="s-mem-d"><span class="num">2</span>全文</h2>${detail}</section>` : ""}
+    ${memoryEmbedBlock(true)}
   `;
   bindSimpleMemory();
 }
@@ -4506,6 +4525,7 @@ function renderMemory() {
       { key: "paths", html: pathsGroup },
       { key: "diag", html: diagGroup },
     ])}
+    ${memoryEmbedBlock(true)}
   `;
   bindMemory();
 }
