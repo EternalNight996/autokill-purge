@@ -98,34 +98,34 @@ const AGENTS = [
 
 const PRESETS = [
   { id: "redteam", name: "红队全装", desc: "侦察、打点、横向、权限维持，一条链的默认装备。", agents: ["dsh"], items: [
-    { id: "recon", name: "侦察与资产测绘", desc: "被动/主动收集、指纹识别、资产落库" },
-    { id: "vuln", name: "漏洞验证与打点", desc: "Nday/1day、未授权、Web 漏洞链" },
-    { id: "shell", name: "WebShell 与隧道", desc: "冰蝎/哥斯拉马、suo5 socks5" },
-    { id: "lateral", name: "内网横向", desc: "凭据复用、域内枚举、跳板" },
-    { id: "report", name: "战果与报告", desc: "攻击链、复现命令、证据截图" },
+    { id: "recon", name: "侦察与资产测绘", desc: "被动/主动收集、指纹识别、资产落库", skills: ["passive-recon", "fofa-recon", "recon-pipeline", "active-scan", "web-fingerprint", "asset-correlation"] },
+    { id: "vuln", name: "漏洞验证与打点", desc: "Nday/1day、未授权、Web 漏洞链", skills: ["nuclei-scan", "unauth-exploit", "dir-bruteforce", "java-deserialization", "vuln-intel"] },
+    { id: "shell", name: "WebShell 与隧道", desc: "冰蝎/哥斯拉马、suo5 socks5", skills: ["webshell-toolkit", "suo5-tunnel", "chisel-tunnel"] },
+    { id: "lateral", name: "内网横向", desc: "凭据复用、域内枚举、跳板", skills: ["gogo-intranet", "fscan-intranet", "credential-attack", "lateral-movement", "privesc", "ad-attack"] },
+    { id: "report", name: "战果与报告", desc: "攻击链、复现命令、证据截图", skills: ["kb-maintenance", "opsec-hide"] },
   ] },
   { id: "recon", name: "侦察刀", desc: "被动收集、资产测绘、指纹识别；只读，不碰目标。", agents: ["dsh", "autokill"], items: [
-    { id: "passive", name: "被动收集", desc: "FOFA / crt.sh / 备案 / 被动 DNS" },
-    { id: "fingerprint", name: "指纹识别", desc: "框架、中间件、CMS、组件版本" },
-    { id: "asset-graph", name: "资产图谱", desc: "域名↔IP↔C 段↔证书↔服务" },
-    { id: "surface", name: "攻击面清单", desc: "边缘资产、未备案、暴露服务" },
+    { id: "passive", name: "被动收集", desc: "FOFA / crt.sh / 备案 / 被动 DNS", skills: ["passive-recon", "fofa-recon"] },
+    { id: "fingerprint", name: "指纹识别", desc: "框架、中间件、CMS、组件版本", skills: ["web-fingerprint", "asset-correlation"] },
+    { id: "asset-graph", name: "资产图谱", desc: "域名↔IP↔C 段↔证书↔服务", skills: ["asset-correlation", "recon-pipeline"] },
+    { id: "surface", name: "攻击面清单", desc: "边缘资产、未备案、暴露服务", skills: ["active-scan", "nuclei-scan"] },
   ] },
   { id: "lateral", name: "内网横向", desc: "隧道、凭据、域内枚举；要求受控权限。", agents: ["dsh"], items: [
-    { id: "tunnel", name: "隧道代理", desc: "suo5 / chisel / frp 出网" },
-    { id: "cred", name: "凭据获取与复用", desc: "抓取、喷洒、PtH" },
-    { id: "ad-enum", name: "域内枚举", desc: "BloodHound、Kerberoast、ACL" },
-    { id: "privesc", name: "提权", desc: "配置类优先，内核最后" },
+    { id: "tunnel", name: "隧道代理", desc: "suo5 / chisel / frp 出网", skills: ["suo5-tunnel", "chisel-tunnel", "frp-tunnel"] },
+    { id: "cred", name: "凭据获取与复用", desc: "抓取、喷洒、PtH", skills: ["credential-attack", "lateral-movement"] },
+    { id: "ad-enum", name: "域内枚举", desc: "BloodHound、Kerberoast、ACL", skills: ["ad-attack", "lateral-movement"] },
+    { id: "privesc", name: "提权", desc: "配置类优先，内核最后", skills: ["privesc", "av-evasion"] },
   ] },
   { id: "radio", name: "无线电 / IoT", desc: "BLE、RFID、固件；偏硬件，动作小。", agents: ["mengbot"], items: [
-    { id: "ble", name: "BLE 抓包与重放", desc: "HCI 抓包、service/characteristic 还原" },
-    { id: "rfid", name: "RFID / 门禁", desc: "读卡、克隆、重放" },
-    { id: "firmware", name: "固件解包", desc: "ubifs / squashfs、CGI 审计" },
+    { id: "ble", name: "BLE 抓包与重放", desc: "HCI 抓包、service/characteristic 还原", skills: ["iot-ble"] },
+    { id: "rfid", name: "RFID / 门禁", desc: "读卡、克隆、重放", skills: ["iot-ble"] },
+    { id: "firmware", name: "固件解包", desc: "ubifs / squashfs、CGI 审计", skills: ["iot-router"] },
   ] },
   { id: "re", name: "逆向研究", desc: "样本、二进制、协议；本地隔离，只读原件。", agents: ["autokill"], items: [
-    { id: "static", name: "静态逆向", desc: "r2 / Ghidra、符号与交叉引用" },
-    { id: "dynamic", name: "动态调试", desc: "x64dbg / Frida、断点与 hook" },
-    { id: "unpack", name: "脱壳与样本", desc: "加壳识别、dump、IAT 修复" },
-    { id: "protocol", name: "协议还原", desc: "C2 协议、加密字段、重放" },
+    { id: "static", name: "静态逆向", desc: "r2 / Ghidra、符号与交叉引用", skills: ["binary-re", "re-arsenal"] },
+    { id: "dynamic", name: "动态调试", desc: "x64dbg / Frida、断点与 hook", skills: ["re-arsenal", "mobile-re"] },
+    { id: "unpack", name: "脱壳与样本", desc: "加壳识别、dump、IAT 修复", skills: ["unpacking", "unpacking"] },
+    { id: "protocol", name: "协议还原", desc: "C2 协议、加密字段、重放", skills: ["binary-re", "jsvmp-reverse"] },
   ] },
   { id: "custom", name: "自定义", desc: "自己选智能体、权限与备注。", agents: [], items: [] },
 ];
@@ -3932,20 +3932,62 @@ function equipChosenItems() {
   return e.items.filter((id) => all.includes(id));
 }
 
+/* 预设该带哪几条红队工作流（记忆里的索引卡标题，见 scripts/seed-redteam-memory.mjs） */
+const PRESET_WORKFLOWS = {
+  redteam: [
+    "红队工作流：信息收集（recon）",
+    "红队工作流：漏洞发现与打点（vuln-scan）",
+    "红队工作流：权限获取与内网突破（exploit → pivot）",
+    "红队工作流：战果沉淀与报告（report）",
+  ],
+  recon: ["红队工作流：信息收集（recon）"],
+  lateral: ["红队工作流：权限获取与内网突破（exploit → pivot）"],
+  radio: [],
+  re: [],
+  custom: [],
+};
+
+/* 当前装备会加载的技能 + 跟的工作流 */
+function equipPlan() {
+  const e = S.equip;
+  const p = PRESETS.find((x) => x.id === e.preset) || PRESETS[0];
+  const chosen = Array.isArray(e.items) && e.items.length ? e.items.filter((id) => (p.items || []).some((it) => it.id === id)) : (p.items || []).map((it) => it.id);
+  const skills = [];
+  for (const it of p.items || []) {
+    if (!chosen.includes(it.id)) continue;
+    for (const s of it.skills || []) if (!skills.includes(s)) skills.push(s);
+  }
+  return { preset: p, items: chosen, skills: skills, workflows: PRESET_WORKFLOWS[p.id] || [] };
+}
+
 function equipConfig(item) {
   if (item) {
+    const p = PRESETS.find((x) => x.id === item.preset) || PRESETS[0];
+    const chosen = Array.isArray(item.items) && item.items.length ? item.items : (p.items || []).map((it) => it.id);
+    const skills = [];
+    for (const it of p.items || []) {
+      if (!chosen.includes(it.id)) continue;
+      for (const s of it.skills || []) if (!skills.includes(s)) skills.push(s);
+    }
     return {
       preset: item.preset || "",
       agents: Array.isArray(item.agents) ? item.agents : [],
       permissions: item.permissions || "read-only",
+      items: chosen,
+      skills: skills,
+      workflows: PRESET_WORKFLOWS[item.preset] || [],
       memory_endpoint: "/api/assign/<agent>.md",
       notes: item.notes || "",
     };
   }
+  const plan = equipPlan();
   return {
     preset: S.equip.preset,
     agents: equipAgents(true),
     permissions: S.equip.permissions,
+    items: plan.items,
+    skills: plan.skills,
+    workflows: plan.workflows,
     memory_endpoint: "/api/assign/<agent>.md",
     notes: S.equip.notes,
   };
@@ -4017,12 +4059,13 @@ function renderEquip() {
     <section class="section" aria-labelledby="h-items">
       <h2 id="h-items"><span class="num">1+</span>装备哪些能力<span class="count">${chosenItems.length} / ${presetItems.length} 项</span></h2>
       ${presetItems.length
-        ? `<p class="hint">勾选后才装：不勾的这项不会出现在配置里。</p>
+        ? `<p class="hint">勾选后才装：不勾的这项不会出现在配置里；每项后面是它会加载的技能。</p>
           <div class="grid models">${presetItems.map((it) => {
             const on = chosenItems.includes(it.id);
             return `<button type="button" class="pick" data-equip-item="${esc(it.id)}" data-focus="eitem-${esc(it.id)}" aria-pressed="${on}">
                 <span class="pick-top"><span class="pick-name">${esc(it.name)}</span>${on ? badge("装", "accent") : ""}</span>
                 <span class="pick-note">${esc(it.desc)}</span>
+                ${(it.skills || []).length ? `<span class="pick-meta">${esc((it.skills || []).join(" · "))}</span>` : ""}
               </button>`;
           }).join("")}</div>
           <div class="actions" style="margin-top:8px">
@@ -4030,6 +4073,13 @@ function renderEquip() {
             <button type="button" class="ghost" data-equip-none>全不选</button>
           </div>`
         : `<p class="hint">这个包没有预置能力项（自定义包请直接用备注写清要装什么）。</p>`}
+      ${equipPlan().skills.length ? `<div class="card soft" style="margin-top:10px">
+        <div class="s-row"><div class="s-row-main"><strong>这套会加载 ${equipPlan().skills.length} 个技能</strong>
+          <span class="mono small">${esc(equipPlan().skills.join(" · "))}</span></div></div>
+        ${equipPlan().workflows.length ? `<div class="s-row"><div class="s-row-main"><strong>跟这 ${equipPlan().workflows.length} 条工作流</strong>
+          <span class="mono small">${esc(equipPlan().workflows.join(" · "))}</span></div></div>` : ""}
+        <p class="hint">技能正文由 skill 工具按需加载；这些工作流与技能索引卡在记忆库里（memory_recall 可命中）。</p>
+      </div>` : ""}
     </section>
 
     <section class="section" aria-labelledby="h-agents">
