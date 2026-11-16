@@ -696,9 +696,13 @@ async function ensureMode(mode) {
 // ---- 断言 ---------------------------------------------------------------------
 
 async function assert1() {
-  // 首屏可能先出骨架再异步重绘，等主按钮落地再断言
-  await page.waitFor(inPage("return document.querySelector('#sBuild') ? true : null;"), { timeout: 10000, interval: 120 }).catch(() => null);
-  await page.navigate(BASE + '/', { settle: 900 });
+  // 私有部署：根地址（无 hash）固定落到 #/memory，先进记忆库再回破甲页断言
+  await page.navigate(BASE + '/', { settle: 1200 });
+  await page.waitFor(inPage("return location.hash === '#/memory' || document.querySelector('#sBuild') ? true : null;"), { timeout: 12000, interval: 150 }).catch(() => null);
+  const landedHash = await page.evalJS('location.hash', 4000).catch(() => null);
+  const landedEmbed = await page.evalJS(inPage("return !!document.querySelector('#main iframe') ? true : null;"), 4000).catch(() => null);
+  await page.gotoHash('#/breach');
+  await page.waitFor(inPage("return document.querySelector('#sBuild') ? true : null;"), { timeout: 12000, interval: 120 }).catch(() => null);
   const s = await readMode();
   const snap = s.snapshot;
   const text = snap.text;
@@ -711,7 +715,7 @@ async function assert1() {
   const navOk = snap.navCount === 6;
   const simOk = s.mode === 'simple';
   if (hasOneClick && hasModel && navOk && simOk && !wizard) {
-    return ok(`落到 ${snap.hash || '/'}；模式 ${s.mode}（${s.how}）；导航 ${snap.navCount} 项 [${snap.nav.join(' · ')}]；含「一键生成」+ 模型入口；无设置向导`);
+    return ok(`根地址落地 ${landedHash}${landedEmbed ? '（记忆库 iframe 已挂）' : ''} → 破甲页 ${snap.hash || ''}；模式 ${s.mode}（${s.how}）；导航 ${snap.navCount} 项 [${snap.nav.join(' · ')}]；含「一键生成」+ 模型入口；无设置向导`);
   }
   return bad(
     [
@@ -720,6 +724,7 @@ async function assert1() {
       `导航项=${snap.navCount}(期望6)[${snap.nav.join('·')}]`,
       `模式=${s.mode}(${s.how})`,
       `含设置向导=${wizard}`,
+      `根地址落地=${landedHash}(iframe=${landedEmbed})`,
       `页面文本前 300：${clip(text, 300)}`,
     ].join('；'),
   );

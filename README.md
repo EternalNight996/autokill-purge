@@ -175,3 +175,20 @@ node "...\bin\dsh-memory.mjs" peer upload --to XXXX-XXXX
 `assets/autokill-purge.ico`（16–256 多尺寸）：参考 mengbot 的「水果角色」风格做的拟物图标 ——
 深色圆角底板 + 亮橙榴莲（短刺硬壳 = 破甲）+ 萌表情与腮红 + 顶部绿叶，配色走控制台的军工橙。
 生成脚本参数留在提交里，改配色/表情重跑即可。
+
+## 私有部署（固定入口 / 库名 / 端口）
+
+`
+入口      http://127.0.0.1:8792/#/memory      ← 打开根地址会自动落到这里
+控制台    8792
+记忆库    7989（库名 mem-purge，vault ~/.dsh/memory-vault-mem-purge）
+`
+
+这三项在 web/server.mjs 的 PRIVATE 常量里写死，/api/state 会下发 deploy 字段给前端：
+
+- memBase() 私有部署下**强制**走 7989，不会因为 state.json 里留下旧地址而连到运营库 7999；
+- 打开 http://127.0.0.1:8792/（无 hash）时，oot() 按 deploy.entryHash 落到 #/memory；
+- 设置页的「记忆服务地址」显示为只读，并标出库名 / 端口 / 固定入口；
+- 桌面快捷方式与开机自启的启动器也打开这个地址（scripts/launch.mjs 的 PURGE_ENTRY 可覆盖）。
+
+要改成别的部署（比如换端口），改 PRIVATE 常量与 MEM_ISOLATED 即可；运营库（7999）始终不受影响。

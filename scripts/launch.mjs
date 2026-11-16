@@ -94,7 +94,9 @@ async function main() {
   }
 
   // 3) 打开浏览器
-  const url = `http://127.0.0.1:${WEB_PORT}`;
+  // 私有部署固定入口：直接进记忆库
+  const ENTRY = process.env.PURGE_ENTRY || `http://127.0.0.1:${WEB_PORT}/#/memory`;
+  const url = ENTRY;
   if (!NO_OPEN) {
     try {
       spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref();

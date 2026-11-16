@@ -784,6 +784,7 @@ function setStatus(kind, text, title = "") {
 
 function applyState(data) {
   if (!data) return;
+  S.deploy = data.deploy || null;
   S.state = data.state || {};
   S.version = data.version || S.version;
   S.agreementVersion = data.agreementVersion || (S.state.agreement && S.state.agreement.version) || S.agreementVersion || "—";
@@ -1008,6 +1009,10 @@ async function boot() {
       return;
     }
     hideAgreement();
+    // 私有部署固定入口：打开根地址（没有 hash）时直接落到 #/memory
+    if (!location.hash && S.deploy && S.deploy.entryHash) {
+      location.hash = S.deploy.entryHash;
+    }
     renderPage();
     setStatus("loading", "记忆中心检查中…");
     refreshMemoryStatus();
@@ -1061,9 +1066,19 @@ function normalizeStats(data) {
   };
 }
 
+function defaultTab() {
+  // 私有部署：固定入口是 #/memory（服务端 deploy.entryHash 下发）
+  const d = S.deploy;
+  if (d && d.entryHash) {
+    const h = String(d.entryHash).replace(/^#\/?/, "");
+    if (TABS.includes(h)) return h;
+  }
+  return "breach";
+}
+
 function tabFromHash() {
   const raw = String(location.hash || "").replace(/^#\/?/, "").split("?")[0];
-  return TABS.includes(raw) ? raw : "breach";
+  return TABS.includes(raw) ? raw : defaultTab();
 }
 
 function setNav() {
@@ -5463,10 +5478,11 @@ function renderSettings() {
     <section class="section" aria-labelledby="h-s-runtime">
       <h2 id="h-s-runtime"><span class="num">2</span>路径与文件 ${badge("高级", "warn")}</h2>
       <form id="runtimeForm" class="card" novalidate>
-        <label class="field"><span>记忆服务地址</span>
-          <input id="sBase" data-focus="sBase" type="text" value="${esc(val("memoryBase", s.memoryBase))}" placeholder="http://127.0.0.1:7989/memory-eternal/api" spellcheck="false">
-          ${fieldDefault("memoryBase", val("memoryBase", s.memoryBase), FIELD_DEFAULTS.memoryBase)}
-          <span class="help">本控制台默认走独立库：端口 7989 · 库名 mem-purge（vault = ~/.dsh/memory-vault-mem-purge），与运营库（7999）完全隔离。</span>
+        <label class="field"><span>记忆服务地址${S.deploy && S.deploy.private ? "（私有部署 · 已锁定）" : ""}</span>
+          <input id="sBase" data-focus="sBase" type="text" value="${esc(val("memoryBase", s.memoryBase))}" placeholder="http://127.0.0.1:7989/memory-eternal/api" spellcheck="false"${S.deploy && S.deploy.private ? " readonly" : ""}>
+          ${S.deploy && S.deploy.private
+            ? `<span class="help">私有部署固定：库名 <strong>${esc(S.deploy.dbName)}</strong> · 端口 <strong>${esc(String(S.deploy.memoryPort))}</strong> · 固定入口 <a href="${esc(S.deploy.entryUrl)}" target="_blank" rel="noopener">${esc(S.deploy.entryUrl)}</a>；与运营库（7999）完全隔离，这一项不可改。</span>`
+            : `${fieldDefault("memoryBase", val("memoryBase", s.memoryBase), FIELD_DEFAULTS.memoryBase)}<span class="help">本地优先；填远端地址即切到云端。</span>`}
         </label>
         <label class="field"><span>匹配码（可选）</span>
           <input id="sMatch" data-focus="sMatch" type="text" maxlength="128" value="${esc(val("matchCode", s.matchCode))}" placeholder="等待 memory-eternal 下发">
@@ -5794,7 +5810,11 @@ function resetField(what) {
 function init() {
   const start = tabFromHash();
   S.tab = start;
-  try { history.replaceState(null, "", "#/" + start); } catch { /* file:// */ }
+  // 地址栏本来就没 hash 时先别写死：私有部署的默认页要等 /api/state 回来，
+  // 由 boot() 按 deploy.entryHash 落到 #/memory。已有 hash 才做规范化。
+  if (location.hash) {
+    try { history.replaceState(null, "", "#/" + start); } catch { /* file:// */ }
+  }
 
   const check = $("#agreeCheck");
   if (check) check.addEventListener("change", () => {

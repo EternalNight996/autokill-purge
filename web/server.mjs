@@ -271,7 +271,21 @@ function redact(state) {
 // 与运营库（7999 / ~/.dsh/memory-vault）完全隔离，互不写入。
 const MEM_ISOLATED = { port: 7989, dbName: 'mem-purge', vault: 'memory-vault-mem-purge' };
 
-function memBase(state) { return String(state.settings.memoryBase || DEFAULT_STATE.settings.memoryBase).replace(/\/+$/, ''); }
+// 私有部署：入口、库名、端口写死在代码里，不跟 state.json 漂移
+const PRIVATE = {
+  enabled: true,
+  entryUrl: 'http://127.0.0.1:8792/#/memory',
+  webPort: 8792,
+  memoryPort: MEM_ISOLATED.port,
+  dbName: MEM_ISOLATED.dbName,
+  memoryBase: 'http://127.0.0.1:' + MEM_ISOLATED.port + '/memory-eternal/api',
+};
+
+function memBase(state) {
+  // 私有部署下固定走隔离库，避免误连到运营库 7999
+  if (PRIVATE.enabled) return PRIVATE.memoryBase;
+  return String(state.settings.memoryBase || DEFAULT_STATE.settings.memoryBase).replace(/\/+$/, '');
+}
 
 function memHeaders(state) {
   const h = { 'content-type': 'application/json' };
@@ -611,7 +625,17 @@ async function handleApi(req, res, url, state) {
       state: redact(state), models: mergeLiveModels(MODELS, live), layers: LAYERS, techniques: TECHNIQUES,
       modelsLive: { ok: live.ok !== false, detectedAt: live.detectedAt || null, count: live.count || 0, default: live.default || null, sources: live.sources || [], error: live.error || null },
       prompts: PROMPTS.map((x) => ({ id: x.id, name: x.name, note: x.note, source: x.source, scopes: x.scopes })),
-      outputChoices: OUTPUT_CHOICES, taskPresets: TASK_PRESETS
+      outputChoices: OUTPUT_CHOICES, taskPresets: TASK_PRESETS,
+      // 私有部署：固定入口 + 库名 + 端口（前端据此决定默认落哪一页、怎么显示）
+      deploy: {
+        private: PRIVATE.enabled,
+        entryUrl: PRIVATE.entryUrl,
+        entryHash: '#/memory',
+        webPort: PRIVATE.webPort,
+        memoryPort: PRIVATE.memoryPort,
+        dbName: PRIVATE.dbName,
+        memoryBase: PRIVATE.memoryBase,
+      },
     });
   }
   if (p === '/api/models/live' && method === 'GET') {
