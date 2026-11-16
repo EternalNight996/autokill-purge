@@ -170,6 +170,7 @@ const S = {
     drill: { data: null, legal: null, busy: false, signer: "", error: null },
     pendingAction: null,
     busyKind: null,
+    lastResult: null,
     netScopeDraft: null,
     loading: false, tried: false, error: null, busy: false, message: "",
     promptDraft: null, promptDirty: false,
@@ -1132,11 +1133,25 @@ async function simpleHostAction(kind) {
       h.message = `卸载完成：${u.applied ? "宿主已还原，" : ""}${(u.stripped || []).length} 个 profile 已清理${(u.errors || []).length ? "，有 " + u.errors.length + " 条警告" : ""}。重启 dsh 生效。`;
     }
     toast(kind === "apply" ? "注入完成" : "卸载完成");
+    h.lastResult = { kind: kind, ok: true, at: Date.now() };
+    setTimeout(() => {
+      if (S.host.lastResult && S.host.lastResult.kind === kind) {
+        S.host.lastResult = null;
+        if (S.tab === "breach") renderPage();
+      }
+    }, 5200);
     S.host.tried = false;
     await loadHostStatus(true);
   } catch (e) {
     h.error = e;
     h.message = simpleReason(e);
+    h.lastResult = { kind: kind, ok: false, at: Date.now() };
+    setTimeout(() => {
+      if (S.host.lastResult && S.host.lastResult.kind === kind) {
+        S.host.lastResult = null;
+        if (S.tab === "breach") renderPage();
+      }
+    }, 5200);
     toast("失败：" + simpleReason(e));
   } finally {
     h.busy = false;
@@ -2157,13 +2172,29 @@ function renderFlowApplyStep() {
       </div>
     </details>` : "";
   const pend = (kind) => !!(h.pendingAction && h.pendingAction.kind === kind && Date.now() - h.pendingAction.at < 6000);
+  // 按钮状态色：空闲(蓝) → 待确认(橙) → 执行中(灰) → 成功(绿)/失败(红，5 秒后回正)
+  const btnTone = (kind) => {
+    if (h.busy && h.busyKind === kind) return "busy";
+    if (pend(kind)) return "warn";
+    const r = h.lastResult;
+    if (r && r.kind === kind && Date.now() - r.at < 5000) return r.ok ? "success" : "fail";
+    return "";
+  };
+  const toneText = (kind, idle) => {
+    const t = btnTone(kind);
+    if (t === "busy") return kind === "apply" ? "注入中…" : "卸载中…";
+    if (t === "warn") return kind === "apply" ? "再点一次确认注入" : "再点一次确认卸载";
+    if (t === "success") return "✓ 已完成";
+    if (t === "fail") return "✗ 失败，看下面";
+    return idle;
+  };
   return `<section class="section" aria-labelledby="f-apply-h">
     <h2 id="f-apply-h"><span class="num">3</span>注入 / 卸载 / 还原
       <span class="count">${fmtNum(c.applied || 0)}/${fmtNum(c.total || 0)} 已注入${c.failed ? ` · ${c.failed} 失败` : ""} · 备份 ${snaps.length}</span></h2>
     <div class="actions">
-      <button type="button" class="${pend("apply") ? "primary warn" : "primary"}" data-simple-host="apply"${busy || !authorized ? " disabled" : ""}>${busy && h.busyKind === "apply" ? "注入中…" : (pend("apply") ? "再点一次确认注入" : "一键注入")}</button>
-      <button type="button" class="${pend("uninstall") ? "ghost warn" : "ghost"}" data-simple-host="uninstall"${busy || !authorized ? " disabled" : ""}>${busy && h.busyKind === "uninstall" ? "卸载中…" : (pend("uninstall") ? "再点一次确认卸载" : "一键卸载")}</button>
-      <span class="hint">点一次先确认、再点一次执行；注入前自动备份，卸载会先还原宿主再清插件文件。</span>
+      <button type="button" class="primary ${btnTone("apply")}" data-simple-host="apply"${busy || !authorized ? " disabled" : ""}>${toneText("apply", "一键注入")}</button>
+      <button type="button" class="ghost ${btnTone("uninstall")}" data-simple-host="uninstall"${busy || !authorized ? " disabled" : ""}>${toneText("uninstall", "一键卸载")}</button>
+      <span class="hint">点一次先确认（橙）、再点一次执行（灰）；注入前自动备份，卸载会先还原宿主再清插件文件。</span>
     </div>
     ${pend("apply") || pend("uninstall") ? `<div class="alert warn" role="alert"><strong>再点一次同一个按钮才会执行</strong><span class="hint">${pend("apply") ? "注入会改本机 dsh 安装，重启后生效。" : "卸载会还原宿主并删掉三处插件文件，之后要重装才能再用。"}</span></div>` : ""}
     ${gate}

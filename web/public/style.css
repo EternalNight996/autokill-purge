@@ -811,3 +811,60 @@ textarea.shake {
   border-color: #d29922 !important;
   color: #d29922 !important;
 }
+
+/* 按钮状态色：空闲(原色) → 待确认(橙，呼吸) → 执行中(灰) → 成功(绿) / 失败(红) */
+@keyframes ap-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(210, 153, 34, 0.45); }
+  50% { box-shadow: 0 0 0 6px rgba(210, 153, 34, 0); }
+}
+.primary.warn {
+  background: #d29922 !important;
+  border-color: #d29922 !important;
+  color: #1b1200 !important;
+  animation: ap-pulse 1.2s ease-in-out infinite;
+}
+.ghost.warn {
+  border-color: #d29922 !important;
+  color: #d29922 !important;
+  animation: ap-pulse 1.2s ease-in-out infinite;
+}
+.primary.busy,
+.ghost.busy {
+  background: #4b5563 !important;
+  border-color: #4b5563 !important;
+  color: #e5e7eb !important;
+  cursor: wait;
+  opacity: 0.85;
+}
+.primary.success {
+  background: #2ea043 !important;
+  border-color: #2ea043 !important;
+  color: #ffffff !important;
+}
+.ghost.success {
+  border-color: #2ea043 !important;
+  color: #2ea043 !important;
+}
+.primary.fail {
+  background: #f85149 !important;
+  border-color: #f85149 !important;
+  color: #ffffff !important;
+}
+.ghost.fail {
+  border-color: #f85149 !important;
+  color: #f85149 !important;
+}
+
+/* ghost 按钮的状态色要有可见底色（否则深色背景上只剩描边，变化不明显） */
+.ghost.warn {
+  background: rgba(210, 153, 34, 0.18) !important;
+}
+.ghost.success {
+  background: rgba(46, 160, 67, 0.18) !important;
+}
+.ghost.fail {
+  background: rgba(248, 81, 73, 0.18) !important;
+}
+.ghost.busy {
+  background: rgba(75, 85, 99, 0.35) !important;
+}
