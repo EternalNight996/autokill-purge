@@ -15,6 +15,7 @@ import { detectLiveModels } from './models-live.mjs';
 import { kbStats, searchPoc, readPoc, searchNotes, readNote, recentPoc } from './kb.mjs';
 import { listIntelReports, readIntelReport, runIntelSweep } from './intel.mjs';
 import { readDrill, grantDrill, revokeDrill, drillLegal } from './drill.mjs';
+import { readMcpConfig, saveMcpServer, deleteMcpServer, testMcpServer, testSavedServer, exportMcpConfig } from './mcp.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -965,6 +966,44 @@ async function handleApi(req, res, url, state) {
       try { return send(res, 200, await revokeDrill(DATA_DIR)); }
       catch (e) { return send(res, 500, { ok: false, error: 'drill_revoke_failed', detail: publicError(e) }); }
     });
+  }
+
+  // ---- MCP 服务器管理（~/.dsh/mcp-servers.json，可真握手测试） --------------------------
+  if (p === '/api/mcp' && method === 'GET') {
+    try { return send(res, 200, await readMcpConfig()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'mcp_read_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/mcp/export' && method === 'GET') {
+    try { return send(res, 200, await exportMcpConfig()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'mcp_export_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/mcp/save' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try { return send(res, 200, await saveMcpServer(body)); }
+      catch (e) { return send(res, 400, { ok: false, error: 'mcp_save_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/mcp/delete' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try { return send(res, 200, await deleteMcpServer(String(body.name || ''))); }
+      catch (e) { return send(res, 400, { ok: false, error: 'mcp_delete_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/mcp/test' && method === 'POST') {
+    const body = await bodyOf(req);
+    try {
+      // 传 name 就测已保存的；传 command/url 就测表单里还没保存的
+      const r = body.name && !body.command && !body.url
+        ? await testSavedServer(String(body.name))
+        : await testMcpServer({ command: body.command, args: body.args, env: body.env, url: body.url });
+      return send(res, 200, r);
+    } catch (e) {
+      return send(res, 500, { ok: false, error: 'mcp_test_failed', detail: publicError(e) });
+    }
   }
 
   // breach (FR-2)

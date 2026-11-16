@@ -16,8 +16,8 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const cx = (...parts) => parts.filter(Boolean).join(" ");
 
-const TABS = ["breach", "equip", "assign", "memory", "intel", "drill", "settings", "about"];
-const TAB_LABEL = { breach: "破甲", equip: "装备", assign: "记忆分发", memory: "记忆中心", intel: "情报巡检", drill: "演练台", settings: "设置", about: "关于" };
+const TABS = ["breach", "equip", "assign", "memory", "mcp", "intel", "drill", "settings", "about"];
+const TAB_LABEL = { breach: "破甲", equip: "装备", assign: "记忆分发", memory: "记忆中心", mcp: "MCP", intel: "情报巡检", drill: "演练台", settings: "设置", about: "关于" };
 
 /* ------------------------------------------------------- two-layer UI (contract §2) */
 const NAV_BY_MODE = {
@@ -980,8 +980,8 @@ function mountThemeDots() {
 }
 
 function initTheme() {
-  let saved = "terminal";
-  try { saved = localStorage.getItem(THEME_KEY) || "terminal"; } catch { /* 忘记就终端黑 */ }
+  let saved = "ops";
+  try { saved = localStorage.getItem(THEME_KEY) || "ops"; } catch { /* 忘记就军工橙 */ }
   applyTheme(saved, false);
   mountThemeDots();
 }
@@ -1155,6 +1155,7 @@ function renderPage() {
     else if (S.tab === "equip") renderEquip();
     else if (S.tab === "assign") renderWipPage("assign");
     else if (S.tab === "memory") renderMemory();
+    else if (S.tab === "mcp") renderMcpPage();
     else if (S.tab === "intel") renderWipPage("intel");
     else if (S.tab === "drill") renderWipPage("drill");
     else if (S.tab === "settings") renderSettings();
@@ -2480,6 +2481,235 @@ function renderFlowPatchList() {
 }
 
 /* 原版面板另外三栏：规则集 / 出口白名单 / 技能（都落在 ~/.dsh 下，写前自动备份） */
+/* ============================================================ MCP 服务器管理 */
+function mcpState() {
+  if (!S.mcp) {
+    S.mcp = {
+      loading: false, loaded: false, error: null, path: "",
+      servers: [], test: {}, editor: { open: false, name: "", command: "", args: "", env: "", url: "", note: "" },
+      busy: "", message: "",
+    };
+  }
+  return S.mcp;
+}
+
+async function loadMcp(force = false) {
+  const m = mcpState();
+  if (m.loading || (m.loaded && !force)) return;
+  m.loading = true;
+  m.error = null;
+  try {
+    const d = await request("/api/mcp");
+    if (d && d.ok === false) throw payloadError(d, "读取失败");
+    m.servers = (d && d.servers) || [];
+    m.path = (d && d.path) || "";
+    m.loaded = true;
+  } catch (e) {
+    m.error = e;
+  } finally {
+    m.loading = false;
+    if (S.tab === "mcp") renderPage();
+  }
+}
+
+function mcpServers() {
+  return mcpState().servers || [];
+}
+
+async function mcpSave() {
+  const m = mcpState();
+  const ed = m.editor;
+  if (!String(ed.name || "").trim()) { toast(L("先写个名字", "Name is required")); return; }
+  if (!String(ed.command || "").trim() && !String(ed.url || "").trim()) {
+    toast(L("要么填命令（stdio），要么填 URL（http）", "Provide a command or a URL"));
+    return;
+  }
+  m.busy = "save";
+  m.message = "";
+  renderPage();
+  try {
+    const d = await request("/api/mcp/save", {
+      method: "POST",
+      body: {
+        confirm: true, name: ed.name, command: ed.command, args: ed.args, env: ed.env,
+        url: ed.url, note: ed.note, enabled: true,
+      },
+    });
+    if (!d || d.ok === false) throw payloadError(d, "保存失败");
+    toast(L("已保存", "Saved"));
+    m.editor = { open: false, name: "", command: "", args: "", env: "", url: "", note: "" };
+    await loadMcp(true);
+  } catch (e) {
+    m.error = e;
+  } finally {
+    m.busy = "";
+    renderPage();
+  }
+}
+
+async function mcpTest(name) {
+  const m = mcpState();
+  m.busy = "test:" + name;
+  m.test = Object.assign({}, m.test);
+  renderPage();
+  try {
+    const d = await request("/api/mcp/test", { method: "POST", body: { name: name } });
+    m.test[name] = d || { ok: false, error: "empty" };
+  } catch (e) {
+    m.test[name] = { ok: false, error: simpleReason(e) };
+  } finally {
+    m.busy = "";
+    renderPage();
+  }
+}
+
+async function mcpDelete(name) {
+  const m = mcpState();
+  if (!window.confirm(L("删除 " + name + "？（会先备份配置文件）", "Delete " + name + "? (config is backed up first)"))) return;
+  m.busy = "del:" + name;
+  renderPage();
+  try {
+    const d = await request("/api/mcp/delete", { method: "POST", body: { confirm: true, name: name } });
+    if (!d || d.ok === false) throw payloadError(d, "删除失败");
+    delete m.test[name];
+    await loadMcp(true);
+  } catch (e) {
+    m.error = e;
+  } finally {
+    m.busy = "";
+    renderPage();
+  }
+}
+
+async function mcpCopyExport() {
+  try {
+    const d = await request("/api/mcp/export");
+    if (!d || !d.ok) throw new Error("导出失败");
+    await copyText(d.json);
+    toast(L("已复制 " + d.count + " 个 server 的 JSON（可粘进 Claude Desktop / Cursor）", "Copied " + d.count + " servers as JSON"));
+  } catch (e) { toast(simpleReason(e)); }
+}
+
+function renderMcpPage() {
+  const m = mcpState();
+  if (!m.loaded && !m.loading) loadMcp();
+  const ed = m.editor;
+  const rows = mcpServers().map((s) => {
+    const t = m.test[s.name];
+    const tone = t ? (t.ok ? "good" : "bad") : "";
+    const toneText = t
+      ? (t.ok ? `${t.toolCount != null ? t.toolCount + " 个工具" : "握手通过"}${t.protocolVersion ? " · " + t.protocolVersion : ""}` : (t.error || "失败"))
+      : "未测试";
+    return `<div class="s-row">
+      <div class="s-row-main">
+        <span class="mcp-line"><strong>${esc(s.name)}</strong>${badge(s.transport, "")}${badge(toneText, tone)}${s.enabled ? "" : badge(L("已停用", "disabled"), "warn")}</span>
+        <span class="mono small">${esc(s.transport === "http" ? s.url : [s.command].concat(s.args || []).join(" "))}</span>
+        ${t && t.ok && (t.tools || []).length ? `<span class="mono small muted">${esc(t.tools.join(" · "))}</span>` : ""}
+      </div>
+      <div class="actions">
+        <button type="button" class="small" data-mcp-test="${esc(s.name)}"${m.busy === "test:" + s.name ? " disabled" : ""}>${m.busy === "test:" + s.name ? "测…" : "测试"}</button>
+        <button type="button" class="small" data-mcp-edit="${esc(s.name)}">编辑</button>
+        <button type="button" class="small" data-mcp-del="${esc(s.name)}">删除</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  $("#page").innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">CONTROL · 05</p>
+        <h1>MCP</h1>
+        <p class="lead">${L(
+          "管理本机 MCP 服务器：stdio 命令或 HTTP 端点，保存后可真握手测试（initialize → tools/list），并导出成 Claude Desktop / Cursor 能直接吃的 JSON。",
+          "Manage local MCP servers (stdio command or HTTP endpoint). Test does a real handshake (initialize → tools/list) and you can export JSON for Claude Desktop / Cursor.",
+        )}</p>
+      </div>
+      <div class="head-meta">${badge(mcpServers().length + " 个", "")}${badge("配置文件", "accent")}</div>
+    </div>
+
+    <section class="section">
+      <h2><span class="num">1</span>服务器<span class="count">${esc(m.path || "~/.dsh/mcp-servers.json")}</span></h2>
+      ${m.error ? alertBox(L("读取失败", "Failed to read"), simpleReason(m.error)) : ""}
+      ${m.loading && !m.loaded ? spinner(L("读取配置…", "Loading…")) : (rows || emptyState(L("还没有 MCP 服务器", "No MCP servers yet"), L("点下面新建一个。", "Create one below.")))}
+      <div class="actions" style="margin-top:10px">
+        <button type="button" class="primary" data-mcp-new>${ed.open ? L("收起表单", "Hide form") : L("新建 / 编辑", "New / edit")}</button>
+        <button type="button" class="ghost" data-mcp-export>${L("复制导出 JSON", "Copy export JSON")}</button>
+        <span class="hint">${L("改完要重启 dsh，DSH 侧的 MCP 客户端才会重新读配置。", "Restart dsh afterwards so the MCP client reloads this file.")}</span>
+      </div>
+    </section>
+
+    ${ed.open ? `<section class="section">
+      <h2><span class="num">2</span>${L("新增 / 覆盖", "Create / overwrite")}<span class="count">${esc(ed.name || "未命名")}</span></h2>
+      <div class="s-choices">
+        <label class="field"><span>${L("名字", "Name")}</span><input id="mcpName" type="text" value="${esc(ed.name)}" placeholder="filesystem"></label>
+        <label class="field"><span>${L("stdio 命令", "stdio command")}</span><input id="mcpCommand" type="text" value="${esc(ed.command)}" placeholder="npx"></label>
+      </div>
+      <label class="field"><span>${L("参数（逗号或换行分隔）", "Args (comma or newline separated)")}</span>
+        <textarea id="mcpArgs" rows="3" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(ed.args)}</textarea></label>
+      <label class="field"><span>${L("环境变量（每行 K=V）", "Env (K=V per line)")}</span>
+        <textarea id="mcpEnv" rows="2" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(ed.env)}</textarea></label>
+      <label class="field"><span>${L("或者 HTTP 端点（填了就按 http 传输）", "Or HTTP endpoint (takes precedence)")}</span>
+        <input id="mcpUrl" type="text" value="${esc(ed.url)}" placeholder="http://127.0.0.1:3000/mcp"></label>
+      <label class="field"><span>${L("备注", "Note")}</span><input id="mcpNote" type="text" value="${esc(ed.note)}" placeholder="${L("给谁用、干什么", "what it is for")}"></label>
+      <div class="actions">
+        <button type="button" class="primary" data-mcp-save${m.busy === "save" ? " disabled" : ""}>${m.busy === "save" ? L("保存中…", "Saving…") : L("保存", "Save")}</button>
+        <button type="button" class="ghost" data-mcp-pretest>${L("先测一下（不保存）", "Test without saving")}</button>
+      </div>
+      <div id="mcpPreOut">${m.test["__form__"] ? `<p class="mono small">${esc(JSON.stringify(m.test["__form__"]).slice(0, 400))}</p>` : ""}</div>
+    </section>` : ""}
+  `;
+  bindMcp();
+}
+
+function bindMcp() {
+  const m = mcpState();
+  const bindField = (sel, key) => {
+    const el = $(sel);
+    if (el) el.addEventListener("input", () => { m.editor = Object.assign({}, m.editor, { [key]: el.value }); });
+  };
+  bindField("#mcpName", "name");
+  bindField("#mcpCommand", "command");
+  bindField("#mcpArgs", "args");
+  bindField("#mcpEnv", "env");
+  bindField("#mcpUrl", "url");
+  bindField("#mcpNote", "note");
+  $$("#page [data-mcp-new]").forEach((el) => el.addEventListener("click", () => {
+    m.editor = Object.assign({}, m.editor, { open: !m.editor.open });
+    renderPage();
+  }));
+  $$("#page [data-mcp-save]").forEach((el) => el.addEventListener("click", () => mcpSave()));
+  $$("#page [data-mcp-export]").forEach((el) => el.addEventListener("click", () => mcpCopyExport()));
+  $$("#page [data-mcp-test]").forEach((el) => el.addEventListener("click", () => mcpTest(el.dataset.mcpTest)));
+  $$("#page [data-mcp-del]").forEach((el) => el.addEventListener("click", () => mcpDelete(el.dataset.mcpDel)));
+  $$("#page [data-mcp-edit]").forEach((el) => el.addEventListener("click", () => {
+    const s = mcpServers().find((x) => x.name === el.dataset.mcpEdit);
+    if (!s) return;
+    m.editor = {
+      open: true, name: s.name, command: s.command,
+      args: (s.args || []).join(", "),
+      env: Object.entries(s.env || {}).map(([k, v]) => k + "=" + v).join("\n"),
+      url: s.url || "", note: s.note || "",
+    };
+    renderPage();
+  }));
+  $$("#page [data-mcp-pretest]").forEach((el) => el.addEventListener("click", async () => {
+    const ed = m.editor;
+    el.disabled = true;
+    el.textContent = L("测试中…", "Testing…");
+    try {
+      const d = await request("/api/mcp/test", {
+        method: "POST",
+        body: { command: ed.command, args: ed.args, env: ed.env, url: ed.url },
+      });
+      m.test["__form__"] = d;
+    } catch (e) {
+      m.test["__form__"] = { ok: false, error: simpleReason(e) };
+    } finally {
+      renderPage();
+    }
+  }));
+}
+
 /* ============================================================ 独立页：情报巡检 / 演练台 */
 function renderIntelPage() {
   if (!S.host.tried && !S.host.loading) loadHostStatus();

@@ -684,7 +684,7 @@ async function readMode() {
 async function ensureMode(mode) {
   const before = await readMode();
   if (before.mode === mode) return { clicks: 0, before: before.mode };
-  const wantNav = mode === 'technical' ? 8 : 6;
+  const wantNav = mode === 'technical' ? 9 : 6;
   await page.click('#modeSwitch');
   await page.waitFor(inPage(`return __nav().length === ${wantNav};`), {
     timeout: 8000,
@@ -1167,10 +1167,10 @@ async function assert12() {
   const mark = page.netMark();
   const clicked = await page.click('#modeSwitch');
   try {
-    await page.waitFor(inPage('return __nav().length === 8 ? true : null;'), {
+    await page.waitFor(inPage('return __nav().length === 9 ? true : null;'), {
       timeout: 8000,
       interval: 150,
-      label: '点一次 #modeSwitch 后导航变 8 项',
+      label: '点一次 #modeSwitch 后导航变 9 项',
     });
   } catch (e) {
     const diag = await page.evalJS(
@@ -1187,7 +1187,7 @@ async function assert12() {
     const net = page.netSince(mark);
     const posted = net.requests.filter((q) => /\/api\/settings/.test(q.url || '')).length;
     return bad(
-      `点了一次「${clicked}」但导航没变 8 项：aria-checked=${diag.ariaChecked}、#nav[data-mode]=${diag.navMode}、导航 ${diag.navCount} 项；` +
+      `点了一次「${clicked}」但导航没变 9 项：aria-checked=${diag.ariaChecked}、#nav[data-mode]=${diag.navMode}、导航 ${diag.navCount} 项；` +
         `期间 POST /api/settings ${posted} 次（若为 0 说明点击没有到达切换逻辑）`,
     );
   }
@@ -1202,7 +1202,7 @@ async function assert12() {
 
   const after = await page.snapshot();
   const problems = [];
-  if (after.navCount !== 8) problems.push(`导航 ${after.navCount} 项(期望8)[${after.nav.join('·')}]`);
+  if (after.navCount !== 9) problems.push(`导航 ${after.navCount} 项(期望9)[${after.nav.join('·')}]`);
   if (!assignOk) problems.push(`#/assign 内容不足（${reach['#/assign'].len} 字符）：「${clip(reach['#/assign'].head, 80)}」`);
   if (!aboutOk) problems.push(`#/about 内容不足（${reach['#/about'].len} 字符）：「${clip(reach['#/about'].head, 80)}」`);
   if (after.errors.exists && after.errors.len > 0) problems.push(`window.__apErrors 有 ${after.errors.len} 条：${clip(after.errors.sample.join(' | '), 200)}`);
@@ -1243,7 +1243,7 @@ async function assert14() {
   const simple = await page.snapshot();
 
   const problems = [];
-  if (tech.navCount !== 8) problems.push(`technical 刷新后导航 ${tech.navCount} 项(期望8)[${tech.nav.join('·')}]`);
+  if (tech.navCount !== 9) problems.push(`technical 刷新后导航 ${tech.navCount} 项(期望9)[${tech.nav.join('·')}]`);
   if (simple.navCount !== 6) problems.push(`simple 刷新后导航 ${simple.navCount} 项(期望6)[${simple.nav.join('·')}]`);
   const detail = `technical reload → ${tech.navCount} 项 [${tech.nav.join(' · ')}]；simple reload → ${simple.navCount} 项 [${simple.nav.join(' · ')}]`;
   return problems.length ? bad(`${problems.join('；')} ｜ ${detail}`) : ok(detail);
@@ -1587,9 +1587,9 @@ async function main() {
       [9, '装备页恰好 1 个主按钮，点后出现「已装备」'],
       [10, '记忆页只剩内嵌面板（iframe /embed/memory/）'],
       [11, '设置页无 breakDir/pluginPath/memoryBase/token/令牌 字段'],
-      [12, '点一次 #modeSwitch 切 technical：导航 8 项、#/assign #/about 可达、__apErrors=0'],
+      [12, '点一次 #modeSwitch 切 technical：导航 9 项、#/assign #/about 可达、__apErrors=0'],
       [13, '再点一次切回 simple：导航 6 项、无残留技术字段'],
-      [14, '刷新后模式保持（technical→6，simple→4）'],
+      [14, '刷新后模式保持（technical→9，simple→6）'],
       [15, '1280/390/320 三宽度无横向溢出 + __apErrors=0（含截图）'],
     ];
     for (const [n, title] of titles) record(n, 'SKIP', title, `前端双层未落地（无 #modeSwitch），本条无法判定；当前导航 ${snap.navCount} 项`);
@@ -1638,9 +1638,9 @@ async function main() {
   await run(9, '装备页恰好 1 个主按钮，点后出现「已装备」', assert9);
   await run(10, '记忆页只剩内嵌面板（iframe /embed/memory/）', assert10);
   await run(11, '设置页无 breakDir/pluginPath/memoryBase/token/令牌 字段', assert11);
-  await run(12, '点一次 #modeSwitch 切 technical：导航 8 项、#/assign #/about 可达、__apErrors=0', assert12);
+  await run(12, '点一次 #modeSwitch 切 technical：导航 9 项、#/assign #/about 可达、__apErrors=0', assert12);
   await run(13, '再点一次切回 simple：导航 6 项、无残留技术字段', assert13);
-  await run(14, '刷新后模式保持（technical→6，simple→4）', assert14);
+  await run(14, '刷新后模式保持（technical→9，simple→6）', assert14);
   await run(15, '1280/390/320 三宽度无横向溢出 + __apErrors=0（含截图）', assert15);
 
   try {
