@@ -1832,68 +1832,13 @@ function memoryEmbedBlock(open) {
 }
 
 function renderSimpleMemory() {
-  const m = S.memory;
-  if (!m.statsLoaded && !m.statsLoading) loadMemoryStats();
-  if (!m.cardsLoaded && !m.cardsLoading) loadMemoryCards();
-  const checking = m.statsLoading && !m.statsLoaded;
-  const connected = !!m.statsLoaded && !m.statsError;
-  /* 连接状态只给两种确定答案：检查中也按「未连接」显示，检查完再翻成已连接 */
-  const statusLine = connected
-    ? `<span class="badge good">记忆服务已连接</span>`
-    : `<span class="badge warn">记忆服务未连接</span>${checking ? `<span class="hint">正在检查…</span>` : ""} <a href="#/settings">去设置</a>`;
-
-  let results = "";
-  if (m.cardsLoading) results = spinner("正在找…");
-  else if (m.error) results = alertBox("没读到内容。", simpleReason(m.error));
-  else if (!connected) results = emptyState("连上记忆服务后才能搜索", "先到设置里点『测试连接』，连上再回来。");
-  else if (!m.cards || !m.cards.length) results = emptyState("没有找到相关内容", "换一个词，再点『搜索』。");
-  else {
-    results = `<div class="list memory-cards">${m.cards.map((c, i) => {
-      const time = memoryCardTime(c);
-      return `<button type="button" class="row-item" data-simple-card="${i}" data-focus="scard-${i}" style="text-align:left;width:100%">
-        <span class="grow">
-          <span class="t">${esc(c.title || "未命名卡片")}</span>
-          ${c.summary ? `<span class="s">${esc(String(c.summary).slice(0, 160))}</span>` : ""}
-          ${time ? `<span class="s faint">${esc(time)}</span>` : ""}
-        </span>
-        <span class="badge">打开</span>
-      </button>`;
-    }).join("")}</div>`;
-  }
-
-  const detail = m.detailLoading
-    ? spinner("读取中…")
-    : m.detailError
-      ? alertBox("这张卡暂时打不开。", simpleReason(m.detailError))
-      : m.detail
-        ? `<div class="card soft">
-            <div class="card-head"><h3>${esc(String(m.detail.text || "").split("\n")[0].replace(/^#+\s*/, "") || "内容")}</h3>${copyBtn(m.detail.text || "", "复制内容")}</div>
-            <pre class="tall" tabindex="0">${esc(m.detail.text || "（内容为空）")}</pre>
-          </div>`
-        : "";
-
   $("#page").innerHTML = `
     <div class="page-head"><div>
       <p class="eyebrow">记忆</p><h1>记忆</h1>
-      <p class="lead">查你的智能体记住了什么。</p>
+      <p class="lead">直接内嵌 memory-eternal 面板：知识库、检索、写卡（只走 pending）都在面板里。</p>
     </div></div>
-    <div class="s-row" style="border-top:0">${statusLine}</div>
-    <section class="section">
-      <form id="simpleMemorySearch" class="card soft" novalidate>
-        <label class="field"><span>搜什么</span>
-          <input id="sMemQ" data-focus="sMemQ" type="search" value="${esc(m.q)}" placeholder="技能 / 项目 / 关键词">
-        </label>
-        <div class="actions"><button class="primary" type="submit">搜索</button><span class="hint">按回车也可以搜。</span></div>
-      </form>
-    </section>
-    <section class="section" aria-labelledby="s-mem-h">
-      <h2 id="s-mem-h"><span class="num">1</span>结果${m.cards ? `<span class="count">${m.cards.length} 张</span>` : ""}</h2>
-      ${results}
-    </section>
-    ${detail ? `<section class="section" aria-labelledby="s-mem-d"><h2 id="s-mem-d"><span class="num">2</span>全文</h2>${detail}</section>` : ""}
     ${memoryEmbedBlock(true)}
   `;
-  bindSimpleMemory();
 }
 
 function bindSimpleMemory() {
@@ -4410,231 +4355,18 @@ async function saveAssignment() {
 
 /* ------------------------------------------------------------------ memory center */
 function renderMemory() {
-  const m = S.memory;
-  if (!m.statsLoaded && !m.statsLoading) loadMemoryStats();
-  if (!m.cardsLoaded && !m.cardsLoading) loadMemoryCards();
-
-  const st = m.stats;
-  const source = m.source || detectSource(S.settings.memoryBase);
-  const statsHtml = m.statsLoading
-    ? spinner("读取统计…")
-    : m.statsError
-      ? alertBox(m.statsError.message, m.statsError.hint) + `<div class="actions"><button type="button" class="small" data-mem-retry="stats">重试统计</button></div>`
-      : st
-        ? `<div class="stat-row">
-            <div class="stat"><span class="stat-label">卡片总数</span><strong class="stat-num">${fmtNum(st.total)}</strong><span class="stat-sub">${esc(sourceLabel(source))}</span></div>
-            <div class="stat"><span class="stat-label">今日新增</span><strong class="stat-num">${fmtNum(st.today)}</strong><span class="stat-sub">来自 /stats</span></div>
-            <div class="stat"><span class="stat-label">本周新增</span><strong class="stat-num">${fmtNum(st.week)}</strong><span class="stat-sub">来自 /stats</span></div>
-          </div>
-          <div class="kind-list">${Object.entries(st.byKind || {}).length ? Object.entries(st.byKind).map(([k, v]) => badge(k + " " + fmtNum(v), k === "skill" ? "accent" : "")).join("") : badge("byKind 为空", "warn")}</div>`
-        : emptyState("还没有统计", "确认记忆中心地址与令牌，再重试。");
-
-  let cardsHtml = "";
-  if (m.cardsLoading) cardsHtml = spinner("检索卡片…");
-  else if (m.error) cardsHtml = alertBox(m.error.message, m.error.hint, "bad", "") + `<div class="actions"><button type="button" class="small" data-mem-retry="cards">重试检索</button></div>`;
-  else if (!m.cards || !m.cards.length) cardsHtml = emptyState("没有匹配的卡片", "换个关键词，或清空 kind 过滤。");
-  else cardsHtml = `<div class="list memory-cards">${m.cards.map((c, i) => `<button type="button" class="row-item" data-mcard="${i}" data-focus="mcard-${i}" style="text-align:left;width:100%">
-      <span class="grow">
-        <span class="t">${esc(c.title || c.path || "未命名卡片")}</span>
-        <span class="s">${badge(c.kind || "未分类", c.kind === "skill" ? "accent" : "")}${c.status ? " " + badge(c.status, c.status === "approved" ? "good" : (c.status === "pending" ? "warn" : "bad")) : ""}<span class="sep">·</span>${esc(c.path || "")}</span>
-        ${c.summary ? `<span class="s">${esc(String(c.summary).slice(0, 180))}</span>` : ""}
-      </span>
-      <span class="badge">打开</span>
-    </button>`).join("")}</div>`;
-
-  const detail = m.detailLoading
-    ? spinner("读取卡片正文…")
-    : m.detailError
-      ? alertBox(m.detailError.message, m.detailError.hint)
-      : m.detail
-        ? `<div class="card soft">
-            <div class="card-head"><div><h3>${esc(m.detail.path || "卡片详情")}</h3><div class="badge-row">${badge(m.detail.status || "状态未知", m.detail.status === "approved" ? "good" : (m.detail.status === "pending" ? "warn" : ""))}${m.detail.kind ? badge(m.detail.kind, "") : ""}</div></div>${copyBtn(m.detail.text || "", "复制正文")}</div>
-            <pre class="tall" tabindex="0">${esc(m.detail.text || "（正文为空）")}</pre>
-          </div>`
-        : emptyState("尚未打开卡片", "点一条检索结果，就在这里看路径、状态与正文（YAML 头 + Markdown）。");
-
-  const kindOptions = `<option value="">全部</option>${KINDS.map((k) => `<option value="${esc(k)}" ${m.kind === k ? "selected" : ""}>${esc(k)}</option>`).join("")}`;
-  const claim = m.claim;
-
-  const baseGroup = `
-    <section class="section" aria-labelledby="h-m-search">
-      <h2 id="h-m-search"><span class="num">1</span>检索<span class="count">${m.cards ? m.cards.length + " 张" : ""}</span></h2>
-      <form id="memorySearch" class="card soft" novalidate>
-        <div class="form-grid">
-          <label class="field"><span>关键词</span><input id="mQ" data-focus="mQ" type="search" value="${esc(m.q)}" placeholder="技能 / 项目 / 关键词"></label>
-          <label class="field"><span>类型</span><select id="mKind" data-focus="mKind">${kindOptions}</select></label>
-        </div>
-        <div class="actions"><button class="primary" type="submit">检索</button><span class="hint">空结果会给出空态，不会假装有数据。</span></div>
-      </form>
-      ${cardsHtml}
-    </section>
-
-    <section class="section" aria-labelledby="h-m-detail">
-      <h2 id="h-m-detail"><span class="num">2</span>卡片详情</h2>
-      ${detail}
-    </section>`;
-
-  const strategyGroup = `
-    <section class="section" aria-labelledby="h-m-write">
-      <h2 id="h-m-write"><span class="num">3</span>写卡 · 只走审核</h2>
-      <form id="claimForm" class="card" novalidate>
-        <div class="form-grid">
-          <label class="field"><span>标题 <span class="req">*</span></span><input id="wTitle" data-focus="wTitle" type="text" maxlength="200" value="${esc(claim.title)}" placeholder="这张卡解决什么问题"></label>
-          <label class="field"><span>类型</span><select id="wKind" data-focus="wKind">${KINDS.map((k) => `<option value="${esc(k)}" ${claim.kind === k ? "selected" : ""}>${esc(k)}</option>`).join("")}</select></label>
-          <label class="field span-2"><span>标签（逗号分隔）</span><input id="wTags" data-focus="wTags" type="text" value="${esc(claim.tags)}" placeholder="break, pe, 许可检查"></label>
-          <label class="field span-2"><span>正文（Markdown）<span class="req">*</span></span><textarea id="wBody" data-focus="wBody" rows="5" placeholder="写清楚证据、步骤与验收条件；提交后进审核中心。">${esc(claim.body)}</textarea></label>
-        </div>
-        <div class="inline-note">写卡只调用 <span class="mono">/api/memory/claim</span>；服务端不得调用 approve/reject。返回应为 <span class="mono">status: pending</span>，页面会明示「已进审核中心，待批准」。</div>
-        <div id="claimError">${claim.error ? alertBox(claim.error.message, claim.error.hint) : ""}</div>
-        ${claim.ok ? (claim.ok.status === "pending"
-          ? okBox("已进审核中心，待批准（status: pending）", claim.ok.path ? "草稿路径：" + claim.ok.path : "")
-          : alertBox("服务端返回 status=" + claim.ok.status + "，预期 pending。", "核对 /api/memory/claim 的实现；页面不会替你批准。", "warn")) : ""}
-        <div class="actions">
-          <button class="primary" type="submit" ${claim.saving ? "disabled" : ""}>${claim.saving ? "提交中…" : "提交审核"}</button>
-          <span class="hint">提交成功不会自动出现在上方检索结果，直到审核通过。</span>
-        </div>
-      </form>
-    </section>`;
-
-  const pathsGroup = `
-    <section class="section" aria-labelledby="h-m-base">
-      <h2 id="h-m-base"><span class="num">4</span>记忆服务地址 ${badge("高级", "warn")}</h2>
-      <div class="code-line"><span class="grow">${esc(S.settings.memoryBase || "未配置 memoryBase")}</span>${S.settings.memoryBase ? copyBtn(S.settings.memoryBase, "复制地址") : ""}</div>
-      <p class="hint" style="margin-top:6px">只读展示；改地址与令牌去设置页。当前来源：${esc(sourceLabel(source))}。</p>
-    </section>`;
-
-  const diagGroup = `
-    <section class="section" aria-labelledby="h-m-stats">
-      <h2 id="h-m-stats"><span class="num">5</span>统计<span class="count">${esc(sourceLabel(source))}</span></h2>
-      ${statsHtml}
-    </section>`;
-
+  const source = S.memory.source || detectSource(S.settings.memoryBase);
   $("#page").innerHTML = `
     <div class="page-head">
       <div>
         <p class="eyebrow">CONTROL · 04</p>
         <h1>记忆中心</h1>
-        <p class="lead">直接看 memory-eternal：统计、检索、卡片正文。写卡只走审核，提交后是 pending，页面不会调用 approve/reject。</p>
+        <p class="lead">整页就是 memory-eternal 的面板（同源代理 7999），统计、检索、写卡都在里面；写卡只走 pending，本页不调用 approve/reject。</p>
       </div>
-      <div class="head-meta">${badge(sourceLabel(source), source === "local" ? "good" : (source === "cloud" ? "warn" : ""))}${badge("写卡 → pending", "accent")}</div>
+      <div class="head-meta">${badge(sourceLabel(source), source === "local" ? "good" : (source === "cloud" ? "warn" : ""))}${badge("内嵌 7999", "accent")}</div>
     </div>
-
-    ${groupsHtml("memory", [
-      { key: "base", html: baseGroup },
-      { key: "strategy", html: strategyGroup },
-      { key: "paths", html: pathsGroup },
-      { key: "diag", html: diagGroup },
-    ])}
     ${memoryEmbedBlock(true)}
   `;
-  bindMemory();
-}
-
-async function loadMemoryStats() {
-  if (S.memory.statsLoading) return;
-  S.memory.statsLoading = true;
-  S.memory.statsError = null;
-  try {
-    const data = await request("/api/memory/stats");
-    if (!data || data.ok === false) throw payloadError(data, "记忆服务不可用");
-    S.memory.stats = normalizeStats(data);
-    S.memory.source = (data && data.source) || detectSource(S.settings.memoryBase);
-    S.memory.statsLoaded = true;
-    setStatus("ok", "记忆中心已连接");
-  } catch (e) {
-    if (isAgreementError(e)) return;
-    S.memory.statsError = e;
-    S.memory.statsLoaded = true;
-    setStatus("bad", "记忆中心未连接", e.message);
-  } finally {
-    S.memory.statsLoading = false;
-    if (S.tab === "memory") renderPage();
-  }
-}
-
-async function loadMemoryCards() {
-  if (S.memory.cardsLoading) return;
-  S.memory.cardsLoading = true;
-  S.memory.error = null;
-  try {
-    const params = new URLSearchParams({ limit: "40" });
-    if (S.memory.q) params.set("q", S.memory.q);
-    if (S.memory.kind) params.set("kind", S.memory.kind);
-    const data = await request("/api/memory/cards?" + params.toString());
-    if (!data || data.ok === false) throw payloadError(data, "记忆服务不可用");
-    S.memory.cards = Array.isArray(data.cards) ? data.cards : [];
-    S.memory.cardsLoaded = true;
-  } catch (e) {
-    if (isAgreementError(e)) return;
-    S.memory.error = e;
-    S.memory.cards = [];
-    S.memory.cardsLoaded = true;
-  } finally {
-    S.memory.cardsLoading = false;
-    if (S.tab === "memory") renderPage();
-  }
-}
-
-async function openMemoryCard(index) {
-  const card = S.memory.cards && S.memory.cards[index];
-  if (!card) return;
-  S.memory.detailLoading = true;
-  S.memory.detailError = null;
-  renderPage();
-  try {
-    const data = await request("/api/memory/card?path=" + encodeURIComponent(card.path || ""));
-    if (!data || data.ok === false) throw payloadError(data, "读取卡片失败");
-    const c = data.card && typeof data.card === "object" ? data.card : data;
-    S.memory.detail = {
-      path: c.path || card.path,
-      status: c.status || card.status || "",
-      kind: c.kind || card.kind || "",
-      text: c.text || "",
-    };
-  } catch (e) {
-    if (isAgreementError(e)) return;
-    S.memory.detailError = e;
-  } finally {
-    S.memory.detailLoading = false;
-    if (S.tab === "memory") renderPage();
-  }
-}
-
-async function submitClaim() {
-  const c = S.memory.claim;
-  c.error = null;
-  c.ok = null;
-  if (!c.title.trim()) {
-    c.error = { message: "写卡需要标题。", hint: "标题写清楚这张卡解决什么问题。" };
-    renderPage();
-    return;
-  }
-  if (!c.body.trim()) {
-    c.error = { message: "写卡需要正文。", hint: "把证据、步骤与验收条件写进 Markdown。" };
-    renderPage();
-    return;
-  }
-  if (c.saving) return;
-  c.saving = true;
-  renderPage();
-  try {
-    const tags = c.tags.split(",").map((t) => t.trim()).filter(Boolean);
-    const data = await request("/api/memory/claim", {
-      method: "POST",
-      body: { title: c.title.trim(), kind: c.kind || "skill", tags, body: c.body },
-    });
-    if (!data || data.ok === false) throw payloadError(data, "提交写卡失败");
-    c.ok = { status: data.status || "pending", path: (data.card && data.card.path) || data.path || "" };
-    c.title = "";
-    c.body = "";
-    c.tags = "";
-  } catch (e) {
-    c.error = { message: e.message, hint: e.hint };
-    if (isAgreementError(e)) return;
-  } finally {
-    c.saving = false;
-    renderPage();
-  }
 }
 
 function bindMemory() {

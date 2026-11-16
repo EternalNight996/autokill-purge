@@ -1074,34 +1074,42 @@ async function assert9() {
   return ok(`主按钮 1 个「${labels[0]}」；点后出现：${m ? m[0] : '已装备'}`);
 }
 
-async function assert10() {
+﻿async function assert10() {
   await page.gotoHash('#/memory');
-  await page.waitFor(inPage('return __text().length > 20 || document.querySelectorAll(\'#main input\').length > 0;'), {
-    timeout: 8000,
-    label: '记忆页渲染',
+  await page.waitFor(inPage("return document.querySelector('#main iframe') ? true : null;"), {
+    timeout: 12000,
+    label: '记忆页出现内嵌面板 iframe',
   });
   const r = await page.evalJS(
     inPage(String.raw`
+    const f = document.querySelector('#main iframe');
+    const secs = document.querySelectorAll('#main > section').length;
     const text = __text();
-    const inputs = Array.from(document.querySelectorAll('#main input, #main textarea, #main [role=searchbox]')).filter(__vis);
+    let inner = { ok: false };
+    try {
+      const d = f && f.contentDocument;
+      if (d) inner = { ok: true, title: d.title || '', len: (d.body ? d.body.innerText.length : 0) };
+    } catch (e) { inner = { ok: false, why: String(e && e.message) }; }
     return {
-      connected: /已连接/.test(text),
-      disconnected: /未连接/.test(text),
-      goSettings: /去设置/.test(text),
-      inputCount: inputs.length,
-      inputLabels: inputs.map((i) => (i.getAttribute('type') || i.tagName.toLowerCase()) + '「' + ((i.placeholder || i.getAttribute('aria-label') || i.id || '') + '') + '」').slice(0, 6),
-      head: text.slice(0, 240),
+      hasFrame: !!f,
+      src: f ? f.getAttribute('src') : null,
+      width: f ? f.offsetWidth : 0,
+      height: f ? f.offsetHeight : 0,
+      sections: secs,
+      hasSearch: /搜什么|搜索记忆/.test(text),
+      inner: inner,
     };
   `),
   );
   const problems = [];
-  if (r.connected === r.disconnected) problems.push(`连接状态不明确（已连接=${r.connected} 未连接=${r.disconnected}）`);
-  if (r.disconnected && !r.goSettings) problems.push('未连接但没有「去设置」');
-  if (r.inputCount < 1) problems.push('没有搜索框');
-  const detail = `状态：${r.connected ? '已连接' : r.disconnected ? '未连接' : '都没出现'}${r.goSettings ? ' + 去设置' : ''}；搜索输入框 ${r.inputCount} 个${r.inputLabels.length ? '[' + r.inputLabels.join(' ') + ']' : ''}`;
-  return problems.length ? bad(`${problems.join('；')} ｜ ${detail} ｜ 顶部：${clip(r.head, 170)}`) : ok(detail);
+  if (!r.hasFrame) problems.push('没有 iframe');
+  if (r.src !== '/embed/memory/') problems.push('iframe src 不是 /embed/memory/（实际 ' + r.src + '）');
+  if (r.width < 300 || r.height < 300) problems.push('iframe 尺寸过小 ' + r.width + 'x' + r.height);
+  if (r.sections > 1) problems.push('页面上还有 ' + r.sections + ' 个 section（应只剩内嵌面板）');
+  if (r.hasSearch) problems.push('页面仍有自带搜索框（内容应只保留内嵌面板）');
+  const detail = 'iframe src=' + r.src + ' · ' + r.width + 'x' + r.height + ' · 页面 section ' + r.sections + ' 个 · 面板内：' + (r.inner.ok ? r.inner.title + ' / ' + r.inner.len + ' 字符' : '读不到（' + (r.inner.why || '?') + '）');
+  return problems.length ? bad(problems.join('；') + ' ｜ ' + detail) : ok(detail);
 }
-
 async function assert11() {
   await page.gotoHash('#/settings');
   await page.waitFor(inPage('return __text().length > 20 || document.querySelectorAll(\'#main input\').length > 0;'), {
@@ -1572,7 +1580,7 @@ async function main() {
       [7, '第一张卡「复制」内容与卡片全文一致'],
       [8, '「这次成功了」/「被拒绝了」各让 attempts +1'],
       [9, '装备页恰好 1 个主按钮，点后出现「已装备」'],
-      [10, '记忆页连接状态 + （未连接时）去设置 + 搜索框'],
+      [10, '记忆页只剩内嵌面板（iframe /embed/memory/）'],
       [11, '设置页无 breakDir/pluginPath/memoryBase/token/令牌 字段'],
       [12, '点一次 #modeSwitch 切 technical：导航 8 项、#/assign #/about 可达、__apErrors=0'],
       [13, '再点一次切回 simple：导航 6 项、无残留技术字段'],
@@ -1623,7 +1631,7 @@ async function main() {
   await run(7, '第一张卡「复制」内容与卡片全文一致', assert7);
   await run(8, '「这次成功了」/「被拒绝了」各让 attempts +1', assert8);
   await run(9, '装备页恰好 1 个主按钮，点后出现「已装备」', assert9);
-  await run(10, '记忆页连接状态 + （未连接时）去设置 + 搜索框', assert10);
+  await run(10, '记忆页只剩内嵌面板（iframe /embed/memory/）', assert10);
   await run(11, '设置页无 breakDir/pluginPath/memoryBase/token/令牌 字段', assert11);
   await run(12, '点一次 #modeSwitch 切 technical：导航 8 项、#/assign #/about 可达、__apErrors=0', assert12);
   await run(13, '再点一次切回 simple：导航 6 项、无残留技术字段', assert13);
