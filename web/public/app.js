@@ -291,6 +291,9 @@ const S = {
   equipment: [],
   equip: {
     preset: "redteam",
+    presets: ["redteam"],
+    items: [],
+    models: [],
     agents: ["dsh"],
     custom: "",
     permissions: "read-only",
@@ -1891,116 +1894,217 @@ function simpleEquippedItems() {
 
 function renderSimpleEquip() {
   const items = simpleEquippedItems();
-  const base = simpleEquipPresetObj();
-  const baseItems = base.items || [];
+  const activeP = simpleEquipPresetObjs();
   const chosen = simpleChosenItems();
+  const allKeys = simpleAllItemKeys();
   const presetCards = PRESETS.map((p) => {
-    const on = p.id === base.id;
+    const idx = activeP.findIndex((x) => x.id === p.id);
+    const on = idx >= 0;
     return `<button type="button" class="pick" data-simple-preset="${esc(p.id)}" data-focus="spreset-${esc(p.id)}" aria-pressed="${on}">
-        <span class="pick-top"><span class="pick-name">${esc(p.name)}</span>${on ? badge("已选", "accent") : ""}</span>
+        <span class="pick-top"><span class="pick-name">${esc(p.name)}</span>${on ? badge(activeP.length > 1 ? String(idx + 1) : "已选", "accent") : ""}</span>
         <span class="pick-note">${esc(p.desc)}</span>
       </button>`;
   }).join("");
-  const itemCards = baseItems.map((it) => {
-    const on = chosen.includes(it.id);
-    return `<button type="button" class="pick" data-simple-item="${esc(it.id)}" data-focus="sitem-${esc(it.id)}" aria-pressed="${on}">
-        <span class="pick-top"><span class="pick-name">${esc(it.name)}</span>${on ? badge("装", "accent") : ""}</span>
-        <span class="pick-note">${esc(it.desc)}</span>
-      </button>`;
-  }).join("");
+  // 每个选中的包一页
+  const groups = activeP.map((p) => {
+    const its = p.items || [];
+    const picked = its.filter((it) => chosen.includes(p.id + ":" + it.id));
+    return {
+      preset: p, total: its.length, picked: picked.length,
+      cards: its.map((it) => {
+        const key = p.id + ":" + it.id;
+        const on = chosen.includes(key);
+        return `<button type="button" class="pick" data-simple-item="${esc(key)}" data-focus="sitem-${esc(key)}" aria-pressed="${on}">
+          <span class="pick-top"><span class="pick-name">${esc(it.name)}</span>${on ? badge("装", "accent") : ""}</span>
+          <span class="pick-note">${esc(it.desc)}</span>
+        </button>`;
+      }).join(""),
+    };
+  });
+  const modelCands = equipModelCandidates();
+  const pickedModels = Array.isArray(S.simple.equipModels) ? S.simple.equipModels : [];
   const rows = items.length
     ? `<div class="card">${items.map((it) => `<div class="s-row">
         <div class="s-row-main"><strong>${esc(simpleText(it.name))}</strong><span>${esc(simpleText(it.desc))}</span></div>
         <button type="button" class="small" data-simple-unequip="${esc(it.key)}">卸下</button>
       </div>`).join("")}</div>`
-    : emptyState("还没装备。点上面的按钮，一次装好推荐组合。", "");
+    : emptyState("还没装备。选好包和能力后点下面的按钮。", "");
   const out = S.simple.equipError
-    ? alertBox(S.simple.equipError, "再点一次『一键装备推荐组合』试试。")
+    ? alertBox(S.simple.equipError, "再点一次下面的按钮试试。")
     : (S.simple.equipResult ? okBox(S.simple.equipResult) : "");
   $("#page").innerHTML = `
     <div class="page-head"><div>
       <p class="eyebrow">装备</p><h1>装备</h1>
-      <p class="lead">把现成能力装到你的智能体上，装完就能用。</p>
+      <p class="lead">把现成能力装到你的智能体上，装完就能用。可以同时选多个装备包。</p>
     </div></div>
     <section class="s-status ${items.length ? "green" : "yellow"}" aria-label="当前装备">
       <div class="s-status-body">
         <strong>当前已装备 ${items.length} 件</strong>
-        <span class="s-status-detail">${items.length ? "这些能力都装好了，可以直接用。" : "还没有装能力，点下面这个按钮一次装好。"}</span>
+        <span class="s-status-detail">${items.length ? "这些能力都装好了，可以直接用。" : "还没有装能力，选好下面的能力再装。"}</span>
       </div>
     </section>
     <section class="section" aria-labelledby="s-eq-pack">
-      <h2 id="s-eq-pack"><span class="num">1</span>选装备包<span class="count">${PRESETS.length} 个</span></h2>
-      <p class="hint">先挑一个包，再决定这个包里的哪些能力要装。</p>
+      <h2 id="s-eq-pack"><span class="num">1</span>选装备包<span class="count">已选 ${activeP.length} / ${PRESETS.length} 个</span></h2>
+      <p class="hint">可多选；每选一个包，下面就会多一页它的能力。</p>
       <div class="grid models">${presetCards}</div>
     </section>
     <section class="section" aria-labelledby="s-eq-pick">
-      <h2 id="s-eq-pick"><span class="num">2</span>装哪些能力<span class="count">${chosen.length} / ${baseItems.length} 项</span></h2>
-      ${baseItems.length
+      <h2 id="s-eq-pick"><span class="num">2</span>装哪些能力<span class="count">${chosen.length} / ${allKeys.length} 项 · ${groups.length} 页</span></h2>
+      ${groups.length
         ? `<p class="hint">先勾再装：不勾的这项不会出现在配置里。</p>
-          <div class="grid models">${itemCards}</div>
+          ${groups.filter((g) => g.total).map((g) => `<div class="equip-page">
+            <div class="equip-page-head"><strong>${esc(g.preset.name)}</strong><span class="mono small">${g.picked} / ${g.total} 项</span>
+              <span class="spacer"></span>
+              <button type="button" class="small" data-simple-page-all="${esc(g.preset.id)}">本页全选</button>
+              <button type="button" class="small" data-simple-page-none="${esc(g.preset.id)}">本页清空</button>
+            </div>
+            <div class="grid models">${g.cards}</div>
+          </div>`).join("")}
           <div class="actions" style="margin-top:8px">
-            <button type="button" class="ghost" data-simple-all>全选</button>
-            <button type="button" class="ghost" data-simple-none>全不选</button>
+            <button type="button" class="ghost" data-simple-all>全部全选</button>
+            <button type="button" class="ghost" data-simple-none>全部清空</button>
           </div>`
-        : `<p class="hint">这个包没有预置能力项（自定义包在备注里写清楚要装什么）。</p>`}
+        : `<p class="hint">选中的包没有预置能力项（自定义包在备注里写清楚要装什么）。</p>`}
       ${simplePlanSkills().length ? `<div class="card soft" style="margin-top:10px">
         <div class="s-row"><div class="s-row-main"><strong>这套会加载 ${simplePlanSkills().length} 个技能</strong>
           <span class="mono small">${esc(simplePlanSkills().join(" · "))}</span></div></div>
         ${simplePlanWorkflows().length ? `<div class="s-row"><div class="s-row-main"><strong>跟这 ${simplePlanWorkflows().length} 条工作流</strong>
           <span class="mono small">${esc(simplePlanWorkflows().join(" · "))}</span></div></div>` : ""}
+        ${pickedModels.length ? `<div class="s-row"><div class="s-row-main"><strong>带这 ${pickedModels.length} 个模型</strong>
+          <span class="mono small">${esc(pickedModels.join(" · "))}</span></div></div>` : ""}
       </div>` : ""}
+    </section>
+    <section class="section" aria-labelledby="s-eq-models">
+      <h2 id="s-eq-models"><span class="num">3</span>带哪些模型<span class="count">${pickedModels.length} / ${modelCands.length} 个</span></h2>
+      <p class="hint">标了「已破甲」的就是已经适配过破甲的模型，可以直接带进去。</p>
+      <div class="grid models">${modelCands.map((m) => {
+        const on = pickedModels.includes(m.id);
+        return `<button type="button" class="pick" data-simple-model="${esc(m.id)}" data-focus="smodel-${esc(m.id)}" aria-pressed="${on}">
+          <span class="pick-top"><span class="pick-name">${esc(m.name)}</span>${on ? badge("带", "accent") : ""}${m.cracked ? badge("已破甲", "good") : ""}</span>
+          <span class="pick-note">${esc(m.meta || m.id)}</span>
+        </button>`;
+      }).join("")}</div>
+      <div class="actions" style="margin-top:8px">
+        <button type="button" class="ghost" data-simple-model-cracked>只选已破甲的</button>
+        <button type="button" class="ghost" data-simple-model-none>全不选</button>
+      </div>
     </section>
     <section class="section">
       <button type="button" class="primary s-generate" id="sEquipAll"${S.simple.equipBusy || !chosen.length ? ' disabled aria-busy="true"' : ""}>${S.simple.equipBusy ? "装备中…" : (chosen.length ? `装备选中的 ${chosen.length} 项` : "先勾至少一项")}</button>
       <div id="sEquipOut" style="margin-top:10px">${out}</div>
     </section>
     <section class="section" aria-labelledby="s-eq-h">
-      <h2 id="s-eq-h"><span class="num">3</span>已装的<span class="count">${items.length} 件</span></h2>
+      <h2 id="s-eq-h"><span class="num">4</span>已装的<span class="count">${items.length} 件</span></h2>
       ${rows}
     </section>
   `;
   bindSimpleEquip();
 }
 
-/* 普通模式当前选的装备包（默认红队全装） */
+/* 普通模式当前选的装备包（可多选，默认红队全装） */
+function simpleEquipPresetObjs() {
+  const ids = Array.isArray(S.simple.equipPresets) && S.simple.equipPresets.length
+    ? S.simple.equipPresets
+    : (S.simple.equipPreset ? [S.simple.equipPreset] : ["redteam"]);
+  const objs = PRESETS.filter((p) => ids.includes(p.id));
+  return objs.length ? objs : [PRESETS[0]];
+}
+
 function simpleEquipPresetObj() {
-  const id = S.simple.equipPreset || "redteam";
-  return PRESETS.find((p) => p.id === id) || PRESETS[0];
+  return simpleEquipPresetObjs()[0];
+}
+
+function simpleAllItemKeys() {
+  const out = [];
+  for (const p of simpleEquipPresetObjs()) for (const it of p.items || []) out.push(p.id + ":" + it.id);
+  return out;
+}
+
+function simpleTogglePreset(id) {
+  const cur = simpleEquipPresetObjs().map((p) => p.id);
+  let next;
+  if (cur.includes(id)) {
+    if (cur.length === 1) { toast(L("至少留一个装备包", "Keep at least one pack")); return; }
+    next = cur.filter((x) => x !== id);
+  } else {
+    next = cur.concat([id]);
+  }
+  S.simple.equipPresets = next;
+  S.simple.equipPreset = next[0];
+  S.simple.equipItems = null;
+  S.simple.equipError = "";
+  S.simple.equipResult = "";
+  renderPage();
 }
 
 function simpleChosenItems() {
-  const base = simpleEquipPresetObj();
-  const all = (base.items || []).map((it) => it.id);
+  const all = simpleAllItemKeys();
   if (!Array.isArray(S.simple.equipItems)) return all;
-  return S.simple.equipItems.filter((id) => all.includes(id));
+  return S.simple.equipItems.filter((k) => all.includes(k));
 }
 
 /* 普通模式这套会加载哪些技能 / 跟哪几条工作流 */
 function simplePlanSkills() {
-  const base = simpleEquipPresetObj();
-  const chosen = simpleChosenItems();
+  const chosen = new Set(simpleChosenItems());
   const out = [];
-  for (const it of base.items || []) {
-    if (!chosen.includes(it.id)) continue;
-    for (const s of it.skills || []) if (!out.includes(s)) out.push(s);
+  for (const p of simpleEquipPresetObjs()) {
+    for (const it of p.items || []) {
+      if (!chosen.has(p.id + ":" + it.id)) continue;
+      for (const s of it.skills || []) if (!out.includes(s)) out.push(s);
+    }
   }
   return out;
 }
 
 function simplePlanWorkflows() {
-  return PRESET_WORKFLOWS[simpleEquipPresetObj().id] || [];
+  const out = [];
+  for (const p of simpleEquipPresetObjs()) for (const w of PRESET_WORKFLOWS[p.id] || []) if (!out.includes(w)) out.push(w);
+  return out;
 }
 
 function bindSimpleEquip() {
   $$("#page [data-simple-preset]").forEach((el) => {
+    el.addEventListener("click", () => simpleTogglePreset(el.dataset.simplePreset));
+  });
+  $$("#page [data-simple-model]").forEach((el) => {
     el.addEventListener("click", () => {
-      S.simple.equipPreset = el.dataset.simplePreset;
-      S.simple.equipItems = null;
-      S.simple.equipError = "";
-      S.simple.equipResult = "";
+      const id = el.dataset.simpleModel;
+      const cur = Array.isArray(S.simple.equipModels) ? S.simple.equipModels : [];
+      S.simple.equipModels = cur.includes(id) ? cur.filter((x) => x !== id) : cur.concat([id]);
       renderPage();
     });
   });
+  $$("#page [data-simple-model-cracked]").forEach((el) => el.addEventListener("click", () => {
+    S.simple.equipModels = equipModelCandidates().filter((m) => m.cracked).map((m) => m.id);
+    renderPage();
+  }));
+  $$("#page [data-simple-model-none]").forEach((el) => el.addEventListener("click", () => {
+    S.simple.equipModels = [];
+    renderPage();
+  }));
+  $$("#page [data-simple-page-all]").forEach((el) => el.addEventListener("click", () => {
+    const p = PRESETS.find((x) => x.id === el.dataset.simplePageAll);
+    if (!p) return;
+    const cur = new Set(simpleChosenItems());
+    for (const it of p.items || []) cur.add(p.id + ":" + it.id);
+    S.simple.equipItems = Array.from(cur);
+    renderPage();
+  }));
+  $$("#page [data-simple-page-none]").forEach((el) => el.addEventListener("click", () => {
+    const p = PRESETS.find((x) => x.id === el.dataset.simplePageNone);
+    if (!p) return;
+    const drop = new Set((p.items || []).map((it) => p.id + ":" + it.id));
+    S.simple.equipItems = simpleChosenItems().filter((k) => !drop.has(k));
+    renderPage();
+  }));
+  $$("#page [data-simple-all]").forEach((el) => el.addEventListener("click", () => {
+    S.simple.equipItems = null;
+    renderPage();
+  }));
+  $$("#page [data-simple-none]").forEach((el) => el.addEventListener("click", () => {
+    S.simple.equipItems = [];
+    renderPage();
+  }));
   $$("#page [data-simple-item]").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.dataset.simpleItem;
@@ -2029,7 +2133,8 @@ async function simpleEquipPreset() {
   S.simple.equipResult = "";
   renderPage();
       const p = simpleEquipPresetObj();
-    const body = { preset: p.id, agents: p.agents.length ? p.agents : ["dsh"], permissions: "read-only", notes: "", items: simpleChosenItems() };
+    const presets = simpleEquipPresetObjs().map((x) => x.id);
+    const body = { preset: p.id, presets: presets, agents: p.agents.length ? p.agents : ["dsh"], permissions: "read-only", notes: "", items: simpleChosenItems(), models: Array.isArray(S.simple.equipModels) ? S.simple.equipModels : [] };
   try {
     const data = await request("/api/equipment", { method: "POST", body });
     if (!data || data.ok === false) throw payloadError(data, "装备失败");
@@ -2039,9 +2144,15 @@ async function simpleEquipPreset() {
     S.simple.removed = [];
     const items = simpleEquippedItems();
     const chosen = simpleChosenItems();
-    const base = simpleEquipPresetObj();
     S.simple.equipResult = chosen.length
-      ? `已装 ${chosen.length} 项能力：${chosen.map((id) => ((base.items || []).find((x) => x.id === id) || { name: id }).name).join("、")}`
+      ? `已装 ${chosen.length} 项能力：${chosen.map((k) => {
+        const cut = k.indexOf(":");
+        const pid = cut > 0 ? k.slice(0, cut) : "";
+        const iid = cut > 0 ? k.slice(cut + 1) : k;
+        const p = PRESETS.find((x) => x.id === pid);
+        const it = ((p && p.items) || []).find((x) => x.id === iid);
+        return it ? it.name : k;
+      }).join("、")}`
       : "这次一项都没勾，没有装任何能力。";
   } catch (e) {
     if (isAgreementError(e)) return;
@@ -4286,13 +4397,100 @@ function equipAgents(forPreview = false) {
   return out;
 }
 
-/* 当前要装的能力项（不勾的不进配置） */
-function equipChosenItems() {
+/* 选中的装备包（多选，至少一个） */
+function equipPresets() {
   const e = S.equip;
-  const p = PRESETS.find((x) => x.id === e.preset) || PRESETS[0];
-  const all = (p.items || []).map((it) => it.id);
+  const list = Array.isArray(e.presets) && e.presets.length ? e.presets : (e.preset ? [e.preset] : ["redteam"]);
+  return list.filter((id) => PRESETS.some((p) => p.id === id));
+}
+
+function equipPresetObjs() {
+  const ids = equipPresets();
+  return PRESETS.filter((p) => ids.includes(p.id));
+}
+
+/* 点装备包：多选 toggle，至少留一个 */
+function equipTogglePreset(id) {
+  const e = S.equip;
+  const cur = equipPresets();
+  let next;
+  if (cur.includes(id)) {
+    if (cur.length === 1) { toast(L("至少留一个装备包", "Keep at least one pack")); return; }
+    next = cur.filter((x) => x !== id);
+  } else {
+    next = cur.concat([id]);
+  }
+  e.presets = next;
+  e.preset = next[0];
+  // 去掉已不存在的包的能力项
+  const allowed = new Set();
+  for (const p of PRESETS) if (next.includes(p.id)) for (const it of p.items || []) allowed.add(p.id + ":" + it.id);
+  e.items = (Array.isArray(e.items) ? e.items : []).filter((k) => allowed.has(k));
+  if (!e.items.length) e.items = null; // null = 全选新组合
+  e.error = null;
+  e.ok = null;
+  renderPage();
+}
+
+/* 能力项 key = 包id:项id，避免不同包同名项互相覆盖 */
+function equipItemKey(presetId, itemId) {
+  return presetId + ":" + itemId;
+}
+
+function equipAllItemKeys() {
+  const out = [];
+  for (const p of equipPresetObjs()) for (const it of p.items || []) out.push(equipItemKey(p.id, it.id));
+  return out;
+}
+
+/* 当前要装的能力项（不勾的不进配置）；items 为 null 时= 全选 */
+function equipChosenItems() {
+  const all = equipAllItemKeys();
+  const e = S.equip;
   if (!Array.isArray(e.items)) return all;
-  return e.items.filter((id) => all.includes(id));
+  return e.items.filter((k) => all.includes(k));
+}
+
+function equipToggleItem(key) {
+  const e = S.equip;
+  const cur = equipChosenItems();
+  e.items = cur.includes(key) ? cur.filter((x) => x !== key) : cur.concat([key]);
+  e.error = null;
+  e.ok = null;
+  renderPage();
+}
+
+/* 装备里的模型（已破甲的模型可以直接带进去） */
+function equipModels() {
+  return Array.isArray(S.equip.models) ? S.equip.models : [];
+}
+
+function equipToggleModel(id) {
+  const e = S.equip;
+  const cur = equipModels();
+  e.models = cur.includes(id) ? cur.filter((x) => x !== id) : cur.concat([id]);
+  e.error = null;
+  e.ok = null;
+  renderPage();
+}
+
+/* 可选的模型：本机识别到的 + 静态目录，去重；标记破甲支持状态 */
+function equipModelCandidates() {
+  const all = (S.models || []).filter((m) => m && m.id && !NON_CHAT_MODEL.test(m.id));
+  const seen = new Set();
+  const out = [];
+  for (const m of all) {
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
+    out.push({
+      id: m.id,
+      name: simpleText(m.name || m.id),
+      meta: [m.live ? "本机识别" : "", m.dshDefault ? "当前默认" : "",
+        m.dshPurge === "default" ? "破甲默认" : (m.dshPurge === "supported" ? "破甲支持" : "")].filter(Boolean).join(" · "),
+      cracked: m.dshPurge === "default" || m.dshPurge === "supported",
+    });
+  }
+  return out;
 }
 
 /* 预设该带哪几条红队工作流（记忆里的索引卡标题，见 scripts/seed-redteam-memory.mjs） */
@@ -4310,47 +4508,58 @@ const PRESET_WORKFLOWS = {
   custom: [],
 };
 
-/* 当前装备会加载的技能 + 跟的工作流 */
+/* 当前装备会加载的技能 + 跟的工作流（跨所有选中包汇总） */
 function equipPlan() {
-  const e = S.equip;
-  const p = PRESETS.find((x) => x.id === e.preset) || PRESETS[0];
-  const chosen = Array.isArray(e.items) && e.items.length ? e.items.filter((id) => (p.items || []).some((it) => it.id === id)) : (p.items || []).map((it) => it.id);
+  const chosen = new Set(equipChosenItems());
   const skills = [];
-  for (const it of p.items || []) {
-    if (!chosen.includes(it.id)) continue;
-    for (const s of it.skills || []) if (!skills.includes(s)) skills.push(s);
+  const workflows = [];
+  const items = [];
+  for (const p of equipPresetObjs()) {
+    for (const it of p.items || []) {
+      if (!chosen.has(equipItemKey(p.id, it.id))) continue;
+      items.push(equipItemKey(p.id, it.id));
+      for (const s of it.skills || []) if (!skills.includes(s)) skills.push(s);
+    }
+    for (const w of PRESET_WORKFLOWS[p.id] || []) if (!workflows.includes(w)) workflows.push(w);
   }
-  return { preset: p, items: chosen, skills: skills, workflows: PRESET_WORKFLOWS[p.id] || [] };
+  return { presets: equipPresets(), items: items, skills: skills, workflows: workflows, models: equipModels() };
 }
 
 function equipConfig(item) {
   if (item) {
-    const p = PRESETS.find((x) => x.id === item.preset) || PRESETS[0];
-    const chosen = Array.isArray(item.items) && item.items.length ? item.items : (p.items || []).map((it) => it.id);
+    const presets = Array.isArray(item.presets) && item.presets.length ? item.presets : (item.preset ? [item.preset] : ["redteam"]);
+    const objs = PRESETS.filter((p) => presets.includes(p.id));
+    const chosen = Array.isArray(item.items) && item.items.length ? item.items : objs.reduce((acc, p) => acc.concat((p.items || []).map((it) => equipItemKey(p.id, it.id))), []);
     const skills = [];
-    for (const it of p.items || []) {
-      if (!chosen.includes(it.id)) continue;
-      for (const s of it.skills || []) if (!skills.includes(s)) skills.push(s);
+    const workflows = [];
+    for (const p of objs) {
+      for (const it of p.items || []) {
+        if (!chosen.includes(equipItemKey(p.id, it.id))) continue;
+        for (const s of it.skills || []) if (!skills.includes(s)) skills.push(s);
+      }
+      for (const w of PRESET_WORKFLOWS[p.id] || []) if (!workflows.includes(w)) workflows.push(w);
     }
     return {
-      preset: item.preset || "",
+      presets: presets,
       agents: Array.isArray(item.agents) ? item.agents : [],
       permissions: item.permissions || "read-only",
       items: chosen,
       skills: skills,
-      workflows: PRESET_WORKFLOWS[item.preset] || [],
+      workflows: workflows,
+      models: Array.isArray(item.models) ? item.models : [],
       memory_endpoint: "/api/assign/<agent>.md",
       notes: item.notes || "",
     };
   }
   const plan = equipPlan();
   return {
-    preset: S.equip.preset,
+    presets: plan.presets,
     agents: equipAgents(true),
     permissions: S.equip.permissions,
     items: plan.items,
     skills: plan.skills,
     workflows: plan.workflows,
+    models: plan.models,
     memory_endpoint: "/api/assign/<agent>.md",
     notes: S.equip.notes,
   };
@@ -4370,17 +4579,38 @@ function renderEquip() {
   const e = S.equip;
   const config = equipConfig();
   const customSelected = e.agents.includes("custom");
-  const currentPreset = PRESETS.find((p) => p.id === e.preset) || PRESETS[0];
-  const presetItems = currentPreset.items || [];
-  // 没挑过就默认全装（保持原来「一键装整包」的手感）
-  const chosenItems = Array.isArray(e.items) && e.items.length ? e.items.filter((id) => presetItems.some((it) => it.id === id)) : presetItems.map((it) => it.id);
+  const activePresets = equipPresets();
+  const chosenKeys = equipChosenItems();
+  // 包多选：卡片显示序号
   const presetCards = PRESETS.map((p) => {
-    const on = p.id === e.preset;
+    const idx = activePresets.indexOf(p.id);
+    const on = idx >= 0;
     return `<button type="button" class="pick" data-preset="${esc(p.id)}" data-focus="preset-${esc(p.id)}" aria-pressed="${on}">
-      <span class="pick-top"><span class="pick-name">${esc(p.name)}</span>${on ? badge("已选", "accent") : ""}</span>
+      <span class="pick-top"><span class="pick-name">${esc(p.name)}</span>${on ? badge(activePresets.length > 1 ? String(idx + 1) : "已选", "accent") : ""}</span>
       <span class="pick-note">${esc(p.desc)}</span>
     </button>`;
   }).join("");
+  // 能力项按包分页展示（每个选中的包一页）
+  const itemGroups = equipPresetObjs().map((p) => {
+    const items = p.items || [];
+    const picked = items.filter((it) => chosenKeys.includes(equipItemKey(p.id, it.id)));
+    return {
+      preset: p,
+      total: items.length,
+      picked: picked.length,
+      cards: items.map((it) => {
+        const key = equipItemKey(p.id, it.id);
+        const on = chosenKeys.includes(key);
+        return `<button type="button" class="pick" data-equip-item="${esc(key)}" data-focus="eitem-${esc(key)}" aria-pressed="${on}">
+          <span class="pick-top"><span class="pick-name">${esc(it.name)}</span>${on ? badge("装", "accent") : ""}</span>
+          <span class="pick-note">${esc(it.desc)}</span>
+          ${(it.skills || []).length ? `<span class="pick-meta">${esc((it.skills || []).join(" · "))}</span>` : ""}
+        </button>`;
+      }).join(""),
+    };
+  });
+  const modelCands = equipModelCandidates();
+  const pickedModels = equipModels();
 
   const agentItems = AGENTS.map((a) => ({ id: a.id, name: a.name, desc: a.desc })).concat([{ id: "custom", name: "自定义", desc: "输入另一个本机智能体的名字。" }]);
   const agentCards = agentItems.map((a) => {
@@ -4420,29 +4650,47 @@ function renderEquip() {
     </section>
 
     <section class="section" aria-labelledby="h-items">
-      <h2 id="h-items"><span class="num">1+</span>装备哪些能力<span class="count">${chosenItems.length} / ${presetItems.length} 项</span></h2>
-      ${presetItems.length
-        ? `<p class="hint">勾选后才装：不勾的这项不会出现在配置里；每项后面是它会加载的技能。</p>
-          <div class="grid models">${presetItems.map((it) => {
-            const on = chosenItems.includes(it.id);
-            return `<button type="button" class="pick" data-equip-item="${esc(it.id)}" data-focus="eitem-${esc(it.id)}" aria-pressed="${on}">
-                <span class="pick-top"><span class="pick-name">${esc(it.name)}</span>${on ? badge("装", "accent") : ""}</span>
-                <span class="pick-note">${esc(it.desc)}</span>
-                ${(it.skills || []).length ? `<span class="pick-meta">${esc((it.skills || []).join(" · "))}</span>` : ""}
-              </button>`;
-          }).join("")}</div>
+      <h2 id="h-items"><span class="num">1+</span>装备哪些能力<span class="count">${chosenKeys.length} / ${equipAllItemKeys().length} 项 · ${itemGroups.length} 页</span></h2>
+      ${itemGroups.length
+        ? `<p class="hint">每个选中的装备包一页；勾选后才装，不勾的不进配置。每项后面是它会加载的技能。</p>
+          ${itemGroups.filter((g) => g.total).map((g) => `<div class="equip-page">
+            <div class="equip-page-head"><strong>${esc(g.preset.name)}</strong><span class="mono small">${g.picked} / ${g.total} 项</span>
+              <span class="spacer"></span>
+              <button type="button" class="small" data-equip-page-all="${esc(g.preset.id)}">本页全选</button>
+              <button type="button" class="small" data-equip-page-none="${esc(g.preset.id)}">本页清空</button>
+            </div>
+            <div class="grid models">${g.cards}</div>
+          </div>`).join("")}
           <div class="actions" style="margin-top:8px">
-            <button type="button" class="ghost" data-equip-all>全选</button>
-            <button type="button" class="ghost" data-equip-none>全不选</button>
+            <button type="button" class="ghost" data-equip-all>全部全选</button>
+            <button type="button" class="ghost" data-equip-none>全部清空</button>
           </div>`
-        : `<p class="hint">这个包没有预置能力项（自定义包请直接用备注写清要装什么）。</p>`}
+        : `<p class="hint">选中的包都没有预置能力项（自定义包请在备注里写清要装什么）。</p>`}
       ${equipPlan().skills.length ? `<div class="card soft" style="margin-top:10px">
         <div class="s-row"><div class="s-row-main"><strong>这套会加载 ${equipPlan().skills.length} 个技能</strong>
           <span class="mono small">${esc(equipPlan().skills.join(" · "))}</span></div></div>
         ${equipPlan().workflows.length ? `<div class="s-row"><div class="s-row-main"><strong>跟这 ${equipPlan().workflows.length} 条工作流</strong>
           <span class="mono small">${esc(equipPlan().workflows.join(" · "))}</span></div></div>` : ""}
-        <p class="hint">技能正文由 skill 工具按需加载；这些工作流与技能索引卡在记忆库里（memory_recall 可命中）。</p>
+        ${config.models.length ? `<div class="s-row"><div class="s-row-main"><strong>带这 ${config.models.length} 个模型</strong>
+          <span class="mono small">${esc(config.models.join(" · "))}</span></div></div>` : ""}
+        <p class="hint">技能正文由 skill 工具按需加载；工作流与技能索引卡在记忆库里（memory_recall 可命中）。</p>
       </div>` : ""}
+    </section>
+
+    <section class="section" aria-labelledby="h-models">
+      <h2 id="h-models"><span class="num">1++</span>带哪些模型<span class="count">${pickedModels.length} / ${modelCands.length} 个</span></h2>
+      <p class="hint">这里选的是「装给智能体后可直接用的模型」；标了「破甲默认 / 破甲支持」的就是已经适配过破甲的。</p>
+      <div class="grid models">${modelCands.map((m) => {
+        const on = pickedModels.includes(m.id);
+        return `<button type="button" class="pick" data-equip-model="${esc(m.id)}" data-focus="emodel-${esc(m.id)}" aria-pressed="${on}">
+          <span class="pick-top"><span class="pick-name">${esc(m.name)}</span>${on ? badge("带", "accent") : ""}${m.cracked ? badge("已破甲", "good") : ""}</span>
+          <span class="pick-note">${esc(m.meta || m.id)}</span>
+        </button>`;
+      }).join("")}</div>
+      <div class="actions" style="margin-top:8px">
+        <button type="button" class="ghost" data-equip-model-cracked>只选已破甲的</button>
+        <button type="button" class="ghost" data-equip-model-none>全不选</button>
+      </div>
     </section>
 
     <section class="section" aria-labelledby="h-agents">
@@ -4512,32 +4760,42 @@ function renderEquip() {
 
 function bindEquip() {
   $$("#page [data-preset]").forEach((el) => {
-    el.addEventListener("click", () => {
-      const p = PRESETS.find((x) => x.id === el.dataset.preset);
-      S.equip.preset = el.dataset.preset;
-      if (p) S.equip.agents = [...p.agents];
-      S.equip.items = p && p.items ? p.items.map((it) => it.id) : [];
-      S.equip.error = null;
-      S.equip.ok = null;
-      renderPage();
-    });
+    el.addEventListener("click", () => equipTogglePreset(el.dataset.preset));
   });
   // 能力项勾选：装之前先挑，不勾的不进配置
   $$("#page [data-equip-item]").forEach((el) => {
-    el.addEventListener("click", () => {
-      const id = el.dataset.equipItem;
-      const cur = Array.isArray(S.equip.items) && S.equip.items.length
-        ? S.equip.items.slice()
-        : ((PRESETS.find((p) => p.id === S.equip.preset) || PRESETS[0]).items || []).map((it) => it.id);
-      S.equip.items = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-      S.equip.error = null;
-      S.equip.ok = null;
-      renderPage();
-    });
+    el.addEventListener("click", () => equipToggleItem(el.dataset.equipItem));
   });
+  $$("#page [data-equip-model]").forEach((el) => {
+    el.addEventListener("click", () => equipToggleModel(el.dataset.equipModel));
+  });
+  $$("#page [data-equip-page-all]").forEach((el) => el.addEventListener("click", () => {
+    const pid = el.dataset.equipPageAll;
+    const p = PRESETS.find((x) => x.id === pid);
+    if (!p) return;
+    const cur = new Set(equipChosenItems());
+    for (const it of p.items || []) cur.add(equipItemKey(p.id, it.id));
+    S.equip.items = Array.from(cur);
+    renderPage();
+  }));
+  $$("#page [data-equip-page-none]").forEach((el) => el.addEventListener("click", () => {
+    const pid = el.dataset.equipPageNone;
+    const p = PRESETS.find((x) => x.id === pid);
+    if (!p) return;
+    const drop = new Set((p.items || []).map((it) => equipItemKey(p.id, it.id)));
+    S.equip.items = equipChosenItems().filter((k) => !drop.has(k));
+    renderPage();
+  }));
+  $$("#page [data-equip-model-cracked]").forEach((el) => el.addEventListener("click", () => {
+    S.equip.models = equipModelCandidates().filter((m) => m.cracked).map((m) => m.id);
+    renderPage();
+  }));
+  $$("#page [data-equip-model-none]").forEach((el) => el.addEventListener("click", () => {
+    S.equip.models = [];
+    renderPage();
+  }));
   $$("#page [data-equip-all]").forEach((el) => el.addEventListener("click", () => {
-    const p = PRESETS.find((x) => x.id === S.equip.preset) || PRESETS[0];
-    S.equip.items = (p.items || []).map((it) => it.id);
+    S.equip.items = null; // null = 按当前选中的包全选
     renderPage();
   }));
   $$("#page [data-equip-none]").forEach((el) => el.addEventListener("click", () => {
@@ -4594,7 +4852,7 @@ async function issueEquipment() {
   try {
     const data = await request("/api/equipment", {
       method: "POST",
-      body: { preset: e.preset, agents, permissions: e.permissions, notes: e.notes.trim(), items: equipChosenItems() },
+      body: { preset: equipPresets()[0], presets: equipPresets(), agents, permissions: e.permissions, notes: e.notes.trim(), items: equipChosenItems(), models: equipModels() },
     });
     if (!data || data.ok === false) throw payloadError(data, "发放失败");
     if (Array.isArray(data.equipment)) S.equipment = data.equipment;

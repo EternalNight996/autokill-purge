@@ -1403,3 +1403,23 @@ body[data-theme="terminal"] #nav a[aria-current="page"] {
   flex-wrap: wrap;
 }
 .mcp-line .badge { flex: 0 0 auto; }
+
+/* 装备能力分页：每个选中的包一页 */
+.equip-page {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-3);
+}
+.equip-page-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.equip-page-head .spacer { flex: 1 1 auto; }
+.equip-page-head strong { font-size: 13px; letter-spacing: .02em; }

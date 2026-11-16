@@ -1064,7 +1064,17 @@ async function handleApi(req, res, url, state) {
     if (!body.preset || !Array.isArray(body.agents) || body.agents.length === 0) return send(res, 400, { ok: false, error: 'preset and agents[] are required' });
     return withLock(async () => {
       const s = await readState();
-      const equipment = { id: 'e' + (s.equipment.length + 1), preset: body.preset, agents: body.agents, permissions: body.permissions || 'read-only', items: Array.isArray(body.items) ? body.items : [], notes: body.notes || '', at: new Date().toISOString() };
+      const equipment = {
+        id: 'e' + (s.equipment.length + 1),
+        preset: body.preset,
+        presets: Array.isArray(body.presets) && body.presets.length ? body.presets : [body.preset],
+        agents: body.agents,
+        permissions: body.permissions || 'read-only',
+        items: Array.isArray(body.items) ? body.items : [],
+        models: Array.isArray(body.models) ? body.models : [],
+        notes: body.notes || '',
+        at: new Date().toISOString(),
+      };
       s.equipment.push(equipment);
       await writeState(s);
       return send(res, 200, { ok: true, equipment: equipment });
