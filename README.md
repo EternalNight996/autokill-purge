@@ -219,17 +219,21 @@ MIT. 图标与截图为本仓库自制；`dsh-purge` 内容按其原许可证（
 | 目标 | 状态 | 地址 |
 | --- | --- | --- |
 | **GitHub** | ✅ 已发布（140 文件 / 41 张截图 / README 顶部图标 + 两张截图正常渲染） | https://github.com/EternalNight996/autokill-purge |
-| **npm** | ⏳ 卡在 npm 的 staged publishing：`1.1.0` 已提交但需要你在网页端确认 | https://www.npmjs.com/package/autokill-purge |
+| **npm** | ✅ 已发布 `autokill-purge@1.1.0`（实测 `npm i autokill-purge` 可装） | https://www.npmjs.com/package/autokill-purge |
 | **Gitee** | ⛔ token 无效（`Access token does not exist`），需要换一个 | — |
 
 ### npm 说明
 
-`npm publish` 返回 `E409 Cannot publish over previously staged version "1.1.0"`，registry 里当前只有
-`0.0.0-stage`（description: *Temporary package placeholder for staged publishing*）——
-npm 现在对首次发版走 **staged publishing**：版本先进待审，维护者到包页面点确认后才上架。
-本机 npm 是 10.9.7，没有 `npm stage` 子命令，只能去网页确认。
+首次发版会经过 npm 的 staged publishing，期间 registry 里先出现 `0.0.0-stage` 占位，
+待审版本（`1.1.0`）随后转正。当前已正式上架：
 
-确认地址：https://www.npmjs.com/package/autokill-purge/manage  （或包页面的「Staged versions」）
+```bash
+npm i autokill-purge          # 装成依赖
+npx autokill-purge            # 直接跑启动器（起记忆库 + 控制台 + 开浏览器）
+```
+
+> 小提示：同一版本号二次 publish 会报 `E409 Cannot publish over previously staged version` ——
+> 改 `package.json` 的 version 再发即可（本次就是先发 1.1.0、被 stage 占位后没有重复发）。
 
 ### 一键发布脚本
 
