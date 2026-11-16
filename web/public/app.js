@@ -1813,9 +1813,16 @@ function simpleEquippedItems() {
 
 function renderSimpleEquip() {
   const items = simpleEquippedItems();
-  const base = PRESETS.find((p) => p.id === "redteam") || PRESETS[0];
+  const base = simpleEquipPresetObj();
   const baseItems = base.items || [];
-  const chosen = Array.isArray(S.simple.equipItems) ? S.simple.equipItems.filter((id) => baseItems.some((it) => it.id === id)) : baseItems.map((it) => it.id);
+  const chosen = simpleChosenItems();
+  const presetCards = PRESETS.map((p) => {
+    const on = p.id === base.id;
+    return `<button type="button" class="pick" data-simple-preset="${esc(p.id)}" data-focus="spreset-${esc(p.id)}" aria-pressed="${on}">
+        <span class="pick-top"><span class="pick-name">${esc(p.name)}</span>${on ? badge("已选", "accent") : ""}</span>
+        <span class="pick-note">${esc(p.desc)}</span>
+      </button>`;
+  }).join("");
   const itemCards = baseItems.map((it) => {
     const on = chosen.includes(it.id);
     return `<button type="button" class="pick" data-simple-item="${esc(it.id)}" data-focus="sitem-${esc(it.id)}" aria-pressed="${on}">
@@ -1843,31 +1850,79 @@ function renderSimpleEquip() {
         <span class="s-status-detail">${items.length ? "这些能力都装好了，可以直接用。" : "还没有装能力，点下面这个按钮一次装好。"}</span>
       </div>
     </section>
+    <section class="section" aria-labelledby="s-eq-pack">
+      <h2 id="s-eq-pack"><span class="num">1</span>选装备包<span class="count">${PRESETS.length} 个</span></h2>
+      <p class="hint">先挑一个包，再决定这个包里的哪些能力要装。</p>
+      <div class="grid models">${presetCards}</div>
+    </section>
     <section class="section" aria-labelledby="s-eq-pick">
-      <h2 id="s-eq-pick"><span class="num">1</span>装哪些能力<span class="count">${chosen.length} / ${baseItems.length} 项</span></h2>
-      <p class="hint">先勾再装：不勾的这项不会出现在配置里。</p>
-      <div class="grid models">${itemCards}</div>
+      <h2 id="s-eq-pick"><span class="num">2</span>装哪些能力<span class="count">${chosen.length} / ${baseItems.length} 项</span></h2>
+      ${baseItems.length
+        ? `<p class="hint">先勾再装：不勾的这项不会出现在配置里。</p>
+          <div class="grid models">${itemCards}</div>
+          <div class="actions" style="margin-top:8px">
+            <button type="button" class="ghost" data-simple-all>全选</button>
+            <button type="button" class="ghost" data-simple-none>全不选</button>
+          </div>`
+        : `<p class="hint">这个包没有预置能力项（自定义包在备注里写清楚要装什么）。</p>`}
+      ${simplePlanSkills().length ? `<div class="card soft" style="margin-top:10px">
+        <div class="s-row"><div class="s-row-main"><strong>这套会加载 ${simplePlanSkills().length} 个技能</strong>
+          <span class="mono small">${esc(simplePlanSkills().join(" · "))}</span></div></div>
+        ${simplePlanWorkflows().length ? `<div class="s-row"><div class="s-row-main"><strong>跟这 ${simplePlanWorkflows().length} 条工作流</strong>
+          <span class="mono small">${esc(simplePlanWorkflows().join(" · "))}</span></div></div>` : ""}
+      </div>` : ""}
     </section>
     <section class="section">
       <button type="button" class="primary s-generate" id="sEquipAll"${S.simple.equipBusy || !chosen.length ? ' disabled aria-busy="true"' : ""}>${S.simple.equipBusy ? "装备中…" : (chosen.length ? `装备选中的 ${chosen.length} 项` : "先勾至少一项")}</button>
       <div id="sEquipOut" style="margin-top:10px">${out}</div>
     </section>
     <section class="section" aria-labelledby="s-eq-h">
-      <h2 id="s-eq-h"><span class="num">2</span>已装的<span class="count">${items.length} 件</span></h2>
+      <h2 id="s-eq-h"><span class="num">3</span>已装的<span class="count">${items.length} 件</span></h2>
       ${rows}
     </section>
   `;
   bindSimpleEquip();
 }
 
+/* 普通模式当前选的装备包（默认红队全装） */
+function simpleEquipPresetObj() {
+  const id = S.simple.equipPreset || "redteam";
+  return PRESETS.find((p) => p.id === id) || PRESETS[0];
+}
+
 function simpleChosenItems() {
-  const base = PRESETS.find((p) => p.id === "redteam") || PRESETS[0];
+  const base = simpleEquipPresetObj();
   const all = (base.items || []).map((it) => it.id);
   if (!Array.isArray(S.simple.equipItems)) return all;
   return S.simple.equipItems.filter((id) => all.includes(id));
 }
 
+/* 普通模式这套会加载哪些技能 / 跟哪几条工作流 */
+function simplePlanSkills() {
+  const base = simpleEquipPresetObj();
+  const chosen = simpleChosenItems();
+  const out = [];
+  for (const it of base.items || []) {
+    if (!chosen.includes(it.id)) continue;
+    for (const s of it.skills || []) if (!out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+function simplePlanWorkflows() {
+  return PRESET_WORKFLOWS[simpleEquipPresetObj().id] || [];
+}
+
 function bindSimpleEquip() {
+  $$("#page [data-simple-preset]").forEach((el) => {
+    el.addEventListener("click", () => {
+      S.simple.equipPreset = el.dataset.simplePreset;
+      S.simple.equipItems = null;
+      S.simple.equipError = "";
+      S.simple.equipResult = "";
+      renderPage();
+    });
+  });
   $$("#page [data-simple-item]").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.dataset.simpleItem;
@@ -1895,7 +1950,8 @@ async function simpleEquipPreset() {
   S.simple.equipError = "";
   S.simple.equipResult = "";
   renderPage();
-  const body = { preset: "redteam", agents: ["dsh"], permissions: "read-only", notes: "", items: simpleChosenItems() };
+      const p = simpleEquipPresetObj();
+    const body = { preset: p.id, agents: p.agents.length ? p.agents : ["dsh"], permissions: "read-only", notes: "", items: simpleChosenItems() };
   try {
     const data = await request("/api/equipment", { method: "POST", body });
     if (!data || data.ok === false) throw payloadError(data, "装备失败");
@@ -1905,7 +1961,7 @@ async function simpleEquipPreset() {
     S.simple.removed = [];
     const items = simpleEquippedItems();
     const chosen = simpleChosenItems();
-    const base = PRESETS.find((p) => p.id === "redteam") || PRESETS[0];
+    const base = simpleEquipPresetObj();
     S.simple.equipResult = chosen.length
       ? `已装 ${chosen.length} 项能力：${chosen.map((id) => ((base.items || []).find((x) => x.id === id) || { name: id }).name).join("、")}`
       : "这次一项都没勾，没有装任何能力。";
