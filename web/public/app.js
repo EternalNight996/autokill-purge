@@ -5552,12 +5552,112 @@ function renderSettings() {
     ${groupsHtml("settings", [
       { key: "base", html: baseGroup },
       { key: "peer", html: renderPeerBlock() },
+      { key: "memcli", html: renderMemCliBlock() },
       { key: "paths", html: pathsGroup },
       { key: "diag", html: diagGroup },
     ])}
   `;
   bindSettings();
   bindPeer();
+  bindMemCli();
+}
+
+/* ============================================================ 记忆库 CLI（dsh-memory） */
+function cliState() {
+  if (!S.memCli) S.memCli = { loaded: false, loading: false, error: null, data: null, busy: "", message: "", audit: null, ledger: null };
+  return S.memCli;
+}
+
+async function loadMemCli(force = false) {
+  const c = cliState();
+  if (c.loading || (c.loaded && !force)) return;
+  c.loading = true;
+  c.error = null;
+  try {
+    const d = await request("/api/memory/cli/status");
+    if (d && d.ok === false) throw payloadError(d, "读取失败");
+    c.data = d;
+    c.loaded = true;
+  } catch (e) {
+    c.error = e;
+  } finally {
+    c.loading = false;
+    if (S.tab === "settings") renderPage();
+  }
+}
+
+async function memCliAction(kind) {
+  const c = cliState();
+  c.busy = kind;
+  c.message = "";
+  renderPage();
+  try {
+    if (kind === "restart" || kind === "stop") {
+      const d = await request("/api/memory/cli/" + kind, { method: "POST", body: { confirm: true } });
+      if (!d || d.ok === false) throw payloadError(d, kind + " 失败");
+      c.message = kind === "restart"
+        ? `已用 CLI 重启（${d.health && d.health.reachable ? "在线 v" + d.health.version + " · vault " + String(d.health.vault || "").split("\\").pop() : "还没起来"}）`
+        : "已停止";
+    } else if (kind === "audit") {
+      const d = await request("/api/memory/cli/audit?status=pending");
+      c.audit = d;
+      const n = d.json ? ((d.json.cards || []).length) : null;
+      c.message = n != null ? `待审 ${n} 张` : "已读取";
+    } else if (kind === "ledger") {
+      const d = await request("/api/memory/cli/ledger?days=7");
+      c.ledger = d;
+      c.message = d.ok ? "账本已读取（近 7 天）" : "账本读取失败";
+    }
+    await loadMemCli(true);
+  } catch (e) {
+    c.error = e;
+  } finally {
+    c.busy = "";
+    renderPage();
+  }
+}
+
+function renderMemCliBlock() {
+  const c = cliState();
+  if (!c.loaded && !c.loading) loadMemCli();
+  const d = c.data || {};
+  const h = d.health || {};
+  const wds = d.watchdogs || [];
+  const okTone = h.reachable ? "good" : "bad";
+  return `<section class="section" aria-labelledby="h-cli">
+      <h2 id="h-cli"><span class="num">4</span>记忆库 CLI<span class="count">${esc(String(d.port || 7989))} · ${h.reachable ? "在线 v" + esc(String(h.version || "")) : "离线"}</span></h2>
+      ${c.error ? alertBox("CLI 读取失败", simpleReason(c.error)) : ""}
+      <div class="card soft">
+        <div class="s-row"><div class="s-row-main">
+          <span class="mcp-line"><strong>dsh-memory</strong>${badge(h.reachable ? "在线" : "离线", okTone)}${badge("v" + esc(String(d.servedVersion || d.pkgVersion || "?")), "")}</span>
+          <span class="mono small">${esc(d.vault || "")}</span>
+          <span class="mono small muted">watchdog ${wds.length ? wds.map((w) => "pid " + w.pid + (w.alive ? " 活跃" : " 已停")).join(" · ") : "未托管（启动器直起）"}</span>
+        </div>
+        <div class="actions">
+          <button type="button" class="small" data-cli="audit"${c.busy === "audit" ? " disabled" : ""}>看待审</button>
+          <button type="button" class="small" data-cli="ledger"${c.busy === "ledger" ? " disabled" : ""}>看账本</button>
+          <button type="button" class="small" data-cli="restart"${c.busy === "restart" ? " disabled" : ""}>${c.busy === "restart" ? "重启中…" : "CLI 重启"}</button>
+          <button type="button" class="small" data-cli="stop"${c.busy === "stop" ? " disabled" : ""}>停止</button>
+        </div>
+        </div>
+        <p class="hint">这里调的是它自带的 <code>dsh-memory</code>；重启/停止一律带死 <code>--port 7989 --vault ~/.dsh/memory-vault-mem-purge</code>，audit/ledger 额外注入 <code>MEMORY_VAULT_DIR</code>（它这两个子命令不认 --vault，只认这个环境变量）。</p>
+      </div>
+      ${c.message ? okBox(c.message) : ""}
+      ${c.audit && c.audit.json ? `<div class="card soft" style="margin-top:8px"><div class="s-row"><div class="s-row-main"><strong>待审 ${(c.audit.json.cards || []).length} 张</strong>
+        <span class="mono small">${esc((c.audit.json.cards || []).slice(0, 6).map((x) => x.title || x.path || x).join(" · "))}</span></div></div>
+        <p class="hint">审批请到记忆库面板的「审核中心」（本页不代批）。</p></div>` : ""}
+      ${c.ledger && c.ledger.json ? `<div class="card soft" style="margin-top:8px"><div class="s-row"><div class="s-row-main"><strong>近 7 天账本</strong>
+        <span class="mono small">${esc(JSON.stringify(c.ledger.json.totals || {}).slice(0, 220))}</span></div></div></div>` : ""}
+    </section>`;
+}
+
+function bindMemCli() {
+  $$("#page [data-cli]").forEach((el) => el.addEventListener("click", () => {
+    const kind = el.dataset.cli;
+    if (kind === "restart" && !window.confirm("用 CLI 重启 7989 记忆库？（会带死 --vault mem-purge）")) return;
+    if (kind === "stop" && !window.confirm("停掉 7989 记忆库？桌面图标可以再拉起来。")) return;
+    memCliAction(kind);
+  }));
 }
 
 /* ============================================================ MEM Pair（实例配对 / 互相传卡） */

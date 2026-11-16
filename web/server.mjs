@@ -17,6 +17,7 @@ import { listIntelReports, readIntelReport, runIntelSweep } from './intel.mjs';
 import { readDrill, grantDrill, revokeDrill, drillLegal } from './drill.mjs';
 import { readMcpConfig, saveMcpServer, deleteMcpServer, testMcpServer, testSavedServer, exportMcpConfig } from './mcp.mjs';
 import { peerStatus, peerDiscover, peerStart, peerConnect, peerAccept, peerRevoke, peerUpload, peerDownload, isolatedInfo } from './peer.mjs';
+import { memCliStatus, memCliRestart, memCliStop, memCliLedger, memCliAuditList } from './memcli.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -1090,6 +1091,37 @@ async function handleApi(req, res, url, state) {
     if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
     const s = await readState();
     return send(res, 200, await peerDownload(s, { code: body.code, since: body.since }));
+  }
+
+
+  // ---- memory-eternal CLI（dsh-memory）：只读查询 + 受控 restart/stop -----------------
+  if (p === '/api/memory/cli/status' && method === 'GET') {
+    try { return send(res, 200, await memCliStatus()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'cli_status_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/memory/cli/ledger' && method === 'GET') {
+    try { return send(res, 200, await memCliLedger(url.searchParams.get('days') || 7)); }
+    catch (e) { return send(res, 500, { ok: false, error: 'cli_ledger_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/memory/cli/audit' && method === 'GET') {
+    try { return send(res, 200, await memCliAuditList(url.searchParams.get('status') || 'pending')); }
+    catch (e) { return send(res, 500, { ok: false, error: 'cli_audit_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/memory/cli/restart' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '会用 CLI 重启 7989（固定 --vault mem-purge）' });
+    return withLock(async () => {
+      try { return send(res, 200, await memCliRestart()); }
+      catch (e) { return send(res, 500, { ok: false, error: 'cli_restart_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/memory/cli/stop' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try { return send(res, 200, await memCliStop()); }
+      catch (e) { return send(res, 500, { ok: false, error: 'cli_stop_failed', detail: publicError(e) }); }
+    });
   }
 
   // breach (FR-2)

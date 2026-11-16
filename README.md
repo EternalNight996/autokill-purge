@@ -192,3 +192,34 @@ node "...\bin\dsh-memory.mjs" peer upload --to XXXX-XXXX
 - 桌面快捷方式与开机自启的启动器也打开这个地址（scripts/launch.mjs 的 PURGE_ENTRY 可覆盖）。
 
 要改成别的部署（比如换端口），改 PRIVATE 常量与 MEM_ISOLATED 即可；运营库（7999）始终不受影响。
+## 用 CLI 管隔离库（dsh-memory）
+
+memory-eternal 自带 CLI，控制台「设置 → 记忆库 CLI」把它包了一层（`web/memcli.mjs` + `/api/memory/cli/*`）：
+
+| 控制台按钮 | 实际命令 |
+| --- | --- |
+| 看待审 | `dsh-memory audit list --status pending --json` |
+| 看账本 | `dsh-memory ledger --days 7 --json` |
+| CLI 重启 | `dsh-memory restart --port 7989 --vault ~/.dsh/memory-vault-mem-purge` |
+| 停止 | `dsh-memory stop --port 7989 --json` |
+
+**两个必须写死的参数**（封装里不接受外部传）：
+
+- `restart` / `stop` 永远带 `--port 7989 --vault <mem-purge vault>`：这版 CLI 的 watchdog
+  子进程若没有显式 `--vault`，会走 `vault-pref` 的 `activeVault`（默认运营库 `~/.dsh/memory-vault`），
+  实测会起在运营库上 —— 封装里还加了自检：起完发现 vault 不对就立刻 `stop` 并报错。
+- `audit` / `ledger` 不认 `--vault`，只认环境变量 `MEMORY_VAULT_DIR`：封装里强制注入隔离库路径，
+  否则读到的是运营库（实测未注入时待审 232 张 = 运营库，注入后 39 张 = 隔离库）。
+
+命令行等价：
+
+```powershell
+$cli = "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\memory-eternal\bin\dsh-memory.mjs"
+$env:MEMORY_VAULT_DIR = "$env:USERPROFILE\.dsh\memory-vault-mem-purge"
+node $cli status --port 7989 --json
+node $cli audit list --status pending --json
+node $cli ledger --days 7 --json
+node $cli restart --port 7989 --vault "$env:MEMORY_VAULT_DIR"
+```
+
+审批不走 CLI（`audit approve/reject` 代批会绕过你的审核），要批请到记忆库面板的审核中心。
