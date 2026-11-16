@@ -800,3 +800,14 @@ textarea.shake {
   border-color: var(--line, #2b3242);
   background: transparent;
 }
+
+/* 两段式确认：armed 状态的按钮提示色 */
+.primary.warn {
+  background: #d29922 !important;
+  border-color: #d29922 !important;
+  color: #1b1200 !important;
+}
+.ghost.warn {
+  border-color: #d29922 !important;
+  color: #d29922 !important;
+}

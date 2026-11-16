@@ -168,6 +168,8 @@ const S = {
     kb: { stats: null, mode: "poc", q: "", items: [], detail: null, error: null },
     intel: { reports: null, report: null, running: false, days: 7, error: null, last: null },
     drill: { data: null, legal: null, busy: false, signer: "", error: null },
+    pendingAction: null,
+    busyKind: null,
     netScopeDraft: null,
     loading: false, tried: false, error: null, busy: false, message: "",
     promptDraft: null, promptDirty: false,
@@ -1091,14 +1093,25 @@ function simpleSteps() {
 async function simpleHostAction(kind) {
   const h = S.host;
   if (h.busy) return;
-  const ask = {
-    apply: "把破甲注入到你本机的 dsh 安装？会先自动备份，改完要重启 dsh 才生效。",
-    uninstall: "卸载会先把宿主还原成原版、再清掉 dsh-purge 的插件文件。会先自动备份，继续？",
-    factory: "一键还原：用官方 app.asar 原件覆盖被改的宿主文件。会先自动备份，继续？",
-    snapshot: "先把现在的宿主状态备份一份？",
-  }[kind] || "继续？";
-  if (!window.confirm(ask)) return;
+  // 两段式确认：第一次点只是把按钮变成「再点一次确认」，不弹 confirm（弹窗会被拦、也可能被当成没反应）
+  const now = Date.now();
+  const armed = !!(h.pendingAction && h.pendingAction.kind === kind && now - h.pendingAction.at < 6000);
+  if (!armed) {
+    h.pendingAction = { kind: kind, at: now };
+    h.message = "";
+    h.error = null;
+    renderPage();
+    setTimeout(() => {
+      if (S.host.pendingAction && S.host.pendingAction.kind === kind) {
+        S.host.pendingAction = null;
+        if (S.tab === "breach") renderPage();
+      }
+    }, 6200);
+    return;
+  }
+  h.pendingAction = null;
   h.busy = true;
+  h.busyKind = kind;
   h.message = "";
   h.error = null;
   renderPage();
@@ -1107,29 +1120,27 @@ async function simpleHostAction(kind) {
     if (kind === "apply") {
       data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply" } });
       if (!data || data.ok === false) throw payloadError(data, "注入失败");
-      h.message = `已注入：新增 ${fmtNum(data.result.applied)} 处（${fmtNum(data.result.already)} 处本来就是最新）。重启 dsh 生效。`;
-    } else if (kind === "uninstall") {
+      const added = (data.result && data.result.applied) || 0;
+      const already = (data.result && data.result.already) || 0;
+      h.message = added
+        ? `注入完成：新增 ${fmtNum(added)} 处，${fmtNum(already)} 处本来就是最新。重启 dsh 生效。`
+        : `注入完成：宿主本来就是最新（${fmtNum(already)} 处无需再改，0 处新增）。重启 dsh 后仍生效。`;
+    } else {
       data = await request("/api/host/uninstall", { method: "POST", body: { confirm: true } });
       if (!data || data.ok === false) throw payloadError(data, "卸载失败");
       const u = data.uninstall || {};
-      h.message = `已卸载：${u.applied ? "宿主已还原，" : ""}${(u.stripped || []).length} 个 profile 清理完成${(u.errors || []).length ? "，有 " + u.errors.length + " 条警告" : ""}。重启 dsh 生效。`;
-    } else if (kind === "factory") {
-      data = await request("/api/host/factory", { method: "POST", body: { confirm: true } });
-      if (!data || data.ok === false) throw payloadError(data, "还原失败");
-      h.message = `已还原 ${fmtNum(data.factory.restored)} 处（跳过 ${fmtNum(data.factory.skipped)}）。重启 dsh 生效。`;
-    } else {
-      data = await request("/api/host/snapshot", { method: "POST", body: { tag: "simple" } });
-      if (!data || data.ok === false) throw payloadError(data, "备份失败");
-      h.message = `已备份：${data.snapshot.id}（${fmtNum(data.snapshot.files)} 个文件）`;
+      h.message = `卸载完成：${u.applied ? "宿主已还原，" : ""}${(u.stripped || []).length} 个 profile 已清理${(u.errors || []).length ? "，有 " + u.errors.length + " 条警告" : ""}。重启 dsh 生效。`;
     }
-    toast("完成");
+    toast(kind === "apply" ? "注入完成" : "卸载完成");
     S.host.tried = false;
     await loadHostStatus(true);
   } catch (e) {
     h.error = e;
     h.message = simpleReason(e);
+    toast("失败：" + simpleReason(e));
   } finally {
     h.busy = false;
+    h.busyKind = null;
     renderPage();
   }
 }
@@ -2145,14 +2156,16 @@ function renderFlowApplyStep() {
         </div>
       </div>
     </details>` : "";
+  const pend = (kind) => !!(h.pendingAction && h.pendingAction.kind === kind && Date.now() - h.pendingAction.at < 6000);
   return `<section class="section" aria-labelledby="f-apply-h">
     <h2 id="f-apply-h"><span class="num">3</span>注入 / 卸载 / 还原
       <span class="count">${fmtNum(c.applied || 0)}/${fmtNum(c.total || 0)} 已注入${c.failed ? ` · ${c.failed} 失败` : ""} · 备份 ${snaps.length}</span></h2>
     <div class="actions">
-      <button type="button" class="primary" data-simple-host="apply"${busy || !authorized ? " disabled" : ""}>${busy ? "处理中…" : "一键注入"}</button>
-      <button type="button" class="ghost" data-simple-host="uninstall"${busy || !authorized ? " disabled" : ""}>一键卸载</button>
-      <span class="hint">注入前自动备份；卸载会先把宿主还原成原版再清插件文件。重启 dsh 生效。</span>
+      <button type="button" class="${pend("apply") ? "primary warn" : "primary"}" data-simple-host="apply"${busy || !authorized ? " disabled" : ""}>${busy && h.busyKind === "apply" ? "注入中…" : (pend("apply") ? "再点一次确认注入" : "一键注入")}</button>
+      <button type="button" class="${pend("uninstall") ? "ghost warn" : "ghost"}" data-simple-host="uninstall"${busy || !authorized ? " disabled" : ""}>${busy && h.busyKind === "uninstall" ? "卸载中…" : (pend("uninstall") ? "再点一次确认卸载" : "一键卸载")}</button>
+      <span class="hint">点一次先确认、再点一次执行；注入前自动备份，卸载会先还原宿主再清插件文件。</span>
     </div>
+    ${pend("apply") || pend("uninstall") ? `<div class="alert warn" role="alert"><strong>再点一次同一个按钮才会执行</strong><span class="hint">${pend("apply") ? "注入会改本机 dsh 安装，重启后生效。" : "卸载会还原宿主并删掉三处插件文件，之后要重装才能再用。"}</span></div>` : ""}
     ${gate}
     ${msg}
     ${promptBox}
