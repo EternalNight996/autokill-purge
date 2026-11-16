@@ -659,12 +659,12 @@ async function readMode() {
   if (s.dataMode === 'simple' || s.dataMode === 'technical') {
     mode = s.dataMode;
     how = '#modeSwitch[data-mode=' + s.dataMode + ']';
-  } else if (s.navCount === 6) {
+  } else if (s.navCount === 8) {
     mode = 'technical';
-    how = '导航 6 项';
-  } else if (s.navCount === 4) {
+    how = '导航 8 项';
+  } else if (s.navCount === 6) {
     mode = 'simple';
-    how = '导航 4 项';
+    how = '导航 6 项';
   } else if (s.ariaChecked === 'true') {
     mode = 'technical';
     how = '#modeSwitch[aria-checked=true]';
@@ -672,7 +672,7 @@ async function readMode() {
     mode = 'simple';
     how = '#modeSwitch[aria-checked=false]';
   }
-  if (mode && s.ariaChecked && (s.navCount === 4 || s.navCount === 6)) {
+  if (mode && s.ariaChecked && (s.navCount === 6 || s.navCount === 8)) {
     const fromAria = s.ariaChecked === 'true' ? 'technical' : 'simple';
     if (fromAria !== mode) log(`  [note] #modeSwitch aria-checked=${s.ariaChecked} 与导航项数 ${s.navCount} 不一致，按导航项数判为 ${mode}`);
   }
@@ -683,7 +683,7 @@ async function readMode() {
 async function ensureMode(mode) {
   const before = await readMode();
   if (before.mode === mode) return { clicks: 0, before: before.mode };
-  const wantNav = mode === 'technical' ? 6 : 4;
+  const wantNav = mode === 'technical' ? 8 : 6;
   await page.click('#modeSwitch');
   await page.waitFor(inPage(`return __nav().length === ${wantNav};`), {
     timeout: 8000,
@@ -705,7 +705,7 @@ async function assert1() {
     return name && text.includes(String(name));
   });
   const wizard = /设置向导|上一步|下一步/.test(text);
-  const navOk = snap.navCount === 4;
+  const navOk = snap.navCount === 6;
   const simOk = s.mode === 'simple';
   if (hasOneClick && hasModel && navOk && simOk && !wizard) {
     return ok(`落到 ${snap.hash || '/'}；模式 ${s.mode}（${s.how}）；导航 ${snap.navCount} 项 [${snap.nav.join(' · ')}]；含「一键生成」+ 模型入口；无设置向导`);
@@ -714,7 +714,7 @@ async function assert1() {
     [
       `含一键生成=${hasOneClick}`,
       `含模型入口=${hasModel}`,
-      `导航项=${snap.navCount}(期望4)[${snap.nav.join('·')}]`,
+      `导航项=${snap.navCount}(期望6)[${snap.nav.join('·')}]`,
       `模式=${s.mode}(${s.how})`,
       `含设置向导=${wizard}`,
       `页面文本前 300：${clip(text, 300)}`,
@@ -725,10 +725,10 @@ async function assert1() {
 async function assert2() {
   const snap = await page.snapshot();
   const hit = ['记忆分发', '关于'].filter((w) => snap.nav.some((t) => t.includes(w)));
-  if (snap.navCount === 4 && hit.length === 0) {
+  if (snap.navCount === 6 && hit.length === 0) {
     return ok(`导航 ${snap.navCount} 项 [${snap.nav.join(' · ')}]，无「记忆分发」「关于」`);
   }
-  return bad(`导航 ${snap.navCount} 项(期望4) [${snap.nav.join('·')}]；命中禁用导航词：${hit.join('、') || '无'}`);
+  return bad(`导航 ${snap.navCount} 项(期望6) [${snap.nav.join('·')}]；命中禁用导航词：${hit.join('、') || '无'}`);
 }
 
 async function assert3() {
@@ -1154,10 +1154,10 @@ async function assert12() {
   const mark = page.netMark();
   const clicked = await page.click('#modeSwitch');
   try {
-    await page.waitFor(inPage('return __nav().length === 6 ? true : null;'), {
+    await page.waitFor(inPage('return __nav().length === 8 ? true : null;'), {
       timeout: 8000,
       interval: 150,
-      label: '点一次 #modeSwitch 后导航变 6 项',
+      label: '点一次 #modeSwitch 后导航变 8 项',
     });
   } catch (e) {
     const diag = await page.evalJS(
@@ -1174,7 +1174,7 @@ async function assert12() {
     const net = page.netSince(mark);
     const posted = net.requests.filter((q) => /\/api\/settings/.test(q.url || '')).length;
     return bad(
-      `点了一次「${clicked}」但导航没变 6 项：aria-checked=${diag.ariaChecked}、#nav[data-mode]=${diag.navMode}、导航 ${diag.navCount} 项；` +
+      `点了一次「${clicked}」但导航没变 8 项：aria-checked=${diag.ariaChecked}、#nav[data-mode]=${diag.navMode}、导航 ${diag.navCount} 项；` +
         `期间 POST /api/settings ${posted} 次（若为 0 说明点击没有到达切换逻辑）`,
     );
   }
@@ -1189,7 +1189,7 @@ async function assert12() {
 
   const after = await page.snapshot();
   const problems = [];
-  if (after.navCount !== 6) problems.push(`导航 ${after.navCount} 项(期望6)[${after.nav.join('·')}]`);
+  if (after.navCount !== 8) problems.push(`导航 ${after.navCount} 项(期望8)[${after.nav.join('·')}]`);
   if (!assignOk) problems.push(`#/assign 内容不足（${reach['#/assign'].len} 字符）：「${clip(reach['#/assign'].head, 80)}」`);
   if (!aboutOk) problems.push(`#/about 内容不足（${reach['#/about'].len} 字符）：「${clip(reach['#/about'].head, 80)}」`);
   if (after.errors.exists && after.errors.len > 0) problems.push(`window.__apErrors 有 ${after.errors.len} 条：${clip(after.errors.sample.join(' | '), 200)}`);
@@ -1203,16 +1203,16 @@ async function assert13() {
   const before = await readMode();
   if (before.mode !== 'technical') return bad(`切回前不在 technical（当前 ${before.mode || '未知'}，依据 ${before.how || '无'}）`);
   const clicked = await page.click('#modeSwitch');
-  await page.waitFor(inPage('return __nav().length === 4 ? true : null;'), {
+  await page.waitFor(inPage('return __nav().length === 6 ? true : null;'), {
     timeout: 8000,
     interval: 150,
-    label: '再点一次 #modeSwitch 后导航回 4 项',
+    label: '再点一次 #modeSwitch 后导航回 6 项',
   });
   await page.gotoHash('#/breach');
   const snap = await page.snapshot();
   const banned = await page.evalJS(inPage(`return __banned(${JSON.stringify(BANNED_TEXT.source)});`));
   const problems = [];
-  if (snap.navCount !== 4) problems.push(`导航 ${snap.navCount} 项(期望4)[${snap.nav.join('·')}]`);
+  if (snap.navCount !== 6) problems.push(`导航 ${snap.navCount} 项(期望6)[${snap.nav.join('·')}]`);
   if (banned.hits.length) problems.push(`残留技术字段 ${banned.hits.length} 处`);
   const detail =
     `点一次「${clicked}」；导航 ${snap.navCount} 项 [${snap.nav.join(' · ')}]；禁用词命中 ${banned.hits.length} 处` +
@@ -1230,8 +1230,8 @@ async function assert14() {
   const simple = await page.snapshot();
 
   const problems = [];
-  if (tech.navCount !== 6) problems.push(`technical 刷新后导航 ${tech.navCount} 项(期望6)[${tech.nav.join('·')}]`);
-  if (simple.navCount !== 4) problems.push(`simple 刷新后导航 ${simple.navCount} 项(期望4)[${simple.nav.join('·')}]`);
+  if (tech.navCount !== 8) problems.push(`technical 刷新后导航 ${tech.navCount} 项(期望8)[${tech.nav.join('·')}]`);
+  if (simple.navCount !== 6) problems.push(`simple 刷新后导航 ${simple.navCount} 项(期望6)[${simple.nav.join('·')}]`);
   const detail = `technical reload → ${tech.navCount} 项 [${tech.nav.join(' · ')}]；simple reload → ${simple.navCount} 项 [${simple.nav.join(' · ')}]`;
   return problems.length ? bad(`${problems.join('；')} ｜ ${detail}`) : ok(detail);
 }
@@ -1563,7 +1563,7 @@ async function main() {
     log('阻塞：' + why);
     diag.push(why);
     const titles = [
-      [1, '签署后落在 simple 破甲页（含「一键生成」+ 模型入口，导航 4 项）'],
+      [1, '签署后落在 simple 破甲页（含「一键生成」+ 模型入口，导航 6 项）'],
       [2, 'simple 导航恰好 4 项，且无「记忆分发」「关于」'],
       [3, 'simple 破甲页首屏可交互元素 ≤ 24'],
       [4, 'simple 破甲页文本无 §2.6 禁用词'],
@@ -1574,8 +1574,8 @@ async function main() {
       [9, '装备页恰好 1 个主按钮，点后出现「已装备」'],
       [10, '记忆页连接状态 + （未连接时）去设置 + 搜索框'],
       [11, '设置页无 breakDir/pluginPath/memoryBase/token/令牌 字段'],
-      [12, '点一次 #modeSwitch 切 technical：导航 6 项、#/assign #/about 可达、__apErrors=0'],
-      [13, '再点一次切回 simple：导航 4 项、无残留技术字段'],
+      [12, '点一次 #modeSwitch 切 technical：导航 8 项、#/assign #/about 可达、__apErrors=0'],
+      [13, '再点一次切回 simple：导航 6 项、无残留技术字段'],
       [14, '刷新后模式保持（technical→6，simple→4）'],
       [15, '1280/390/320 三宽度无横向溢出 + __apErrors=0（含截图）'],
     ];
@@ -1614,7 +1614,7 @@ async function main() {
 
   log('');
   log('[断言]');
-  await run(1, '签署后落在 simple 破甲页（含「一键生成」+ 模型入口，导航 4 项）', assert1);
+  await run(1, '签署后落在 simple 破甲页（含「一键生成」+ 模型入口，导航 6 项）', assert1);
   await run(2, 'simple 导航恰好 4 项，且无「记忆分发」「关于」', assert2);
   await run(3, 'simple 破甲页首屏可交互元素 ≤ 24', assert3);
   await run(4, 'simple 破甲页文本无 §2.6 禁用词', assert4);
@@ -1625,8 +1625,8 @@ async function main() {
   await run(9, '装备页恰好 1 个主按钮，点后出现「已装备」', assert9);
   await run(10, '记忆页连接状态 + （未连接时）去设置 + 搜索框', assert10);
   await run(11, '设置页无 breakDir/pluginPath/memoryBase/token/令牌 字段', assert11);
-  await run(12, '点一次 #modeSwitch 切 technical：导航 6 项、#/assign #/about 可达、__apErrors=0', assert12);
-  await run(13, '再点一次切回 simple：导航 4 项、无残留技术字段', assert13);
+  await run(12, '点一次 #modeSwitch 切 technical：导航 8 项、#/assign #/about 可达、__apErrors=0', assert12);
+  await run(13, '再点一次切回 simple：导航 6 项、无残留技术字段', assert13);
   await run(14, '刷新后模式保持（technical→6，simple→4）', assert14);
   await run(15, '1280/390/320 三宽度无横向溢出 + __apErrors=0（含截图）', assert15);
 

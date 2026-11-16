@@ -16,8 +16,8 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const cx = (...parts) => parts.filter(Boolean).join(" ");
 
-const TABS = ["breach", "equip", "assign", "memory", "settings", "about"];
-const TAB_LABEL = { breach: "破甲", equip: "装备", assign: "记忆分发", memory: "记忆中心", settings: "设置", about: "关于" };
+const TABS = ["breach", "equip", "assign", "memory", "intel", "drill", "settings", "about"];
+const TAB_LABEL = { breach: "破甲", equip: "装备", assign: "记忆分发", memory: "记忆中心", intel: "情报巡检", drill: "演练台", settings: "设置", about: "关于" };
 
 /* ------------------------------------------------------- two-layer UI (contract §2) */
 const NAV_BY_MODE = {
@@ -25,6 +25,8 @@ const NAV_BY_MODE = {
     { tab: "breach", label: "破甲" },
     { tab: "equip", label: "装备" },
     { tab: "memory", label: "记忆" },
+    { tab: "intel", label: "情报巡检" },
+    { tab: "drill", label: "演练台" },
     { tab: "settings", label: "设置" },
   ],
   technical: TABS.map((t) => ({ tab: t, label: TAB_LABEL[t] })),
@@ -994,12 +996,16 @@ function renderPage() {
     else if (S.tab === "equip") renderEquip();
     else if (S.tab === "assign") renderAssign();
     else if (S.tab === "memory") renderMemory();
+    else if (S.tab === "intel") renderIntelPage();
+    else if (S.tab === "drill") renderDrillPage();
     else if (S.tab === "settings") renderSettings();
     else renderAbout();
   } else {
     if (S.tab === "breach") renderSimpleBreach();
     else if (S.tab === "equip") renderSimpleEquip();
     else if (S.tab === "memory") renderSimpleMemory();
+    else if (S.tab === "intel") renderIntelPage();
+    else if (S.tab === "drill") renderDrillPage();
     else renderSimpleSettings();
   }
   if (modeIsTechnical()) renderTechHint();
@@ -2177,15 +2183,99 @@ function renderFlowPatchList() {
 }
 
 /* 原版面板另外三栏：规则集 / 出口白名单 / 技能（都落在 ~/.dsh 下，写前自动备份） */
+/* ============================================================ 独立页：情报巡检 / 演练台 */
+function renderIntelPage() {
+  if (!S.host.tried && !S.host.loading) loadHostStatus();
+  const h = S.host;
+  const intel = h.intel || { reports: null, report: null, running: false, days: 7, error: null, last: null };
+  const reports = (intel.reports && intel.reports.reports) || [];
+  const rows = reports.map((r) => `<div class="s-row">
+      <div class="s-row-main"><strong>${esc(r.name)}</strong><span class="mono small">${esc(r.kind || "")} · ${fmtNum(r.bytes)} 字节 · ${esc(r.mtime ? fmtTime(r.mtime) : "")}</span></div>
+      <div class="actions"><button type="button" class="small" data-intel-open="${esc(r.name)}">查看</button></div>
+    </div>`).join("");
+  $("#page").innerHTML = `
+    <div class="page-head"><div>
+      <p class="eyebrow">INTEL</p>
+      <h1>情报巡检</h1>
+      <p class="lead">驱动本机 dsh-purge 1.1.71 的巡检：7 个源（Exploit-DB / 吾爱破解 / 看雪 / oss-sec / 先知 / FreeBuf / GitHub Advisory），真实出网，产物落 ~/.dsh/redteam/。</p>
+    </div>
+    <div class="head-meta">${badge(intel.running ? "巡检中" : "空闲", intel.running ? "" : "accent")}${badge("历史 " + reports.length + " 份", "")}</div></div>
+
+    <section class="section">
+      <h2><span class="num">1</span>跑一次巡检</h2>
+      <div class="s-choices" style="grid-template-columns:1fr 1fr;align-items:end">
+        <label class="field"><span>看近几天</span><select id="intelDays">
+          <option value="1"${intel.days === 1 ? " selected" : ""}>近 1 天</option>
+          <option value="3"${intel.days === 3 ? " selected" : ""}>近 3 天</option>
+          <option value="7"${intel.days === 7 ? " selected" : ""}>近 7 天</option>
+        </select></label>
+        <div class="actions"><button type="button" class="primary" data-intel-run${intel.running || !(h.drill && h.drill.data && h.drill.data.granted) ? " disabled" : ""}>${intel.running ? "巡检中…" : "跑一次巡检"}</button></div>
+      </div>
+      <p class="hint">最坏约 3 分钟；未在演练台确认授权时按钮是灰的。</p>
+      ${intel.error ? alertBox("巡检失败", simpleReason(intel.error)) : ""}
+      ${intel.last ? okBox(intel.last) : ""}
+    </section>
+
+    <section class="section">
+      <h2><span class="num">2</span>历史报告<span class="count">${reports.length} 份</span></h2>
+      ${rows || `<p class="small muted">还没有巡检报告，先跑一次。</p>`}
+    </section>
+
+    ${intel.report ? `<section class="section">
+      <h2><span class="num">3</span>${esc(intel.report.name)}<span class="count">${fmtNum(intel.report.bytes)} 字节${intel.report.truncated ? " · 已截断" : ""}</span></h2>
+      <textarea rows="20" readonly spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px;width:100%">${esc(intel.report.text || "")}</textarea>
+    </section>` : ""}
+  `;
+  bindFlowControls();
+}
+
+function renderDrillPage() {
+  if (!S.host.tried && !S.host.loading) loadHostStatus();
+  const h = S.host;
+  const drill = h.drill || { data: null, legal: null, signer: "", busy: false, error: null };
+  const dd = drill.data;
+  const authorized = !!(dd && dd.granted);
+  $("#page").innerHTML = `
+    <div class="page-head"><div>
+      <p class="eyebrow">DRILL</p>
+      <h1>演练台</h1>
+      <p class="lead">进入前必须读完声明并确认授权；授权文件与 dsh-purge 1.1.71 是同一个（&lt;DSH_HOME&gt;/dsh-purge/drill-grant.json）。未授权时注入 / 卸载 / 巡检都会被门禁挡住。</p>
+    </div>
+    <div class="head-meta">${authorized ? badge("已授权", "good") : badge("未授权", "")}${dd && dd.at ? badge(fmtTime(dd.at), "") : ""}</div></div>
+
+    <section class="section">
+      <h2><span class="num">1</span>授权状态</h2>
+      <div class="s-status ${authorized ? "green" : "yellow"}">
+        <div class="s-status-body">
+          <strong>${authorized ? "已确认授权" : "还没确认授权"}</strong>
+          <span class="s-status-detail">${esc(dd && dd.path ? dd.path : "读取中…")}${authorized && dd.at ? " · 签署于 " + esc(fmtTime(dd.at)) : ""}</span>
+        </div>
+      </div>
+      <label class="field" style="margin-top:10px"><span>签署人（可选，写到旁注文件）</span>
+        <input id="drillSigner" type="text" maxlength="80" value="${esc(drill.signer || "")}" placeholder="姓名 / 代号"></label>
+      <div class="actions">
+        <button type="button" class="primary" data-drill="grant"${drill.busy || authorized ? " disabled" : ""}>确认授权</button>
+        <button type="button" class="ghost" data-drill="revoke"${drill.busy || !authorized ? " disabled" : ""}>撤销授权</button>
+        <span class="hint">撤销后注入 / 卸载 / 巡检立即变灰。</span>
+      </div>
+      ${drill.error ? alertBox("授权操作失败", simpleReason(drill.error)) : ""}
+    </section>
+
+    <section class="section">
+      <h2><span class="num">2</span>法律声明<span class="count">${drill.legal && drill.legal.text ? drill.legal.text.length + " 字符" : "读取中…"}</span></h2>
+      <textarea rows="22" readonly spellcheck="false" style="font-family:inherit;font-size:12px;width:100%">${esc((drill.legal && drill.legal.text) || "")}</textarea>
+      <p class="hint">原文来自 dsh-purge 1.1.71 的 docs/drill-auth-legal.html（已剥标签）。</p>
+    </section>
+  `;
+  bindFlowControls();
+}
+
 function renderFlowExtraPanels() {
   const h = S.host;
   if (!h.data || h.data.available === false) return "";
   const rules = h.rules || { files: [] };
-  const skills = h.skills || { skills: [] };
   const ns = h.netScope || { exists: false, text: "", lines: 0 };
   const re = h.ruleEdit || { name: "", text: "" };
-  const sv = h.skillView || { name: "", text: "" };
-  const se = h.skillEdit || { name: "", text: "" };
   const nsDraft = h.netScopeDraft != null ? h.netScopeDraft : (ns.text || "");
 
   const ruleRows = (rules.files || []).map((f) => `<div class="s-row">
@@ -2194,103 +2284,8 @@ function renderFlowExtraPanels() {
         <button type="button" class="small" data-rule-del="${esc(f.name)}">删除</button></div>
     </div>`).join("");
 
-  const skillRows = (skills.skills || []).map((s) => `<div class="s-row">
-      <div class="s-row-main"><strong>${esc(s.name)}</strong><span class="mono small">${fmtNum(s.bytes)} 字节</span></div>
-      <div class="actions"><button type="button" class="small" data-skill-open="${esc(s.name)}">查看</button>
-        <button type="button" class="small" data-skill-del="${esc(s.name)}">删除</button></div>
-    </div>`).join("");
-
-  const kb = h.kb || { stats: null, mode: "poc", q: "", items: [], detail: null, loading: false, error: null };
-  const kbStats = kb.stats;
-  const kbRows = (kb.items || []).map((it) => `<div class="s-row">
-      <div class="s-row-main"><strong>${esc(it.title || it.code || it.id)}</strong>
-        <span class="mono small">${esc([it.category, it.cve, it.component, it.source || "", it.posted_at || ""].filter(Boolean).join(" · "))}</span></div>
-      <div class="actions"><button type="button" class="small" data-kb-open="${esc(String(it.id))}">查看</button></div>
-    </div>`).join("");
-  const kbDetail = kb.detail ? `<div class="card" style="margin-top:8px">
-      <div class="s-row"><div class="s-row-main"><strong>${esc(kb.detail.title || kb.detail.code || kb.detail.id)}</strong>
-        <span class="mono small">${esc([kb.detail.source, kb.detail.cve, kb.detail.component, kb.detail.category].filter(Boolean).join(" · "))}</span></div></div>
-      ${kb.detail.url ? `<p class="small muted mono">${esc(kb.detail.url)}</p>` : ""}
-      <textarea rows="12" readonly spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px;width:100%">${esc([kb.detail.description, kb.detail.usage, kb.detail.content, kb.detail.body].filter(Boolean).join("\n\n"))}</textarea>
-    </div>` : "";
-  const kbBlock = `<details class="grp" data-group="extra:kb">
-      <summary><span class="grp-title">知识库</span><span class="grp-hint">${kbStats ? `POC ${fmtNum(kbStats.poc)} · 笔记 ${fmtNum(kbStats.notes)} · ${(kbStats.bytes / 1048576).toFixed(1)} MB` : "读取中…"}</span></summary>
-      <div class="grp-body">
-        ${kbStats && kbStats.byCategory ? `<p class="small muted">分类：${kbStats.byCategory.slice(0, 8).map((c) => esc(c.category) + " " + fmtNum(c.n)).join(" · ")}</p>` : ""}
-        <div class="s-choices" style="grid-template-columns:1fr 1fr 1fr;align-items:end">
-          <label class="field"><span>查什么</span><input id="kbQuery" type="text" value="${esc(kb.q || "")}" placeholder="例：shiro / weblogic / 脱壳"></label>
-          <label class="field"><span>范围</span><select id="kbMode">
-            <option value="poc"${kb.mode === "poc" ? " selected" : ""}>POC / 模板</option>
-            <option value="note"${kb.mode === "note" ? " selected" : ""}>论坛笔记</option>
-          </select></label>
-          <div class="actions"><button type="button" class="primary" data-kb-search>搜索</button></div>
-        </div>
-        ${kb.error ? alertBox("知识库读不到", simpleReason(kb.error)) : ""}
-        ${kbRows || `<p class="small muted">${kb.q ? "没有命中。" : "输入关键词搜索，或直接看下面。"}</p>`}
-        ${kbDetail}
-        <p class="hint">只读 knowledge.db（dsh-purge 的 POC / 笔记库），写库仍走它自己的工具。</p>
-      </div>
-    </details>`;
-
-  const intel = h.intel || { reports: null, report: null, running: false, days: 7, error: null, last: null };
-  const intelReports = (intel.reports && intel.reports.reports) || [];
-  const intelRows = intelReports.map((r) => `<div class="s-row">
-      <div class="s-row-main"><strong>${esc(r.name)}</strong><span class="mono small">${esc(r.kind || "")} · ${fmtNum(r.bytes)} 字节 · ${esc(r.mtime ? fmtTime(r.mtime) : "")}</span></div>
-      <div class="actions"><button type="button" class="small" data-intel-open="${esc(r.name)}">查看</button></div>
-    </div>`).join("");
-  const intelBlock = `<details class="grp" data-group="extra:intel">
-      <summary><span class="grp-title">情报巡检</span><span class="grp-hint">7 个源 · 历史报告 ${intelReports.length} 份${intel.running ? " · 正在跑…" : ""}</span></summary>
-      <div class="grp-body">
-        <div class="s-choices" style="grid-template-columns:1fr 1fr;align-items:end">
-          <label class="field"><span>看近几天</span><select id="intelDays">
-            <option value="1"${intel.days === 1 ? " selected" : ""}>近 1 天</option>
-            <option value="3"${intel.days === 3 ? " selected" : ""}>近 3 天</option>
-            <option value="7"${intel.days === 7 ? " selected" : ""}>近 7 天</option>
-          </select></label>
-          <div class="actions"><button type="button" class="primary" data-intel-run${intel.running || !(h.drill && h.drill.data && h.drill.data.granted) ? " disabled" : ""}>${intel.running ? "巡检中…" : "跑一次巡检"}</button></div>
-        </div>
-        <p class="hint">会真实出网抓 Exploit-DB / 吾爱破解 / 看雪 / oss-sec / 先知 / FreeBuf / GitHub Advisory，最坏约 3 分钟；产物落 ~/.dsh/redteam/intel-sweep-YYYYMMDD.md。</p>
-        ${intel.error ? alertBox("巡检失败", simpleReason(intel.error)) : ""}
-        ${intel.last ? okBox(intel.last) : ""}
-        ${intelRows || `<p class="small muted">还没有巡检报告。</p>`}
-        ${intel.report ? `<div class="card" style="margin-top:8px">
-          <div class="s-row"><div class="s-row-main"><strong>${esc(intel.report.name)}</strong><span class="mono small">${fmtNum(intel.report.bytes)} 字节${intel.report.truncated ? " · 已截断" : ""}</span></div></div>
-          <textarea rows="14" readonly spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px;width:100%">${esc(intel.report.text || "")}</textarea>
-        </div>` : ""}
-      </div>
-    </details>`;
-
-  const drill = h.drill || { data: null, legal: null, signer: "" };
-  const dd = drill.data;
-  const authorized = !!(dd && dd.granted);
-  const drillBlock = `<details class="grp" data-group="extra:drill">
-      <summary><span class="grp-title">演练台</span><span class="grp-hint">${authorized ? "已授权 · " + esc(dd.at ? fmtTime(dd.at) : "") : "未授权（注入 / 卸载 / 巡检会被门禁挡住）"}</span></summary>
-      <div class="grp-body">
-        <div class="s-status ${authorized ? "green" : "yellow"}">
-          <div class="s-status-body">
-            <strong>${authorized ? "已确认授权" : "还没确认授权"}</strong>
-            <span class="s-status-detail">${esc(dd && dd.path ? dd.path : "")}${authorized && dd.at ? " · 签署于 " + esc(fmtTime(dd.at)) : ""}</span>
-          </div>
-        </div>
-        <details class="grp" data-group="extra:drill-legal">
-          <summary><span class="grp-title">法律声明全文</span><span class="grp-hint">${drill.legal && drill.legal.text ? (drill.legal.text.length + " 字符") : "读取中…"}</span></summary>
-          <div class="grp-body">
-            <textarea rows="12" readonly spellcheck="false" style="font-family:inherit;font-size:12px;width:100%">${esc((drill.legal && drill.legal.text) || "")}</textarea>
-          </div>
-        </details>
-        <label class="field" style="margin-top:8px"><span>签署人（可选，写到旁注文件）</span>
-          <input id="drillSigner" type="text" maxlength="80" value="${esc(drill.signer || "")}" placeholder="姓名 / 代号"></label>
-        <div class="actions">
-          <button type="button" class="primary" data-drill="grant"${drill.busy || authorized ? " disabled" : ""}>确认授权</button>
-          <button type="button" class="ghost" data-drill="revoke"${drill.busy || !authorized ? " disabled" : ""}>撤销授权</button>
-          <span class="hint">写的是 <DSH_HOME>/dsh-purge/drill-grant.json（与 dsh-purge 同一个开关）。</span>
-        </div>
-        ${drill.error ? alertBox("授权操作失败", simpleReason(drill.error)) : ""}
-      </div>
-    </details>`;
-
   return `<section class="section">
-    <h2><span class="num">3+</span>其他六栏<span class="count">规则 ${(rules.files || []).length} · 技能 ${(skills.skills || []).length} · 白名单 ${ns.lines || 0} 行 · POC ${kbStats ? fmtNum(kbStats.poc) : "?"} · 巡检 ${intelReports.length} · ${authorized ? "已授权" : "未授权"}</span></h2>
+    <h2><span class="num">3+</span>其他<span class="count">规则 ${(rules.files || []).length} · 白名单 ${ns.lines || 0} 行</span></h2>
 
     <details class="grp" data-group="extra:rules">
       <summary><span class="grp-title">规则集</span><span class="grp-hint">~/.dsh/rules/*.md · ${(rules.files || []).length} 个${rules.exists ? "" : "（目录还没建，保存时自动建）"}</span></summary>
@@ -2312,26 +2307,6 @@ function renderFlowExtraPanels() {
         <div class="actions"><button type="button" class="primary" data-netscope-save>保存白名单</button><span class="hint">保存前自动备份。</span></div>
       </div>
     </details>
-
-    <details class="grp" data-group="extra:skills">
-      <summary><span class="grp-title">技能</span><span class="grp-hint">~/.dsh/skills · ${(skills.skills || []).length} 篇</span></summary>
-      <div class="grp-body">
-        ${skillRows || `<p class="small muted">还没有技能。</p>`}
-        <label class="field" style="margin-top:8px"><span>新建 / 覆盖技能（目录名）</span>
-          <input id="skillName" type="text" value="${esc(se.name || "")}" placeholder="例：my-skill"></label>
-        <label class="field"><span>SKILL.md 正文</span>
-          <textarea id="skillText" rows="8" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(se.text || "")}</textarea></label>
-        <div class="actions"><button type="button" class="primary" data-skill-save>保存技能</button>
-          <span class="hint">保存前自动备份；查看只读那份在下面。</span></div>
-        <label class="field"><span>查看：${esc(sv.name || "未选择")}</span>
-          <textarea rows="10" readonly spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(sv.text)}</textarea>
-        </label>
-      </div>
-    </details>
-
-    ${kbBlock}
-    ${intelBlock}
-    ${drillBlock}
   </section>`;
 }
 
