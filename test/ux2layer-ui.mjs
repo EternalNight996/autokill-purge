@@ -850,16 +850,31 @@ async function assert7() {
   // 1) 先把第一张卡「展开看全文」（契约 §2.3：每条卡 = 序号+名称+复制+展开看全文）
   const expand = await page.evalJS(
     inPage(String.raw`
-    const btns = Array.from(document.querySelectorAll('#main button, #main [role=button], #main a, #main summary')).filter(__vis);
-    const copy = __copyBtns()[0];
-    if (!copy) return { ok: false, reason: '找不到「复制」按钮' };
+    // 只在第一张载荷卡里找：页面上还有「法律声明全文」等别的 details，全局匹配会点错
+    const card = document.querySelector('.payload');
+    const btns = card ? Array.from(card.querySelectorAll('button, summary')).filter(__vis) : [];
+    const copy = card ? Array.from(card.querySelectorAll('button')).filter((b) => /复制/.test(__label(b)))[0] : null;
+    if (!copy) return { ok: false, reason: '找不到第一张卡的「复制」按钮' };
     const before = __firstCardText();
-    const ex = (copy.closest('.payload') && copy.closest('.payload').querySelector('summary')) || btns.filter((x) => /展开|全文/.test(__label(x)))[0] || null;
+    const ex = (card.querySelector('summary')) || btns.filter((x) => /展开|全文/.test(__label(x)))[0] || null;
     if (ex) { try { ex.scrollIntoView({ block: 'center' }); } catch (_) {} ; try { ex.click(); } catch (_) {} }
     return { ok: true, hadExpand: !!ex, beforeLen: (before || '').length };
   `),
   );
   if (!expand || !expand.ok) return bad(`点不了「复制」：${(expand && expand.reason) || '未知'}`);
+
+  // 点完 summary 要等展开真的生效（details.open=true），否则 innerText 还是折叠态
+  if (expand.hadExpand) {
+    await page
+      .waitFor(
+        inPage(String.raw`
+        const d = document.querySelector('.payload details');
+        return d && d.open ? true : null;
+      `),
+        { timeout: 3000, interval: 100 },
+      )
+      .catch(() => null);
+  }
 
   let cardLen = expand.beforeLen;
   if (expand.hadExpand) {
@@ -902,7 +917,12 @@ async function assert7() {
     .catch((e) => ({ ok: false, why: e.message }));
 
   const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
-  const cardNorm = norm(await page.evalJS(inPage('return __firstCardText();')));
+  const cardNorm = norm(await page.evalJS(inPage(String.raw`
+    const card = document.querySelector('.payload');
+    if (!card) return '';
+    const pres = Array.from(card.querySelectorAll('pre')).map((p) => p.textContent).join('\n');
+    return (card.textContent || '') + '\n' + pres;
+  `)));
 
   if (clipRes && clipRes.ok) {
     const t = norm(clipRes.text);

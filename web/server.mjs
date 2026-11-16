@@ -14,6 +14,7 @@ import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapsho
 import { detectLiveModels } from './models-live.mjs';
 import { kbStats, searchPoc, readPoc, searchNotes, readNote, recentPoc } from './kb.mjs';
 import { listIntelReports, readIntelReport, runIntelSweep } from './intel.mjs';
+import { readDrill, grantDrill, revokeDrill, drillLegal } from './drill.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -893,6 +894,32 @@ async function handleApi(req, res, url, state) {
     } finally {
       intelRunning = false;
     }
+  }
+
+  // ---- 演练台：授权（drill-grant）+ 法律声明 ------------------------------------------
+  if (p === '/api/drill' && method === 'GET') {
+    try { return send(res, 200, await readDrill()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'drill_read_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/drill/legal' && method === 'GET') {
+    try { return send(res, 200, await drillLegal()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'legal_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/drill/grant' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '确认授权会写 <DSH_HOME>/dsh-purge/drill-grant.json' });
+    return withLock(async () => {
+      try { return send(res, 200, Object.assign({ ok: true }, await grantDrill(DATA_DIR, body.signer || ''))); }
+      catch (e) { return send(res, 500, { ok: false, error: 'drill_grant_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/drill/revoke' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    return withLock(async () => {
+      try { return send(res, 200, await revokeDrill(DATA_DIR)); }
+      catch (e) { return send(res, 500, { ok: false, error: 'drill_revoke_failed', detail: publicError(e) }); }
+    });
   }
 
   // breach (FR-2)

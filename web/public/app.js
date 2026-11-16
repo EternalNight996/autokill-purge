@@ -165,6 +165,7 @@ const S = {
     skillEdit: { name: "", text: "" },
     kb: { stats: null, mode: "poc", q: "", items: [], detail: null, error: null },
     intel: { reports: null, report: null, running: false, days: 7, error: null, last: null },
+    drill: { data: null, legal: null, busy: false, signer: "", error: null },
     netScopeDraft: null,
     loading: false, tried: false, error: null, busy: false, message: "",
     promptDraft: null, promptDirty: false,
@@ -1455,6 +1456,34 @@ async function openIntelReport(name) {
   } catch (e) { toast(simpleReason(e)); }
 }
 
+/* 演练台授权：确认 / 撤销（门禁数据源） */
+async function drillAction(kind) {
+  const dr = S.host.drill = Object.assign({}, S.host.drill);
+  if (dr.busy) return;
+  const ask = kind === "grant"
+    ? "确认已阅读并同意演练台法律声明，并写入授权文件？"
+    : "撤销授权？撤销后注入 / 卸载 / 巡检会被门禁挡住。";
+  if (!window.confirm(ask)) return;
+  dr.busy = true;
+  dr.error = null;
+  renderPage();
+  try {
+    const d = kind === "grant"
+      ? await request("/api/drill/grant", { method: "POST", body: { confirm: true, signer: dr.signer || "" } })
+      : await request("/api/drill/revoke", { method: "POST", body: { confirm: true } });
+    if (!d || d.ok === false) throw payloadError(d, kind === "grant" ? "授权失败" : "撤销失败");
+    toast(kind === "grant" ? "已确认授权" : "已撤销授权");
+    S.host.tried = false;
+    await loadHostStatus(true);
+  } catch (e) {
+    dr.error = e;
+    renderPage();
+  } finally {
+    dr.busy = false;
+    renderPage();
+  }
+}
+
 /* 统一流程里的公共控件（两模式共用）：注入/卸载/还原、重新识别、注入正文编辑 */
 function bindFlowControls() {
   $$("#page [data-simple-host]").forEach((el) => {
@@ -1501,6 +1530,10 @@ function bindFlowControls() {
   // 情报巡检
   $$("#page [data-intel-run]").forEach((el) => el.addEventListener("click", () => runIntel()));
   $$("#page [data-intel-open]").forEach((el) => el.addEventListener("click", () => openIntelReport(el.dataset.intelOpen)));
+  // 演练台
+  $$("#page [data-drill]").forEach((el) => el.addEventListener("click", () => drillAction(el.dataset.drill)));
+  const drSigner = $("#drillSigner");
+  if (drSigner) drSigner.addEventListener("input", () => { S.host.drill = Object.assign({}, S.host.drill, { signer: drSigner.value }); });
   const intelDaysEl = $("#intelDays");
   if (intelDaysEl) intelDaysEl.addEventListener("change", () => { S.host.intel = Object.assign({}, S.host.intel, { days: Number(intelDaysEl.value) || 7 }); });
   const hp = $("#hostPrompt");
@@ -2092,6 +2125,9 @@ function renderFlowApplyStep() {
   const msg = h.message ? (h.error ? alertBox(h.message, "") : okBox(h.message)) : "";
   const pr = h.prompt;
   const draft = h.promptDraft != null ? h.promptDraft : (pr && pr.text) || "";
+  // 门禁：没在演练台确认授权就不让动宿主
+  const authorized = !!(h.drill && h.drill.data && h.drill.data.granted);
+  const gate = authorized ? "" : `<div class="alert warn" role="alert"><strong>先去「演练台」确认授权</strong><span class="hint">注入 / 卸载会改本机 dsh 安装，未授权时按钮是灰的。</span></div>`;
   const promptBox = pr ? `<details class="grp" data-group="flow:prompt">
       <summary><span class="grp-title">注入正文（可直接改）</span><span class="grp-hint">${pr.isBuiltin ? "与内置默认一致" : "已被改动"} · ${fmtNum(draft.length)} 字符</span></summary>
       <div class="grp-body">
@@ -2107,10 +2143,11 @@ function renderFlowApplyStep() {
     <h2 id="f-apply-h"><span class="num">3</span>注入 / 卸载 / 还原
       <span class="count">${fmtNum(c.applied || 0)}/${fmtNum(c.total || 0)} 已注入${c.failed ? ` · ${c.failed} 失败` : ""} · 备份 ${snaps.length}</span></h2>
     <div class="actions">
-      <button type="button" class="primary" data-simple-host="apply"${busy ? " disabled" : ""}>${busy ? "处理中…" : "一键注入"}</button>
-      <button type="button" class="ghost" data-simple-host="uninstall"${busy ? " disabled" : ""}>一键卸载</button>
+      <button type="button" class="primary" data-simple-host="apply"${busy || !authorized ? " disabled" : ""}>${busy ? "处理中…" : "一键注入"}</button>
+      <button type="button" class="ghost" data-simple-host="uninstall"${busy || !authorized ? " disabled" : ""}>一键卸载</button>
       <span class="hint">注入前自动备份；卸载会先把宿主还原成原版再清插件文件。重启 dsh 生效。</span>
     </div>
+    ${gate}
     ${msg}
     ${promptBox}
   </section>`;
@@ -2210,7 +2247,7 @@ function renderFlowExtraPanels() {
             <option value="3"${intel.days === 3 ? " selected" : ""}>近 3 天</option>
             <option value="7"${intel.days === 7 ? " selected" : ""}>近 7 天</option>
           </select></label>
-          <div class="actions"><button type="button" class="primary" data-intel-run${intel.running ? " disabled" : ""}>${intel.running ? "巡检中…" : "跑一次巡检"}</button></div>
+          <div class="actions"><button type="button" class="primary" data-intel-run${intel.running || !(h.drill && h.drill.data && h.drill.data.granted) ? " disabled" : ""}>${intel.running ? "巡检中…" : "跑一次巡检"}</button></div>
         </div>
         <p class="hint">会真实出网抓 Exploit-DB / 吾爱破解 / 看雪 / oss-sec / 先知 / FreeBuf / GitHub Advisory，最坏约 3 分钟；产物落 ~/.dsh/redteam/intel-sweep-YYYYMMDD.md。</p>
         ${intel.error ? alertBox("巡检失败", simpleReason(intel.error)) : ""}
@@ -2223,8 +2260,37 @@ function renderFlowExtraPanels() {
       </div>
     </details>`;
 
+  const drill = h.drill || { data: null, legal: null, signer: "" };
+  const dd = drill.data;
+  const authorized = !!(dd && dd.granted);
+  const drillBlock = `<details class="grp" data-group="extra:drill">
+      <summary><span class="grp-title">演练台</span><span class="grp-hint">${authorized ? "已授权 · " + esc(dd.at ? fmtTime(dd.at) : "") : "未授权（注入 / 卸载 / 巡检会被门禁挡住）"}</span></summary>
+      <div class="grp-body">
+        <div class="s-status ${authorized ? "green" : "yellow"}">
+          <div class="s-status-body">
+            <strong>${authorized ? "已确认授权" : "还没确认授权"}</strong>
+            <span class="s-status-detail">${esc(dd && dd.path ? dd.path : "")}${authorized && dd.at ? " · 签署于 " + esc(fmtTime(dd.at)) : ""}</span>
+          </div>
+        </div>
+        <details class="grp" data-group="extra:drill-legal">
+          <summary><span class="grp-title">法律声明全文</span><span class="grp-hint">${drill.legal && drill.legal.text ? (drill.legal.text.length + " 字符") : "读取中…"}</span></summary>
+          <div class="grp-body">
+            <textarea rows="12" readonly spellcheck="false" style="font-family:inherit;font-size:12px;width:100%">${esc((drill.legal && drill.legal.text) || "")}</textarea>
+          </div>
+        </details>
+        <label class="field" style="margin-top:8px"><span>签署人（可选，写到旁注文件）</span>
+          <input id="drillSigner" type="text" maxlength="80" value="${esc(drill.signer || "")}" placeholder="姓名 / 代号"></label>
+        <div class="actions">
+          <button type="button" class="primary" data-drill="grant"${drill.busy || authorized ? " disabled" : ""}>确认授权</button>
+          <button type="button" class="ghost" data-drill="revoke"${drill.busy || !authorized ? " disabled" : ""}>撤销授权</button>
+          <span class="hint">写的是 <DSH_HOME>/dsh-purge/drill-grant.json（与 dsh-purge 同一个开关）。</span>
+        </div>
+        ${drill.error ? alertBox("授权操作失败", simpleReason(drill.error)) : ""}
+      </div>
+    </details>`;
+
   return `<section class="section">
-    <h2><span class="num">3+</span>其他五栏<span class="count">规则 ${(rules.files || []).length} · 技能 ${(skills.skills || []).length} · 白名单 ${ns.lines || 0} 行 · POC ${kbStats ? fmtNum(kbStats.poc) : "?"} · 巡检 ${intelReports.length}</span></h2>
+    <h2><span class="num">3+</span>其他六栏<span class="count">规则 ${(rules.files || []).length} · 技能 ${(skills.skills || []).length} · 白名单 ${ns.lines || 0} 行 · POC ${kbStats ? fmtNum(kbStats.poc) : "?"} · 巡检 ${intelReports.length} · ${authorized ? "已授权" : "未授权"}</span></h2>
 
     <details class="grp" data-group="extra:rules">
       <summary><span class="grp-title">规则集</span><span class="grp-hint">~/.dsh/rules/*.md · ${(rules.files || []).length} 个${rules.exists ? "" : "（目录还没建，保存时自动建）"}</span></summary>
@@ -2265,6 +2331,7 @@ function renderFlowExtraPanels() {
 
     ${kbBlock}
     ${intelBlock}
+    ${drillBlock}
   </section>`;
 }
 
@@ -2417,6 +2484,11 @@ async function loadHostStatus(force = false) {
       S.host.netScope = netScope0;
       S.host.kb = Object.assign({}, S.host.kb, { stats: kbStats0 || null });
       S.host.intel = Object.assign({}, S.host.intel, { reports: await request("/api/intel/reports").catch(() => null) });
+      const [drill0, legal0] = await Promise.all([
+        request("/api/drill").catch(() => null),
+        S.host.drill && S.host.drill.legal ? Promise.resolve(S.host.drill.legal) : request("/api/drill/legal").catch(() => null),
+      ]);
+      S.host.drill = Object.assign({}, S.host.drill, { data: drill0 || null, legal: legal0 || null });
     } catch (e) {
       S.host.error = e;
     } finally {
