@@ -910,7 +910,68 @@ function initAssignFromState() {
   S.assign.initialized = true;
 }
 
+/* ---------------------------------------------------------- 主题（黑客风） */
+const THEMES = [
+  { id: "default", label: "默认蓝", color: "#6EA8FF" },
+  { id: "matrix", label: "矩阵绿（终端）", color: "#00ff9c" },
+  { id: "cyber", label: "赛博青（霓虹）", color: "#00e5ff" },
+  { id: "amber", label: "琥珀（CRT）", color: "#ffb000" },
+];
+const THEME_KEY = "ap.theme";
+
+function currentTheme() {
+  const t = document.body.dataset.theme || "default";
+  return THEMES.some((x) => x.id === t) ? t : "default";
+}
+
+function applyTheme(id, persist = true) {
+  const t = THEMES.some((x) => x.id === id) ? id : "default";
+  if (t === "default") document.body.removeAttribute("data-theme");
+  else document.body.dataset.theme = t;
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, t); } catch { /* 隐私模式下忽略 */ }
+  }
+  syncThemeDots();
+}
+
+function syncThemeDots() {
+  const cur = currentTheme();
+  $$(".theme-dots [data-theme-set]").forEach((b) => {
+    b.setAttribute("aria-pressed", b.dataset.themeSet === cur ? "true" : "false");
+  });
+}
+
+function mountThemeDots() {
+  const host = document.querySelector(".topbar-right");
+  if (!host) return;
+  if (host.querySelector(".theme-dots")) { syncThemeDots(); return; }
+  const box = document.createElement("div");
+  box.className = "theme-dots";
+  box.setAttribute("role", "group");
+  box.setAttribute("aria-label", "界面主题");
+  for (const t of THEMES) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.themeSet = t.id;
+    b.title = t.label;
+    b.setAttribute("aria-label", "主题：" + t.label);
+    b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", () => applyTheme(t.id));
+    box.appendChild(b);
+  }
+  host.insertBefore(box, host.firstChild);
+  syncThemeDots();
+}
+
+function initTheme() {
+  let saved = "matrix";
+  try { saved = localStorage.getItem(THEME_KEY) || "matrix"; } catch { /* 忘记就矩阵绿 */ }
+  applyTheme(saved, false);
+  mountThemeDots();
+}
+
 async function boot() {
+  initTheme();
   setStatus("loading", "连接中…");
   try {
     const ping = await request("/api/ping").catch(() => null);

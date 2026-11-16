@@ -986,3 +986,168 @@ body.mem-mode #app > main {
   border-color: var(--accent) !important;
   box-shadow: inset 0 0 0 1px rgba(110, 168, 255, 0.35);
 }
+
+/* ============================================================
+   黑客风主题（三套）：body[data-theme]
+   matrix = 磷光绿终端 · cyber = 赛博青紫 · amber = 琥珀 CRT
+   只覆盖变量 + 少量特效，不动布局，所以元素数量不变
+   ============================================================ */
+body[data-theme="matrix"] {
+  color-scheme: dark;
+  --bg: #050806;
+  --bg-soft: #070d0a;
+  --panel: #0a1210;
+  --panel-2: #0d1a15;
+  --panel-3: #060f0c;
+  --line: #16302a;
+  --line-strong: #1d4a3a;
+  --ink: #d8ffe9;
+  --dim: #86c8a6;
+  --faint: #5f9d7d;
+  --accent: #00ff9c;
+  --accent-ink: #001a10;
+  --accent-soft: rgba(0, 255, 156, .1);
+  --accent-line: rgba(0, 255, 156, .38);
+  --ok: #00ff9c;
+  --ok-soft: rgba(0, 255, 156, .1);
+  --warn: #ffd166;
+  --warn-soft: rgba(255, 209, 102, .1);
+  --bad: #ff5c7a;
+  --bad-soft: rgba(255, 92, 122, .1);
+}
+body[data-theme="matrix"] .topbar {
+  border-bottom-color: var(--line-strong);
+  background: rgba(3, 10, 7, .92);
+}
+body[data-theme="matrix"] h1,
+body[data-theme="matrix"] .pick-name,
+body[data-theme="matrix"] .brand-name {
+  text-shadow: 0 0 14px rgba(0, 255, 156, .28);
+}
+/* CRT 细扫描线 */
+body[data-theme="matrix"]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  background: repeating-linear-gradient(180deg, rgba(0, 255, 156, .045) 0 1px, transparent 1px 3px);
+  mix-blend-mode: screen;
+  opacity: .55;
+}
+
+body[data-theme="cyber"] {
+  color-scheme: dark;
+  --bg: #06060d;
+  --bg-soft: #080812;
+  --panel: #0d0b18;
+  --panel-2: #121026;
+  --panel-3: #080713;
+  --line: #241c3d;
+  --line-strong: #3a2a63;
+  --ink: #eae4ff;
+  --dim: #a99cd0;
+  --faint: #7a6aa6;
+  --accent: #00e5ff;
+  --accent-ink: #001218;
+  --accent-soft: rgba(0, 229, 255, .1);
+  --accent-line: rgba(0, 229, 255, .4);
+  --ok: #35f0b0;
+  --ok-soft: rgba(53, 240, 176, .1);
+  --warn: #ffcf5c;
+  --warn-soft: rgba(255, 207, 92, .1);
+  --bad: #ff2d95;
+  --bad-soft: rgba(255, 45, 149, .12);
+}
+body[data-theme="cyber"] .topbar {
+  border-bottom-color: var(--line-strong);
+  background: rgba(6, 6, 16, .92);
+}
+body[data-theme="cyber"] h1,
+body[data-theme="cyber"] .pick-name,
+body[data-theme="cyber"] .brand-name {
+  text-shadow: 0 0 16px rgba(0, 229, 255, .3), 0 0 30px rgba(255, 45, 149, .14);
+}
+/* 网格地平线 */
+body[data-theme="cyber"]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  background-image:
+    linear-gradient(rgba(0, 229, 255, .05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, .05) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse at 50% 0%, rgba(0, 0, 0, .85), transparent 72%);
+}
+body[data-theme="cyber"] .primary {
+  box-shadow: 0 0 0 1px var(--accent-line), 0 6px 22px rgba(0, 229, 255, .16);
+}
+
+body[data-theme="amber"] {
+  color-scheme: dark;
+  --bg: #0a0703;
+  --bg-soft: #0d0904;
+  --panel: #140d05;
+  --panel-2: #1a1107;
+  --panel-3: #0c0804;
+  --line: #35240d;
+  --line-strong: #56390f;
+  --ink: #ffe8c4;
+  --dim: #c9a26a;
+  --faint: #96703f;
+  --accent: #ffb000;
+  --accent-ink: #1a1000;
+  --accent-soft: rgba(255, 176, 0, .1);
+  --accent-line: rgba(255, 176, 0, .4);
+  --ok: #ffd166;
+  --ok-soft: rgba(255, 209, 102, .1);
+  --warn: #ff9e3d;
+  --warn-soft: rgba(255, 158, 61, .1);
+  --bad: #ff6b3d;
+  --bad-soft: rgba(255, 107, 61, .1);
+}
+body[data-theme="amber"] .topbar {
+  border-bottom-color: var(--line-strong);
+  background: rgba(10, 7, 3, .94);
+}
+body[data-theme="amber"] h1,
+body[data-theme="amber"] .pick-name,
+body[data-theme="amber"] .brand-name {
+  text-shadow: 0 0 12px rgba(255, 176, 0, .3);
+}
+body[data-theme="amber"]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  background: repeating-linear-gradient(180deg, rgba(255, 176, 0, .05) 0 1px, transparent 1px 3px);
+  opacity: .5;
+}
+
+/* 顶栏的主题切换：三颗小圆点 */
+.theme-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+.theme-dots button {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, .28);
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.theme-dots button:hover { transform: scale(1.15); }
+.theme-dots button[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .5), 0 0 12px currentColor;
+}
+.theme-dots [data-theme-set="default"] { background: #6EA8FF; color: #6EA8FF; }
+.theme-dots [data-theme-set="matrix"] { background: #00ff9c; color: #00ff9c; }
+.theme-dots [data-theme-set="cyber"] { background: #00e5ff; color: #00e5ff; }
+.theme-dots [data-theme-set="amber"] { background: #ffb000; color: #ffb000; }
