@@ -1,0 +1,46 @@
+{
+  "name": "autokill-purge",
+  "version": "1.1.0",
+  "description": "Local console for dsh-purge: one-click injection, equipment issuing, isolated memory vault, MCP management.",
+  "type": "module",
+  "bin": {
+    "autokill-purge": "scripts/launch.mjs"
+  },
+  "scripts": {
+    "start": "node web/server.mjs",
+    "launch": "node scripts/launch.mjs",
+    "install-desktop": "node scripts/install-desktop.mjs",
+    "keepalive": "node scripts/mem-keepalive.mjs",
+    "seed": "node scripts/seed-redteam-memory.mjs",
+    "test": "node test/acceptance.mjs && node test/ux2layer.mjs && node test/ux2layer-ui.mjs && node _ui-test/ac-check.mjs"
+  },
+  "files": [
+    "web/",
+    "scripts/launch.mjs",
+    "scripts/install-desktop.mjs",
+    "scripts/mem-keepalive.mjs",
+    "scripts/seed-redteam-memory.mjs",
+    "assets/autokill-purge.ico",
+    "assets/autokill-purge.png",
+    "README.md",
+    "CHANGELOG.md",
+    "SKILL.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-purge",
+    "console",
+    "memory-eternal",
+    "mcp",
+    "redteam",
+    "payload"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/USER/autokill-purge.git"
+  }
+}

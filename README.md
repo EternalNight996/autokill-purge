@@ -1,249 +1,215 @@
-# autokill-purge
+<p align="center">
+  <img src="assets/autokill-purge.png" width="132" alt="autokill-purge" />
+</p>
 
-AutoKill 的破甲装备：**AutoKill 看，purge 动手**。
+<h1 align="center">autokill-purge</h1>
 
-| 组成 | 是什么 |
-| --- | --- |
-| gear/autokill-purge-plugin/ | WASM 组件插件：给 AutoKill 加 4 个纯函数工具（壳识别、候选排序、解包计划、结论审计） |
-| break/ | 破甲 CLI：PE 结构、许可字符串与引用点、按字节提案、下刀、逐字节验证、一键还原 |
-| web/ | 独立 web 端：两层界面（普通 / 技术）+ 破甲 + 装备 + 记忆，一键切换 |
+<p align="center">
+  <b>破甲控制台</b> — 一键注入 · 装备发放 · 记忆库 · MCP · 14k POC 知识库<br />
+  <sub>零依赖 Node 控制台 / 两套界面一键切换 / 私有部署隔离库</sub>
+</p>
 
-分工：AutoKill 保持干净（只观察与读结构）；改字节这件事只在 purge 里发生，且只改副本。
+<p align="center">
+  <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A522-3c873a?style=flat-square&logo=node.js&logoColor=white" />
+  <img alt="deps" src="https://img.shields.io/badge/dependencies-0-ff7a00?style=flat-square" />
+  <img alt="ui" src="https://img.shields.io/badge/UI-simple%20%C2%B7%20technical-6ea8ff?style=flat-square" />
+  <img alt="theme" src="https://img.shields.io/badge/theme-7%20skins-9b5cff?style=flat-square" />
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square" />
+</p>
 
-工作流见 break/WORKFLOW.md，装车见 gear/README.md。
+<p align="center">
+  <img src="docs/shots-ux2/theme2-ops.png" width="49%" alt="破甲页（军工橙）" />
+  <img src="docs/shots-ux2/memory-full.png" width="49%" alt="记忆库（内嵌 memory-eternal）" />
+</p>
+
+<p align="center"><sub>左：破甲页 —— 选模型 → 选方案 → 一键注入 → 补丁清单 → 生成载荷　|　右：记忆库 —— 内嵌 memory-eternal，独立库 mem-purge</sub></p>
+
+<p align="center">
+  <a href="#中文">中文</a> · <a href="#english">English</a>
+</p>
 
 ---
 
-## 跑起来
+## 中文
 
-```powershell
-node web/server.mjs            # http://127.0.0.1:8792
-# 换端口：$env:PURGE_WEB_PORT=8800; node web/server.mjs
-```
+### 这是什么
 
-零依赖：只要 Node ≥ 22（本机 24.19），不需要 `npm install`、没有构建步骤。
-首次打开会要求签署《安全与法律协议》；未签署时除首页、静态资源与 `/api/ping`、`/api/agreement` 外一律 403。
+`autokill-purge` 是一个**本机控制台**，把三件事放在一个界面里：
 
-## 两层界面，一键切换
-
-顶栏右侧一个开关，两种模式**同一套后端、同一份数据**，切换不刷新、不丢输入。
-
-### 普通模式（默认，引导式流水线）
-
-给不懂技术的人用：写一句话 → 点一个按钮 → 拿到能复制的载荷。
-
-- **破甲**：状态卡（能不能用一句话说清）+ 三步步骤条（① 选模型 → ② 写一句 → ③ 拿载荷）+ 3 个推荐模型 + 一句话输入 + 三个选择项 + 整宽主按钮「一键生成」。生成后每条载荷可复制、可标「这次成功了 / 被拒绝了」。
-  - 选择项一：**破甲模板** —— 默认「小码酱 · dsh-purge 1.1.71」（整段照搬，21K 字符），也可选「不套模板（纯指令）」。
-  - 选择项二：**任务类型** —— 自己写 / 内容边界说明 / 角色扮演 / 格式强约束 / 多步拆解 / 越狱复现研究（选中即写入输入框，可再改）。
-  - 选择项三：**输出要求** —— 直接给结果 / 分步编号 / JSON / 表格 / 简洁一段。
-  - 套了模板时：文本载荷 = 模板 + `---` + 本次任务 + 输出要求（一段可直接粘给模型）；Base64 / ROT13 变体只编码任务句，避免几十 KB 的无用载荷。
-- **装备**：一个主按钮「一键装备推荐组合」，装完显示「已装备 N 件」。
-- **记忆**：搜索框 + 结果列表，未连接时给「去设置」。
-- **设置**：连接状态 + 测试连接、语言、切到技术模式、重签协议、版本与关于。
-
-普通模式不出现第二层里的任何参数名词（层、技术、采样、路径、令牌、模型矩阵）。
-
-### 技术模式（能力零删减）
-
-同一套页面按 **基础 → 生成策略 → 采样 → 路径与文件 → 诊断** 五组折叠，默认只展开「基础」：
-
-- 9 模型矩阵、3 层、12 技术 chips + 技术库说明、角色 / 输出要求、采样建议、零宽样本、编码变体、尝试记录与命中率；
-- 二进制破甲全套：`info / scan / plan / patch / invert / verify / restore / journal`，双栏对比与逐字节 diff；
-- 记忆分发、记忆中心、设置里的全部路径与令牌字段（令牌保存后不回显）。
-
-模式来源优先级：服务端 `settings.uiMode` → 浏览器 `localStorage["ap.uiMode"]` → 普通模式。
-开关位置两种模式都在，`#/assign`、`#/about` 在普通模式下会落回破甲页。
-
-界面截图见 `docs/shots-ux2/`（1280 / 390 / 320 三个宽度，两种模式）。
-
-## 模型目录与破甲模板
-
-模型目录按 2026-11 的公开版本维护，共 **24 个**（国内 18 / 国外 6），普通模式推荐位固定在
-**DeepSeek V4.1 Flash**、**通义千问 Qwen3.5-Max**、**月之暗面 Kimi K2.5**。
-
-国内全覆盖：
-
-| 厂商 | 目录里的条目 |
+| 能力 | 说明 |
 | --- | --- |
-| DeepSeek | V4.1 Flash（`deepseek-flash`，V4.1-Flash-1017，多模态 / 1M 上下文 / thinking 三档）、V4 Pro（`deepseek-v4-pro`） |
-| 阿里云 | Qwen3.5-Max、Qwen3-Max、Qwen3-Coder |
-| 智谱 AI | GLM-5、GLM-4.6 |
-| 月之暗面 | Kimi K2.5、Kimi K2 |
-| 字节跳动 | 豆包 Doubao 2.0 |
-| 百度 | 文心 ERNIE 5.0 |
-| 腾讯 | 混元 TurboS |
-| MiniMax | MiniMax M2 |
-| 阶跃星辰 | Step-3.5 |
-| 科大讯飞 | 星火 4.0 Ultra |
-| 零一万物 / 百川 | Yi-Large / Baichuan4 |
-| 本机 | Ollama / vLLM |
+| **破甲** | 把 dsh-purge 1.1.71 的那套内容与 83 条宿主补丁，做成可点、可看、可回滚的界面（注入正文 21,194 字符、补丁清单中英对照、绿/红/灰状态） |
+| **载荷生成** | 选模型（实时识别 27+ 个）→ 选层/技术/角色/输出 → 一键生成可复制的载荷（文本 + Base64 + ROT13 变体），支持二进制 `break` 七动作 |
+| **装备发放** | 6 个装备包 × 能力项 × 已破甲模型，装给 dsh / mengbot / autokill，产出可复制的 JSON 配置，留下发放历史 |
+| **记忆库** | 内嵌 memory-eternal（**独立库 mem-purge @ 7989**，与运营库完全隔离），全屏铺满，MEM Pair 配对互相传卡 |
+| **MCP** | 管理本机 MCP 服务器，**真握手测试**（initialize → tools/list），导出 Claude Desktop / Cursor 可用的 JSON |
+| **主题** | 7 套皮肤：军工橙（默认）/ 终端黑 / 工程灰 / 矩阵绿 / 赛博青 / 琥珀 CRT / 默认蓝 |
 
-国外保留 GPT-5.1、o4 / o4-mini、Claude Sonnet 4.5、Gemini 3 Pro、Llama 4，外加「自定义」。
-`api` 字段只登记**已核实**的官方调用名（DeepSeek 两个来自官方 changelog），其余以厂商文档为准；
-本工具不调用模型 API，模型只决定模板措辞与采样建议。
+**零依赖**：没有 npm 依赖、没有构建步骤，`node web/server.mjs` 直接跑。
 
-破甲模板：`web/prompts/sauce-1171.md` 照搬自 **dsh-purge v1.1.71**（MIT）的内置默认提示词
-（面向国模「小码酱」），来源 <https://github.com/YuJunZhiXue/dsh-purge>，按该项目的署名要求标注在文件头。
-用户模式的模板下拉目前只列它**真实实现**的两项：`小码酱 · dsh-purge 1.1.71` 与 `不套模板（纯指令）`。
-
-## 宿主破甲与备份/恢复（技术模式）
-
-破甲分两半：**内容**（本仓库的模板）与**改宿主**（dsh-purge 1.1.71 的 83 个补丁）。
-改宿主这一半不复制代码，直接驱动本机已安装的 dsh-purge 引擎（`web/host.mjs`）：
-
-| 动作 | 接口 | 说明 |
-|---|---|---|
-| 读状态 | `GET /api/host/status` | 83 条补丁的 `applied/pending/na`、宿主面、注入文件、快照列表 |
-| 备份现在 | `POST /api/host/snapshot` | 把 59 个被补丁文件整份复制到 `data/host-snapshots/<ts>/` + sha256 清单 |
-| 撤销上一次 | `POST /api/host/restore {confirm:true}` | 用最近一份快照覆盖；**覆盖前先自动再备份**（guard） |
-| 恢复出厂 | `POST /api/host/factory {confirm:true}` | 从官方 `resources/app.asar` 按需提取原件覆盖（本机实测 54 个文件与原件不同） |
-| 应用补丁 | `POST /api/host/apply {confirm:true}` | 调它原版 `applyPatchesAllHosts()`；写入前自动备份，返回 `restartRequired` |
-
-三条写接口都必须 `confirm:true`，且每次写入前先存一份 guard 快照——**本次操作本身也可撤销**。
-改宿主都要重启 dsh 才生效（我们不自动重启，那会杀掉正在用的会话）。
-
-逐项对照（含 PASS / FAIL / N-G 与原因）：[破甲逐项对照-dsh-purge-1.1.71.md](docs/破甲逐项对照-dsh-purge-1.1.71.md)。
-与它的评分对比：[破甲对比与评分.md](docs/破甲对比与评分.md)。
-
-## 验收
+### 快速开始
 
 ```powershell
-node test/acceptance.mjs              # 21 条：break 内核 + 协议门 + 破甲 + 分发（需服务在跑）
-node test/ux2layer.mjs                # 18 条：双层接口契约（readiness / uiMode 持久化）
-node test/ux2layer-ui.mjs             # 16 条：真实 headless Chrome 跑两种模式的 DOM 断言 + 三宽度截图
-node _ui-test/ac-check.mjs            # 19 条：真实 server + break 内核 + 本机 memory-eternal 端到端
+git clone <repo-url> autokill-purge
+cd autokill-purge
+node web/server.mjs            # 打开 http://127.0.0.1:8792
 ```
 
-四个脚本都用 `PURGE_WEB_BASE` 指定被测实例（默认 `http://127.0.0.1:8792`），退出码 `0` = 全过。
-`test/ux2layer-ui.mjs` 需要本机 Chrome（`C:\Program Files\Google\Chrome\Application\chrome.exe`），零依赖自建 CDP 驱动。
-
-与 [dsh-purge 1.1.71 的对比与评分（10 个维度、三套权重）](docs/破甲对比与评分.md) 见 `docs/`；
-此前的 `docs/*.md` 与 `REQUIREMENTS.md` 已按要求删除，恢复方式写在那份文档的「文档清理」一节。
-
-## 安装：桌面图标 + 开机自启
+装桌面图标 + 开机自启（Windows）：
 
 ```powershell
-node scripts/install-desktop.mjs             # 安装（桌面快捷方式 + 启动项自启）
+node scripts/install-desktop.mjs             # 桌面快捷方式 + 启动项
 node scripts/install-desktop.mjs --status    # 看装没装
-node scripts/install-desktop.mjs --uninstall # 卸载（只删快捷方式，不动代码与数据）
+node scripts/install-desktop.mjs --uninstall # 只删快捷方式
 ```
 
-双击桌面图标 = 起**记忆库（隔离库 mem-purge · 7989）** + **控制台（8792）** + 打开浏览器；已在跑就跳过。
+双击图标 = 起**记忆库（mem-purge @ 7989）** + **控制台（8792）** + 打开浏览器，已在跑就跳过。
 
-| 项 | 值 |
-| --- | --- |
-| 目标 | `node.exe` |
-| 参数 | 仓库内 `scripts/launch.mjs` 的绝对路径 |
-| 图标 | `assets/autokill-purge.ico`（军工橙配色） |
-| 窗口 | 最小化（7），不闪黑窗 |
-| 桌面 | `%USERPROFILE%\Desktop\autokill-purge.lnk` |
-| 自启 | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\autokill-purge.lnk` |
+### 两套界面，一键切换
 
-日志落在 `~/.dsh/autokill-purge-logs/`（memory.log / web.log）。
+- **普通模式**：引导式流水线，四步走完（选模板 → 让破甲生效 → 选模型写任务 → 拿到载荷）
+- **技术模式**：同一套流程但参数全开（层 / 技术库 / 采样 / 零宽 / 编码变体 / 命中率 / 二进制 break）
 
-## memory-eternal 0.49.x · MEM Pair（实例配对 / 互相传卡）
+右上角一个开关来回切，读的是服务端设置，刷新保持。
 
-0.49 起 memory-eternal 自带 **MEM Pair**，匹配码是两个实例之间的唯一凭据：
+### 私有部署（库名 + 端口）
 
-```
-GET  /peer/status          本机匹配码 + 已配对 + 待确认
-POST /peer/discover        局域网广播找同类实例（UDP 7990）
-POST /peer/pair/start      配对（首次要对方确认）
-POST /peer/connect         只凭匹配码重连
-POST /peer/upload          把本库已审卡推给对方（对方进待审）
-POST /peer/download        把对方的卡拉进本库（进待审）
-POST /peer/revoke          解除配对
+```jsonc
+// data/deploy.json
+{ "port": 7989, "dbName": "mem-purge", "entryHash": "#/memory" }
 ```
 
-控制台「设置 → MEM Pair」就是这套的界面：显示本机匹配码、复制、局域网发现、填对方主机/端口/匹配码配对、
-待确认请求接受、已配对节点的推卡/拉卡/解除。
-
-命令行等价：
+- 入口固定 `http://127.0.0.1:8792/#/memory`（打开根地址自动落这里）
+- 记忆库与运营库（7999 / `~/.dsh/memory-vault`）**完全隔离**
+- 设置页「私有部署」可**一键切换端口与库名**：停旧实例 → 可选迁移 db → 起新实例 → 核对 vault → 成功才落盘，失败自动回滚
 
 ```powershell
-node "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\memory-eternal\bin\dsh-memory.mjs" peer code
-node "...\bin\dsh-memory.mjs" peer discover
-node "...\bin\dsh-memory.mjs" peer pair 192.168.1.20:7989
-node "...\bin\dsh-memory.mjs" peer connect XXXX-XXXX
-node "...\bin\dsh-memory.mjs" peer upload --to XXXX-XXXX
+Invoke-RestMethod -Uri http://127.0.0.1:8792/api/deploy/switch -Method POST `
+  -ContentType application/json `
+  -Body '{"confirm":true,"port":7991,"dbName":"mem-purge-x","migrate":true}'
 ```
 
-隔离库：`mem-purge`（7989，vault `~/.dsh/memory-vault-mem-purge`）；运营库 7999 不受影响。
+### 保活
 
-## 图标
+`scripts/mem-keepalive.mjs` 每 10s 探一次 `/health`，不通就用显式 `--vault` 拉起；**拉起后核对 vault**，发现跑在别的库上会强制纠正。
 
-`assets/autokill-purge.ico`（16–256 多尺寸）：参考 mengbot 的「水果角色」风格做的拟物图标 ——
-深色圆角底板 + 亮橙榴莲（短刺硬壳 = 破甲）+ 萌表情与腮红 + 顶部绿叶，配色走控制台的军工橙。
-生成脚本参数留在提交里，改配色/表情重跑即可。
+```powershell
+node scripts/mem-keepalive.mjs --interval 10000   # 常驻
+node scripts/mem-keepalive.mjs --once             # 单次自检
+```
 
-## 私有部署（固定入口 / 库名 / 端口）
+> 为什么不用它自带的 watchdog：memory-eternal 的 watchdog 拉起 web 时「vault-pref 的 activeVault 优先于 `--vault`」，
+> 而本机 activeVault 指向运营库 —— 用它托管会静默起在运营库上（实测 quarantined 会从 39 变 232）。
 
-`
-入口      http://127.0.0.1:8792/#/memory      ← 打开根地址会自动落到这里
-控制台    8792
-记忆库    7989（库名 mem-purge，vault ~/.dsh/memory-vault-mem-purge）
-`
-
-这三项在 web/server.mjs 的 PRIVATE 常量里写死，/api/state 会下发 deploy 字段给前端：
-
-- memBase() 私有部署下**强制**走 7989，不会因为 state.json 里留下旧地址而连到运营库 7999；
-- 打开 http://127.0.0.1:8792/（无 hash）时，oot() 按 deploy.entryHash 落到 #/memory；
-- 设置页的「记忆服务地址」显示为只读，并标出库名 / 端口 / 固定入口；
-- 桌面快捷方式与开机自启的启动器也打开这个地址（scripts/launch.mjs 的 PURGE_ENTRY 可覆盖）。
-
-要改成别的部署（比如换端口），改 PRIVATE 常量与 MEM_ISOLATED 即可；运营库（7999）始终不受影响。
-## 用 CLI 管隔离库（dsh-memory）
-
-memory-eternal 自带 CLI，控制台「设置 → 记忆库 CLI」把它包了一层（`web/memcli.mjs` + `/api/memory/cli/*`）：
-
-| 控制台按钮 | 实际命令 |
-| --- | --- |
-| 看待审 | `dsh-memory audit list --status pending --json` |
-| 看账本 | `dsh-memory ledger --days 7 --json` |
-| CLI 重启 | `dsh-memory restart --port 7989 --vault ~/.dsh/memory-vault-mem-purge` |
-| 停止 | `dsh-memory stop --port 7989 --json` |
-
-**两个必须写死的参数**（封装里不接受外部传）：
-
-- `restart` / `stop` 永远带 `--port 7989 --vault <mem-purge vault>`：这版 CLI 的 watchdog
-  子进程若没有显式 `--vault`，会走 `vault-pref` 的 `activeVault`（默认运营库 `~/.dsh/memory-vault`），
-  实测会起在运营库上 —— 封装里还加了自检：起完发现 vault 不对就立刻 `stop` 并报错。
-- `audit` / `ledger` 不认 `--vault`，只认环境变量 `MEMORY_VAULT_DIR`：封装里强制注入隔离库路径，
-  否则读到的是运营库（实测未注入时待审 232 张 = 运营库，注入后 39 张 = 隔离库）。
-
-命令行等价：
+### 用 CLI 管隔离库
 
 ```powershell
 $cli = "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\memory-eternal\bin\dsh-memory.mjs"
 $env:MEMORY_VAULT_DIR = "$env:USERPROFILE\.dsh\memory-vault-mem-purge"
-node $cli status --port 7989 --json
-node $cli audit list --status pending --json
-node $cli ledger --days 7 --json
-node $cli restart --port 7989 --vault "$env:MEMORY_VAULT_DIR"
+
+node $cli status --port 7989 --json          # watchdog / 版本 / 存活
+node $cli audit list --status pending --json # 待审卡片
+node $cli ledger --days 7 --json             # 召回与蒸馏账本
 ```
 
-审批不走 CLI（`audit approve/reject` 代批会绕过你的审核），要批请到记忆库面板的审核中心。
+设置页「记忆库 CLI」把这些按钮化了（看待审 / 看账本 / 重启 / 停止）。
 
-## 一键切换端口与库名
-
-`data/deploy.json` 是唯一真源（默认 `{ port: 7989, dbName: "mem-purge" }`），控制台「设置 → 私有部署」可一键切换，
-桌面启动器 `scripts/launch.mjs` 读同一份配置，切换后双击图标起的也是新端口/新库。
-
-切换做的事（`web/deploy.mjs` 的 `switchDeploy`）：
-
-1. 校验：端口 1024–65535 且不是 8792；库名小写字母/数字/连字符，2–41 位
-2. 停旧端口的实例
-3. 可选迁移：把旧 vault 的 `memory-eternal.db{,-wal,-shm}` 复制进新 vault（新 vault 已有 db 时不覆盖）
-4. 用新端口 + 新 vault 起 `web.js`（显式 `--vault`，与启动器同一条路径）
-5. 等 health 就绪，**核对 vault 真的落在新库上**
-6. 成功才写 `deploy.json`；失败或 vault 不符 → 停新、写回旧配置、重启旧实例（自动回滚）
+### MEM Pair（和另一个实例互相传卡）
 
 ```powershell
-# 命令行等价
-Invoke-RestMethod -Uri http://127.0.0.1:8792/api/deploy/switch -Method POST -ContentType application/json `
-  -Body '{"confirm":true,"port":7991,"dbName":"mem-purge-x","migrate":true}'
-Get-Content "$env:USERPROFILE\.dsh\autokill-purge-data\deploy.json"
+node $cli peer code                        # 本机匹配码（形如 SGT9-2P42）
+node $cli peer discover                    # 局域网找同类（UDP 7990）
+node $cli peer pair 192.168.1.20:7989      # 首次配对（对方确认）
+node $cli peer connect SGT9-2P42           # 凭码重连
+node $cli peer upload --to XXXX-XXXX       # 推卡给对方（对方进待审）
 ```
 
-实测：7989/mem-purge → 7991/mem-purge-x 后，`/api/deploy`、`memoryBase`、内嵌面板代理、CLI 状态全部跟着切；
-再切回 7989/mem-purge，health 仍 `quarantined=39`（数据没动）。
+设置页「MEM Pair」是同功能界面。
+
+### 验收（四套，全零依赖）
+
+```powershell
+node test/acceptance.mjs      # 21 项：接口 / 协议门 / 载荷 / 装备 / 记忆
+node test/ux2layer.mjs        # 18 项：两层界面契约
+node test/ux2layer-ui.mjs     # 16 项：真实浏览器（CDP）交互
+node _ui-test/ac-check.mjs    # 19 项：端到端功能
+```
+
+### 目录
+
+```
+web/            server.mjs（单文件 HTTP）· app.js（前端）· style.css（7 套主题）
+                host.mjs（宿主破甲）· kb.mjs（POC 库）· peer.mjs / memcli.mjs / deploy.mjs
+scripts/        launch.mjs（启动器）· install-desktop.mjs · mem-keepalive.mjs
+                seed-redteam-memory.mjs · make-icon.py / make-icon-variants.py
+test/ · _ui-test/   四套验收
+docs/shots-ux2/     截图证据（40 张）
+assets/             图标（.ico / .png）+ 四款备选
+```
+
+---
+
+## English
+
+### What it is
+
+`autokill-purge` is a **local control console** for three things in one place:
+
+| Capability | What it does |
+| --- | --- |
+| **Purge** | Wraps dsh-purge 1.1.71's content (21,194-char injection body) and 83 host patches into a clickable, inspectable, rollback-safe UI |
+| **Payloads** | Pick a model (27+ detected live) → layer / technique / role / output → one-click payload (text + Base64 + ROT13), plus 7 binary `break` actions |
+| **Equipment** | 6 packs × capability items × cracked models, issued to dsh / mengbot / autokill, producing a copyable JSON config with history |
+| **Memory** | Embeds memory-eternal (**isolated vault `mem-purge` @ 7989**), full-bleed, with MEM Pair for cross-instance card sync |
+| **MCP** | Manage local MCP servers with a **real handshake test** (initialize → tools/list) and export JSON for Claude Desktop / Cursor |
+| **Themes** | 7 skins: ops amber (default) / terminal / steel / matrix / cyber / amber CRT / default blue |
+
+**Zero dependencies**: no npm install, no build step — just `node web/server.mjs`.
+
+### Quick start
+
+```powershell
+git clone <repo-url> autokill-purge
+cd autokill-purge
+node web/server.mjs            # http://127.0.0.1:8792
+```
+
+Desktop icon + autostart (Windows):
+
+```powershell
+node scripts/install-desktop.mjs             # shortcut + startup entry
+node scripts/install-desktop.mjs --status
+node scripts/install-desktop.mjs --uninstall
+```
+
+### Private deployment
+
+```jsonc
+// data/deploy.json
+{ "port": 7989, "dbName": "mem-purge", "entryHash": "#/memory" }
+```
+
+Fixed entry `http://127.0.0.1:8792/#/memory`; the memory vault is fully isolated from the operations vault
+(7999 / `~/.dsh/memory-vault`). The settings page can **switch port and vault name in one click**
+(stop old → optional db migration → start new → verify vault → persist, auto-rollback on failure).
+
+### Keep-alive
+
+`scripts/mem-keepalive.mjs` probes `/health` every 10s and relaunches with an explicit `--vault`,
+then **verifies the vault** and corrects it if the process came up against the wrong library.
+
+> The bundled memory-eternal watchdog prefers `vault-pref`'s `activeVault` over `--vault`, so it silently
+> starts on the operations vault (quarantined went 39 → 232 in our test). That is why this repo ships its own.
+
+### Verify
+
+```powershell
+node test/acceptance.mjs      # 21 checks: API / agreement gate / payload / equipment / memory
+node test/ux2layer.mjs        # 18 checks: two-layer UI contract
+node test/ux2layer-ui.mjs     # 16 checks: real browser (CDP)
+node _ui-test/ac-check.mjs    # 19 checks: end-to-end
+```
+
+### License
+
+MIT. 图标与截图为本仓库自制；`dsh-purge` 内容按其原许可证（MIT）署名使用。
