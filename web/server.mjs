@@ -183,7 +183,8 @@ const DEFAULT_STATE = {
   version: 1,
   agreement: { accepted: false, version: AGREEMENT_VERSION, at: null, signer: null },
   settings: {
-    memoryBase: 'http://127.0.0.1:7999/memory-eternal/api',
+    memoryBase: 'http://127.0.0.1:7989/memory-eternal/api',
+  matchCode: '',
     memoryToken: '',
     language: 'zh',
     breakDir: join(ROOT, 'break'),
@@ -265,8 +266,24 @@ function redact(state) {
 }
 
 // ---- memory-eternal proxy ------------------------------------------------
+// 本控制台用**独立库**：端口 7989 / 库名 mem-purge（vault = ~/.dsh/memory-vault-mem-purge），
+// 与运营库（7999 / ~/.dsh/memory-vault）完全隔离，互不写入。
+const MEM_ISOLATED = { port: 7989, dbName: 'mem-purge', vault: 'memory-vault-mem-purge' };
+
 function memBase(state) { return String(state.settings.memoryBase || DEFAULT_STATE.settings.memoryBase).replace(/\/+$/, ''); }
-function memHeaders(state) { const t = state.settings.memoryToken; return t ? { authorization: 'Bearer ' + t, 'content-type': 'application/json' } : { 'content-type': 'application/json' }; }
+
+function memHeaders(state) {
+  const h = { 'content-type': 'application/json' };
+  const t = state.settings.memoryToken;
+  if (t) h.authorization = 'Bearer ' + t;
+  // 匹配码：等 memory-eternal 那一侧上线后，用它把「本控制台」与「它输出的数据」对上号
+  const m = String(state.settings.matchCode || '').trim();
+  if (m) {
+    h['x-memory-match'] = m;
+    h['x-mem-purge-match'] = m;
+  }
+  return h;
+}
 
 async function memFetch(state, path, opts) {
   const ctrl = new AbortController();
@@ -481,7 +498,7 @@ function slugify(s) {
 
 // ---- API router --------------------------------------------------------------
 // ---- 内嵌 memory-eternal 的 Web UI（同源代理，顺手剥掉它的 CSP frame-ancestors） ----
-const MEM_UI_BASE = 'http://127.0.0.1:7999';
+const MEM_UI_BASE = 'http://127.0.0.1:7989';
 
 function rawBody(req) {
   return new Promise((resolve) => {
@@ -640,6 +657,7 @@ async function handleApi(req, res, url, state) {
         s.settings.uiMode = body.uiMode;
       }
       if (typeof body.memoryBase === 'string' && body.memoryBase.trim()) s.settings.memoryBase = body.memoryBase.trim();
+    if (typeof body.matchCode === 'string') s.settings.matchCode = body.matchCode.trim().slice(0, 128);
       if (typeof body.memoryToken === 'string' && body.memoryToken.trim()) s.settings.memoryToken = body.memoryToken.trim();
       if (typeof body.language === 'string' && body.language.trim()) s.settings.language = body.language.trim();
       // FR-7 settings also carry the AutoKill plugin path and the break working directory.

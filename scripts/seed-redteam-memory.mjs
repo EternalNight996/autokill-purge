@@ -17,7 +17,13 @@ import { readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const API = 'http://127.0.0.1:7999/memory-eternal/api';
+// 默认写进本控制台的独立库（mem-purge @ 7989）；要写运营库用 --api http://127.0.0.1:7999/memory-eternal/api
+const argOf = (name, fallback) => {
+  const i = process.argv.indexOf(name);
+  return i > 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+};
+const API = argOf('--api', 'http://127.0.0.1:7989/memory-eternal/api');
+const MATCH = argOf('--match', process.env.MEM_PURGE_MATCH || '');
 const SKILLS_DIR = join(process.env.USERPROFILE || process.env.HOME || '', '.dsh', 'skills');
 const DRY = process.argv.includes('--dry-run');
 
@@ -215,7 +221,7 @@ async function readSkillCards() {
 
 async function existingTitles() {
   try {
-    const r = await fetch(API + '/cards?limit=1000');
+    const r = await fetch(API + '/cards?limit=1000', { headers: MATCH ? { 'x-memory-match': MATCH } : {} });
     const d = await r.json();
     return new Set((d.cards || []).map((c) => String(c.title || '')));
   } catch {
@@ -226,7 +232,7 @@ async function existingTitles() {
 async function writeCard(card) {
   const r = await fetch(API + '/write', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: Object.assign({ 'content-type': 'application/json' }, MATCH ? { 'x-memory-match': MATCH } : {}),
     body: JSON.stringify({ title: card.title, body: card.body, kind: 'skill', tags: card.tags }),
   });
   let d = {};
@@ -238,6 +244,7 @@ async function main() {
   const have = await existingTitles();
   const skills = await readSkillCards();
   const plan = WORKFLOWS.concat(skills);
+  console.log(`目标库：${API}${MATCH ? '（匹配码已带）' : ''}`);
   console.log(`准备 ${plan.length} 张卡（工作流 ${WORKFLOWS.length} + 技能索引 ${skills.length}）；记忆库现有 ${have.size} 张`);
   let wrote = 0;
   let skipped = 0;

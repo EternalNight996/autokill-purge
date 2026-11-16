@@ -2173,8 +2173,10 @@ function memoryCardTime(card) {
 /* 内嵌 memory-eternal 面板（同源代理 /embed/memory/，见 server.mjs 的 proxyMemoryUi） */
 function memoryFullPage() {
   document.body.classList.add("mem-mode");
+  // 独立库标识：端口 7989 / 库名 mem-purge，避免和运营库（7999）混看
+  document.title = "记忆库 · mem-purge@" + (S.settings && S.settings.memoryBase ? (S.settings.memoryBase.match(/:(\d+)/) || [])[1] || "7989" : "7989");
   $("#page").innerHTML = `<div class="mem-full">
-    <iframe src="/embed/memory/" title="记忆库" loading="eager" referrerpolicy="no-referrer"></iframe>
+    <iframe src="/embed/memory/" title="记忆库 mem-purge" loading="eager" referrerpolicy="no-referrer"></iframe>
   </div>`;
 }
 
@@ -5291,6 +5293,7 @@ function settingsInputs() {
   return {
     memoryBase: ($("#sBase") ? $("#sBase").value : S.settings.memoryBase || "").trim(),
     memoryToken: ($("#sToken") ? $("#sToken").value : "").trim(),
+    matchCode: ($("#sMatch") ? $("#sMatch").value : S.settings.matchCode || "").trim(),
     language: ($("#sLang") ? $("#sLang").value : S.settings.language) || "zh",
     breakDir: ($("#sBreakDir") ? $("#sBreakDir").value : S.settings.breakDir || "").trim(),
     pluginPath: ($("#sPluginPath") ? $("#sPluginPath").value : S.settings.pluginPath || "").trim(),
@@ -5461,9 +5464,13 @@ function renderSettings() {
       <h2 id="h-s-runtime"><span class="num">2</span>路径与文件 ${badge("高级", "warn")}</h2>
       <form id="runtimeForm" class="card" novalidate>
         <label class="field"><span>记忆服务地址</span>
-          <input id="sBase" data-focus="sBase" type="text" value="${esc(val("memoryBase", s.memoryBase))}" placeholder="http://127.0.0.1:7999/memory-eternal/api" spellcheck="false">
+          <input id="sBase" data-focus="sBase" type="text" value="${esc(val("memoryBase", s.memoryBase))}" placeholder="http://127.0.0.1:7989/memory-eternal/api" spellcheck="false">
           ${fieldDefault("memoryBase", val("memoryBase", s.memoryBase), FIELD_DEFAULTS.memoryBase)}
-          <span class="help">本地优先；填远端地址即切到云端。页头来源按地址推断为 local / cloud。</span>
+          <span class="help">本控制台默认走独立库：端口 7989 · 库名 mem-purge（vault = ~/.dsh/memory-vault-mem-purge），与运营库（7999）完全隔离。</span>
+        </label>
+        <label class="field"><span>匹配码（可选）</span>
+          <input id="sMatch" data-focus="sMatch" type="text" maxlength="128" value="${esc(val("matchCode", s.matchCode))}" placeholder="等待 memory-eternal 下发">
+          <span class="help">把它下发的匹配码填这里：所有记忆请求都会带 x-memory-match 头，用来把 mem-purge 的输出与它那边的数据对上号。</span>
         </label>
         <label class="field"><span>令牌（可选${tokenSet ? "，已设置；留空保持不变" : ""}）</span>
           <input id="sToken" data-focus="sToken" type="password" autocomplete="new-password" value="" placeholder="${tokenSet ? "••••••••（已设置，留空保持不变）" : "没有令牌就留空"}">
