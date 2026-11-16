@@ -30,8 +30,8 @@ const cfg = {
 
 function run(cmd, args, opts = {}) {
   const line = cmd + ' ' + args.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' ');
-  if (DRY) { console.log('  [dry-run] ' + line.replace(/(x-access-token:|_authToken=)[^@\s]+/g, '$1***')); return ''; }
-  console.log('  $ ' + line.replace(/(x-access-token:|_authToken=)[^@\s]+/g, '$1***'));
+  if (DRY) { console.log('  [dry-run] ' + line.replace(/(\/\/)[^\/@\s]+:[^\/@\s]+@/g, '$1***:***@').replace(/(_authToken=)[^\s]+/g, '$1***')); return ''; }
+  console.log('  $ ' + line.replace(/(\/\/)[^\/@\s]+:[^\/@\s]+@/g, '$1***:***@').replace(/(_authToken=)[^\s]+/g, '$1***'));
   return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: opts.shell === true, env: Object.assign({}, env, opts.env || {}) }).trim();
 }
 
