@@ -11,6 +11,7 @@
 //
 // 所有请求都带上控制台的匹配码头（x-memory-match），对端若校验可直接认。
 import { join } from 'node:path';
+import { readDeploy } from './deploy.mjs';
 
 function home() {
   return process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
@@ -120,5 +121,6 @@ export async function peerDownload(state, { code, since }) {
 
 /** 我们的隔离库标识，给界面显示用 */
 export function isolatedInfo() {
-  return { dbName: 'mem-purge', port: 7989, vault: join(home(), 'memory-vault-mem-purge') };
+  const d = readDeploy();
+  return { dbName: d.dbName, port: d.port, vault: d.vault };
 }

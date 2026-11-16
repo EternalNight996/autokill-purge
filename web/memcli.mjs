@@ -8,7 +8,9 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const MEM_PORT = 7989;
+import { readDeploy } from './deploy.mjs';
+
+function memPort() { return readDeploy().port; }
 
 function home() {
   return process.env.USERPROFILE || process.env.HOME || '';
@@ -17,7 +19,7 @@ export function cliPath() {
   return join(home(), '.dsh', 'profiles', 'desktop', 'node_modules', 'memory-eternal', 'bin', 'dsh-memory.mjs');
 }
 export function isolatedVault() {
-  return join(home(), '.dsh', 'memory-vault-mem-purge');
+  return readDeploy().vault;
 }
 
 const READ_ONLY = new Set(['status', 'ledger', 'audit-list']);
@@ -48,7 +50,7 @@ function run(args, opts = {}) {
 
 async function health() {
   try {
-    const r = await fetch('http://127.0.0.1:' + MEM_PORT + '/memory-eternal/api/health');
+    const r = await fetch('http://127.0.0.1:' + memPort() + '/memory-eternal/api/health');
     const d = await r.json();
     return { reachable: true, version: d.version, vault: d.vault, db: d.db, quarantined: d.quarantined, cards: d.cards };
   } catch (e) {
@@ -57,11 +59,11 @@ async function health() {
 }
 
 export async function memCliStatus() {
-  const [st, h] = await Promise.all([run(['status', '--port', String(MEM_PORT), '--json'], { vault: isolatedVault() }), health()]);
+  const [st, h] = await Promise.all([run(['status', '--port', String(memPort()), '--json'], { vault: isolatedVault() }), health()]);
   const watchdogs = (st.json && st.json.watchdogs) || [];
   return {
     ok: true,
-    port: MEM_PORT,
+    port: memPort(),
     vault: isolatedVault(),
     cli: cliPath(),
     health: h,
@@ -74,13 +76,13 @@ export async function memCliStatus() {
 /** 重启：先用 watchdog 托管（带显式 vault），失败则回落到裸 web.js（同样带 --vault） */
 export async function memCliRestart() {
   const vault = isolatedVault();
-  const r = await run(['restart', '--port', String(MEM_PORT), '--vault', vault], { timeoutMs: 40000, vault: vault });
+  const r = await run(['restart', '--port', String(memPort()), '--vault', vault], { timeoutMs: 40000, vault: vault });
   await new Promise((res) => setTimeout(res, 2500));
   const h = await health();
   // 自检：vault 必须落在隔离目录，否则说明误连了运营库 —— 立刻停掉 watchdog
   const wrongVault = h.reachable && String(h.vault || '').indexOf('memory-vault-mem-purge') < 0;
   if (wrongVault) {
-    await run(['stop', '--port', String(MEM_PORT), '--json'], { timeoutMs: 20000, vault: isolatedVault() });
+    await run(['stop', '--port', String(memPort()), '--json'], { timeoutMs: 20000, vault: isolatedVault() });
     return {
       ok: false,
       error: 'vault_mismatch',
@@ -93,7 +95,7 @@ export async function memCliRestart() {
 }
 
 export async function memCliStop() {
-  const r = await run(['stop', '--port', String(MEM_PORT), '--json'], 20000);
+  const r = await run(['stop', '--port', String(memPort()), '--json'], 20000);
   await new Promise((res) => setTimeout(res, 1200));
   return { ok: r.ok, json: r.json, stdout: r.stdout, health: await health() };
 }

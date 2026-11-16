@@ -18,6 +18,7 @@ import { readDrill, grantDrill, revokeDrill, drillLegal } from './drill.mjs';
 import { readMcpConfig, saveMcpServer, deleteMcpServer, testMcpServer, testSavedServer, exportMcpConfig } from './mcp.mjs';
 import { peerStatus, peerDiscover, peerStart, peerConnect, peerAccept, peerRevoke, peerUpload, peerDownload, isolatedInfo } from './peer.mjs';
 import { memCliStatus, memCliRestart, memCliStop, memCliLedger, memCliAuditList } from './memcli.mjs';
+import { readDeploy, switchDeploy } from './deploy.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -268,24 +269,29 @@ function redact(state) {
 }
 
 // ---- memory-eternal proxy ------------------------------------------------
-// 本控制台用**独立库**：端口 7989 / 库名 mem-purge（vault = ~/.dsh/memory-vault-mem-purge），
-// 与运营库（7999 / ~/.dsh/memory-vault）完全隔离，互不写入。
+// 本控制台用**独立库**，默认端口 7989 / 库名 mem-purge（vault = ~/.dsh/memory-vault-<库名>），
+// 与运营库（7999 / ~/.dsh/memory-vault）完全隔离；库名与端口由 data/deploy.json 决定，可在设置页一键切换。
 const MEM_ISOLATED = { port: 7989, dbName: 'mem-purge', vault: 'memory-vault-mem-purge' };
 
-// 私有部署：入口、库名、端口写死在代码里，不跟 state.json 漂移
-const PRIVATE = {
-  enabled: true,
-  entryUrl: 'http://127.0.0.1:8792/#/memory',
-  webPort: 8792,
-  memoryPort: MEM_ISOLATED.port,
-  dbName: MEM_ISOLATED.dbName,
-  memoryBase: 'http://127.0.0.1:' + MEM_ISOLATED.port + '/memory-eternal/api',
-};
+let DEPLOY = readDeploy();
+
+function deployInfo() {
+  return {
+    private: true,
+    entryUrl: 'http://127.0.0.1:8792/' + DEPLOY.entryHash,
+    entryHash: DEPLOY.entryHash,
+    webPort: 8792,
+    memoryPort: DEPLOY.port,
+    dbName: DEPLOY.dbName,
+    vault: DEPLOY.vault,
+    memoryBase: DEPLOY.memoryBase,
+    file: DEPLOY.file,
+  };
+}
 
 function memBase(state) {
   // 私有部署下固定走隔离库，避免误连到运营库 7999
-  if (PRIVATE.enabled) return PRIVATE.memoryBase;
-  return String(state.settings.memoryBase || DEFAULT_STATE.settings.memoryBase).replace(/\/+$/, '');
+  return DEPLOY.memoryBase;
 }
 
 function memHeaders(state) {
@@ -514,7 +520,7 @@ function slugify(s) {
 
 // ---- API router --------------------------------------------------------------
 // ---- 内嵌 memory-eternal 的 Web UI（同源代理，顺手剥掉它的 CSP frame-ancestors） ----
-const MEM_UI_BASE = 'http://127.0.0.1:7989';
+function memUiBase() { return DEPLOY.uiBase; }
 
 function rawBody(req) {
   return new Promise((resolve) => {
@@ -531,7 +537,7 @@ function rawBody(req) {
  */
 async function proxyMemoryUi(req, res, url, prefix) {
   const rest = prefix ? url.pathname.slice(prefix.length) : url.pathname;
-  const target = MEM_UI_BASE + (rest || '/') + (url.search || '');
+  const target = memUiBase() + (rest || '/') + (url.search || '');
   const init = { method: req.method, headers: { accept: req.headers.accept || '*/*' }, redirect: 'manual' };
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     init.headers['content-type'] = req.headers['content-type'] || 'application/json';
@@ -548,7 +554,7 @@ async function proxyMemoryUi(req, res, url, prefix) {
   // 关键：不转发 CSP（它写了 frame-ancestors 'self'，会禁止被我们这层 iframe 嵌入）
   const headers = { 'content-type': ct, 'cache-control': 'no-store' };
   const loc = r.headers.get('location');
-  if (loc) headers.location = loc.replace(MEM_UI_BASE, prefix || '');
+  if (loc) headers.location = loc.replace(memUiBase(), prefix || '');
   if (/text\/html/i.test(ct)) {
     let html = buf.toString('utf8');
     if (!/<base\s/i.test(html)) html = html.replace(/<head([^>]*)>/i, '<head$1><base href="' + (prefix || '') + '/">');
@@ -627,16 +633,8 @@ async function handleApi(req, res, url, state) {
       modelsLive: { ok: live.ok !== false, detectedAt: live.detectedAt || null, count: live.count || 0, default: live.default || null, sources: live.sources || [], error: live.error || null },
       prompts: PROMPTS.map((x) => ({ id: x.id, name: x.name, note: x.note, source: x.source, scopes: x.scopes })),
       outputChoices: OUTPUT_CHOICES, taskPresets: TASK_PRESETS,
-      // 私有部署：固定入口 + 库名 + 端口（前端据此决定默认落哪一页、怎么显示）
-      deploy: {
-        private: PRIVATE.enabled,
-        entryUrl: PRIVATE.entryUrl,
-        entryHash: '#/memory',
-        webPort: PRIVATE.webPort,
-        memoryPort: PRIVATE.memoryPort,
-        dbName: PRIVATE.dbName,
-        memoryBase: PRIVATE.memoryBase,
-      },
+      // 私有部署：入口 + 库名 + 端口（来自 data/deploy.json，可在设置页一键切换）
+      deploy: deployInfo(),
     });
   }
   if (p === '/api/models/live' && method === 'GET') {
@@ -1121,6 +1119,25 @@ async function handleApi(req, res, url, state) {
     return withLock(async () => {
       try { return send(res, 200, await memCliStop()); }
       catch (e) { return send(res, 500, { ok: false, error: 'cli_stop_failed', detail: publicError(e) }); }
+    });
+  }
+
+
+  // ---- 私有部署：看 / 一键切换 库名与端口 ------------------------------------------
+  if (p === '/api/deploy' && method === 'GET') {
+    return send(res, 200, { ok: true, deploy: deployInfo() });
+  }
+  if (p === '/api/deploy/switch' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '会停旧实例、起新实例（端口/库名），失败自动回滚' });
+    return withLock(async () => {
+      try {
+        const r = await switchDeploy({ port: body.port, dbName: body.dbName, migrate: body.migrate === true });
+        if (r.ok) DEPLOY = readDeploy();
+        return send(res, 200, Object.assign({ ok: r.ok !== false }, r, { deploy: deployInfo() }));
+      } catch (e) {
+        return send(res, 500, { ok: false, error: 'deploy_switch_failed', detail: publicError(e) });
+      }
     });
   }
 

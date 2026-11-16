@@ -5551,6 +5551,7 @@ function renderSettings() {
 
     ${groupsHtml("settings", [
       { key: "base", html: baseGroup },
+      { key: "deploy", html: renderDeployBlock() },
       { key: "peer", html: renderPeerBlock() },
       { key: "memcli", html: renderMemCliBlock() },
       { key: "paths", html: pathsGroup },
@@ -5560,6 +5561,82 @@ function renderSettings() {
   bindSettings();
   bindPeer();
   bindMemCli();
+}
+
+/* ============================================================ 私有部署：库名 / 端口一键切换 */
+function deployState() {
+  if (!S.deployForm) S.deployForm = { port: "", dbName: "", migrate: false, busy: false, message: "", error: null };
+  return S.deployForm;
+}
+
+async function deploySwitch() {
+  const f = deployState();
+  const d = S.deploy || {};
+  const port = Number(f.port || d.memoryPort || 7989);
+  const dbName = String(f.dbName || d.dbName || "mem-purge").trim().toLowerCase();
+  if (port === Number(d.memoryPort) && dbName === String(d.dbName)) { toast(L("端口与库名都没变", "Nothing changed")); return; }
+  if (!window.confirm(`切到「${dbName} @ ${port}」？\n\n会停旧实例，用新端口+新库起一个，失败自动回滚。`)) return;
+  f.busy = true;
+  f.error = null;
+  f.message = "";
+  renderPage();
+  try {
+    const r = await request("/api/deploy/switch", { method: "POST", body: { confirm: true, port: port, dbName: dbName, migrate: f.migrate === true } });
+    if (!r || r.ok === false) throw payloadError(r, "切换失败");
+    S.deploy = r.deploy || S.deploy;
+    f.message = `已切到 ${r.deploy.dbName} @ ${r.deploy.memoryPort}（${r.health ? "v" + r.health.version : ""}）${r.migration && r.migration.copied ? " · 迁移 " + r.migration.copied + " 个文件" : ""}。刷新页面生效。`;
+    f.port = String(r.deploy.memoryPort);
+    f.dbName = r.deploy.dbName;
+    await loadPeer(true).catch(() => null);
+    await loadMemCli(true).catch(() => null);
+  } catch (e) {
+    f.error = e;
+  } finally {
+    f.busy = false;
+    renderPage();
+  }
+}
+
+function renderDeployBlock() {
+  const d = S.deploy || {};
+  const f = deployState();
+  if (!f.port && d.memoryPort) f.port = String(d.memoryPort);
+  if (!f.dbName && d.dbName) f.dbName = d.dbName;
+  return `<section class="section" aria-labelledby="h-deploy">
+      <h2 id="h-deploy"><span class="num">2</span>私有部署<span class="count">${esc(String(d.dbName || "mem-purge"))} @ ${esc(String(d.memoryPort || 7989))}</span></h2>
+      <div class="card soft">
+        <div class="s-row"><div class="s-row-main">
+          <span class="mcp-line"><strong>${esc(String(d.dbName || "mem-purge"))}</strong>${badge(":" + String(d.memoryPort || 7989), "accent")}${badge("私有部署", "good")}</span>
+          <span class="mono small">${esc(d.vault || "")}</span>
+          <span class="mono small muted">入口 ${esc(d.entryUrl || "")}</span>
+        </div></div>
+        <div class="s-choices" style="margin-top:10px">
+          <label class="field"><span>端口</span><input id="dpPort" type="text" value="${esc(f.port || "")}" placeholder="7989"></label>
+          <label class="field"><span>库名（vault 目录后缀）</span><input id="dpDb" type="text" value="${esc(f.dbName || "")}" placeholder="mem-purge"></label>
+          <label class="field"><span>迁移</span>
+            <select id="dpMigrate">
+              <option value="0"${f.migrate ? "" : " selected"}>不迁移（新库从空开始）</option>
+              <option value="1"${f.migrate ? " selected" : ""}>复制旧库的 db 到新库</option>
+            </select>
+          </label>
+          <div class="actions"><button type="button" class="primary" data-deploy-switch${f.busy ? " disabled" : ""}>${f.busy ? "切换中…" : "一键切换"}</button></div>
+        </div>
+        <p class="hint">库名小写字母/数字/连字符（2–41 位）；端口 1024–65535 且不能是 8792。切换会停旧实例 → 起新实例 → 核对 vault → 成功才写 deploy.json，失败自动回滚并重启旧实例。桌面启动器读同一份配置。</p>
+      </div>
+      ${f.error ? alertBox("切换失败", simpleReason(f.error)) : ""}
+      ${f.message ? okBox(f.message) : ""}
+    </section>`;
+}
+
+function bindDeploy() {
+  const f = deployState();
+  const port = $("#dpPort");
+  if (port) port.addEventListener("input", () => { f.port = port.value; });
+  const db = $("#dpDb");
+  if (db) db.addEventListener("input", () => { f.dbName = db.value; });
+  const mg = $("#dpMigrate");
+  if (mg) mg.addEventListener("change", () => { f.migrate = mg.value === "1"; });
+  $$("#page [data-deploy-switch]").forEach((el) => el.addEventListener("click", () => deploySwitch()));
 }
 
 /* ============================================================ 记忆库 CLI（dsh-memory） */

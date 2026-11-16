@@ -223,3 +223,27 @@ node $cli restart --port 7989 --vault "$env:MEMORY_VAULT_DIR"
 ```
 
 审批不走 CLI（`audit approve/reject` 代批会绕过你的审核），要批请到记忆库面板的审核中心。
+
+## 一键切换端口与库名
+
+`data/deploy.json` 是唯一真源（默认 `{ port: 7989, dbName: "mem-purge" }`），控制台「设置 → 私有部署」可一键切换，
+桌面启动器 `scripts/launch.mjs` 读同一份配置，切换后双击图标起的也是新端口/新库。
+
+切换做的事（`web/deploy.mjs` 的 `switchDeploy`）：
+
+1. 校验：端口 1024–65535 且不是 8792；库名小写字母/数字/连字符，2–41 位
+2. 停旧端口的实例
+3. 可选迁移：把旧 vault 的 `memory-eternal.db{,-wal,-shm}` 复制进新 vault（新 vault 已有 db 时不覆盖）
+4. 用新端口 + 新 vault 起 `web.js`（显式 `--vault`，与启动器同一条路径）
+5. 等 health 就绪，**核对 vault 真的落在新库上**
+6. 成功才写 `deploy.json`；失败或 vault 不符 → 停新、写回旧配置、重启旧实例（自动回滚）
+
+```powershell
+# 命令行等价
+Invoke-RestMethod -Uri http://127.0.0.1:8792/api/deploy/switch -Method POST -ContentType application/json `
+  -Body '{"confirm":true,"port":7991,"dbName":"mem-purge-x","migrate":true}'
+Get-Content "$env:USERPROFILE\.dsh\autokill-purge-data\deploy.json"
+```
+
+实测：7989/mem-purge → 7991/mem-purge-x 后，`/api/deploy`、`memoryBase`、内嵌面板代理、CLI 状态全部跟着切；
+再切回 7989/mem-purge，health 仍 `quarantined=39`（数据没动）。

@@ -7,17 +7,28 @@
 //
 // 用法：node scripts/launch.mjs [--no-open] [--quiet]
 import { spawn } from 'node:child_process';
-import { existsSync, openSync, mkdirSync } from 'node:fs';
+import { existsSync, openSync, mkdirSync, readFileSync as readFileSyncSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const HOME = process.env.USERPROFILE || process.env.HOME || '';
-const MEM_PORT = Number(process.env.MEM_PURGE_PORT || 7989);
+// 端口与库名来自 data/deploy.json（设置页可一键切换），环境变量仍可覆盖
+function readDeployCfg() {
+  const def = { port: 7989, dbName: 'mem-purge' };
+  try {
+    const raw = JSON.parse(readFileSyncSync(join(process.env.USERPROFILE || '', '.dsh', 'autokill-purge-data', 'deploy.json'), 'utf8'));
+    if (raw && Number(raw.port)) def.port = Number(raw.port);
+    if (raw && raw.dbName) def.dbName = String(raw.dbName);
+  } catch { /* 用默认 */ }
+  return def;
+}
+const CFG = readDeployCfg();
+const MEM_PORT = Number(process.env.MEM_PURGE_PORT || CFG.port);
 const WEB_PORT = Number(process.env.PURGE_WEB_PORT || 8792);
 const MEM_ROOT = join(HOME, '.dsh', 'profiles', 'desktop', 'node_modules', 'memory-eternal');
-const MEM_VAULT = join(HOME, '.dsh', 'memory-vault-mem-purge');
+const MEM_VAULT = process.env.MEM_PURGE_VAULT || join(HOME, '.dsh', 'memory-vault-' + CFG.dbName);
 const LOG_DIR = join(HOME, '.dsh', 'autokill-purge-logs');
 
 const QUIET = process.argv.includes('--quiet');
