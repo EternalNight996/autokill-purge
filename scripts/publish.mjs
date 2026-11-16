@@ -32,7 +32,7 @@ function run(cmd, args, opts = {}) {
   const line = cmd + ' ' + args.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' ');
   if (DRY) { console.log('  [dry-run] ' + line.replace(/(x-access-token:|_authToken=)[^@\s]+/g, '$1***')); return ''; }
   console.log('  $ ' + line.replace(/(x-access-token:|_authToken=)[^@\s]+/g, '$1***'));
-  return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: Object.assign({}, env, opts.env || {}) }).trim();
+  return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: opts.shell === true, env: Object.assign({}, env, opts.env || {}) }).trim();
 }
 
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -121,7 +121,7 @@ function publishNpm() {
   const hadRc = existsSync(npmrc);
   if (!DRY) writeFileSync(npmrc, `//registry.npmjs.org/:_authToken=${cfg.npm.token}\n`, 'utf8');
   try {
-    run(NPM, ['publish', '--access', 'public', '--no-git-checks']);
+    run(NPM, ['publish', '--access', 'public', '--no-git-checks'], { shell: process.platform === 'win32' });
     console.log(`✓ npm 已发布：https://www.npmjs.com/package/${pkg.name}`);
     return true;
   } finally {
