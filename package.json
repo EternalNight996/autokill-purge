@@ -41,6 +41,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/USER/autokill-purge.git"
-  }
+    "url": "git+https://github.com/EternalNight996/autokill-purge.git"
+  },
+  "homepage": "https://github.com/EternalNight996/autokill-purge#readme",
+  "bugs": {
+    "url": "https://github.com/EternalNight996/autokill-purge/issues"
+  },
+  "author": "EternalNight996"
 }
