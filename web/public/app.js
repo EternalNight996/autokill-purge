@@ -1814,6 +1814,12 @@ function memoryCardTime(card) {
 }
 
 /* 内嵌 memory-eternal 面板（同源代理 /embed/memory/，见 server.mjs 的 proxyMemoryUi） */
+function memoryFullPage() {
+  $("#page").innerHTML = `<div class="mem-full">
+    <iframe src="/embed/memory/" title="记忆库" loading="eager" referrerpolicy="no-referrer"></iframe>
+  </div>`;
+}
+
 function memoryEmbedBlock(open) {
   return `<section class="section" aria-labelledby="s-mem-embed">
       <details class="grp" data-group="memory:embed"${open ? " open" : ""}>
@@ -1832,13 +1838,7 @@ function memoryEmbedBlock(open) {
 }
 
 function renderSimpleMemory() {
-  $("#page").innerHTML = `
-    <div class="page-head"><div>
-      <p class="eyebrow">记忆</p><h1>记忆</h1>
-      <p class="lead">直接内嵌 memory-eternal 面板：知识库、检索、写卡（只走 pending）都在面板里。</p>
-    </div></div>
-    ${memoryEmbedBlock(true)}
-  `;
+  memoryFullPage();
 }
 
 function bindSimpleMemory() {
@@ -2477,8 +2477,16 @@ async function loadHostStatus(force = false) {
     } finally {
       S.host.loading = false;
       S.host.tried = true;
-      // 两种模式都要重绘：首次渲染时宿主状态还没回来，这里是空状态
-      if (S.tab === "breach") renderPage();
+      // 两种模式都要重绘：首次渲染时宿主状态还没回来，这里是空状态。
+      // 但要避开用户正在输入 / 正在生成载荷的瞬间，否则重建 DOM 会打断点击与输入。
+      if (S.tab === "breach") {
+        const act = document.activeElement;
+        const typing = act && /INPUT|TEXTAREA|SELECT/.test(act.tagName);
+        setTimeout(() => {
+          if (S.tab !== "breach" || S.breach.building || S.host.busy) return;
+          renderPage();
+        }, typing ? 1000 : 400);
+      }
     }
   })();
   return S.host.loadPromise;
@@ -4355,18 +4363,7 @@ async function saveAssignment() {
 
 /* ------------------------------------------------------------------ memory center */
 function renderMemory() {
-  const source = S.memory.source || detectSource(S.settings.memoryBase);
-  $("#page").innerHTML = `
-    <div class="page-head">
-      <div>
-        <p class="eyebrow">CONTROL · 04</p>
-        <h1>记忆中心</h1>
-        <p class="lead">整页就是 memory-eternal 的面板（同源代理 7999），统计、检索、写卡都在里面；写卡只走 pending，本页不调用 approve/reject。</p>
-      </div>
-      <div class="head-meta">${badge(sourceLabel(source), source === "local" ? "good" : (source === "cloud" ? "warn" : ""))}${badge("内嵌 7999", "accent")}</div>
-    </div>
-    ${memoryEmbedBlock(true)}
-  `;
+  memoryFullPage();
 }
 
 function bindMemory() {

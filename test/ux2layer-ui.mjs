@@ -481,7 +481,8 @@ class Page {
     if (cur !== hash) {
       await this.evalJS(`(() => { location.hash = ${JSON.stringify(hash)}; return location.hash; })()`, 3000);
     }
-    return this.waitFor(inPage(`return location.hash === ${JSON.stringify(hash)} && __text().length > 0;`), {
+    // 记忆页整页就是一个 iframe，自身文本为空，所以「渲染完成」也要认 iframe
+    return this.waitFor(inPage(`return location.hash === ${JSON.stringify(hash)} && (__text().length > 0 || !!document.querySelector('#main iframe'));`), {
       timeout,
       label: `跳转到 ${hash}`,
     });
@@ -695,6 +696,8 @@ async function ensureMode(mode) {
 // ---- 断言 ---------------------------------------------------------------------
 
 async function assert1() {
+  // 首屏可能先出骨架再异步重绘，等主按钮落地再断言
+  await page.waitFor(inPage("return document.querySelector('#sBuild') ? true : null;"), { timeout: 10000, interval: 120 }).catch(() => null);
   await page.navigate(BASE + '/', { settle: 900 });
   const s = await readMode();
   const snap = s.snapshot;
@@ -773,6 +776,8 @@ async function assert5() {
   );
   if (!filled || !filled.ok) return bad(`填不进任务：${(filled && filled.reason) || '未知'}`);
 
+  // 等宿主状态加载完再点，避免点击瞬间页面被宿主状态回填重绘
+  await page.waitFor(inPage('return (!S.host.loading && S.host.tried) ? true : null;'), { timeout: 12000, interval: 150 }).catch(() => null);
   const mark = page.netMark();
   await page.click('一键生成');
   let last = null;

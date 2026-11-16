@@ -868,3 +868,19 @@ textarea.shake {
 .ghost.busy {
   background: rgba(75, 85, 99, 0.35) !important;
 }
+
+/* 记忆库全屏：整页只放内嵌面板 */
+.mem-full {
+  margin: 0;
+  padding: 0;
+}
+.mem-full iframe {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 60px);
+  border: 0;
+  background: #0b0f18;
+}
+@media (max-width: 720px) {
+  .mem-full iframe { height: calc(100vh - 52px); }
+}
