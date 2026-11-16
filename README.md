@@ -119,3 +119,24 @@ node _ui-test/ac-check.mjs            # 19 条：真实 server + break 内核 + 
 
 与 [dsh-purge 1.1.71 的对比与评分（10 个维度、三套权重）](docs/破甲对比与评分.md) 见 `docs/`；
 此前的 `docs/*.md` 与 `REQUIREMENTS.md` 已按要求删除，恢复方式写在那份文档的「文档清理」一节。
+
+## 安装：桌面图标 + 开机自启
+
+```powershell
+node scripts/install-desktop.mjs             # 安装（桌面快捷方式 + 启动项自启）
+node scripts/install-desktop.mjs --status    # 看装没装
+node scripts/install-desktop.mjs --uninstall # 卸载（只删快捷方式，不动代码与数据）
+```
+
+双击桌面图标 = 起**记忆库（隔离库 mem-purge · 7989）** + **控制台（8792）** + 打开浏览器；已在跑就跳过。
+
+| 项 | 值 |
+| --- | --- |
+| 目标 | `node.exe` |
+| 参数 | 仓库内 `scripts/launch.mjs` 的绝对路径 |
+| 图标 | `assets/autokill-purge.ico`（军工橙配色） |
+| 窗口 | 最小化（7），不闪黑窗 |
+| 桌面 | `%USERPROFILE%\Desktop\autokill-purge.lnk` |
+| 自启 | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\autokill-purge.lnk` |
+
+日志落在 `~/.dsh/autokill-purge-logs/`（memory.log / web.log）。
