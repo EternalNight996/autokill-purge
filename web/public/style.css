@@ -83,12 +83,13 @@ li { margin: 4px 0; }
   color: var(--ink); text-decoration: none; white-space: nowrap;
 }
 .brand:hover { text-decoration: none; }
+/* 品牌图标：用生成的图标图（替换原来的 AP 文字块） */
 .logo {
-  display: grid; place-items: center;
+  display: block;
   width: 30px; height: 30px; border-radius: 9px;
-  background: linear-gradient(160deg, #8bb9ff, var(--accent));
-  color: var(--accent-ink);
-  font: 800 11px/1 var(--mono); letter-spacing: -.04em;
+  object-fit: contain;
+  background: transparent;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .35));
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
 .brand-text .title { font-weight: 700; letter-spacing: .01em; }
@@ -1423,3 +1424,9 @@ body[data-theme="terminal"] #nav a[aria-current="page"] {
 }
 .equip-page-head .spacer { flex: 1 1 auto; }
 .equip-page-head strong { font-size: 13px; letter-spacing: .02em; }
+
+
+/* 品牌图标在窄屏略缩，避免挤压导航 */
+@media (max-width: 520px) {
+  .logo { width: 26px; height: 26px; border-radius: 7px; }
+}
