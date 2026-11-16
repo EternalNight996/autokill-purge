@@ -164,6 +164,7 @@ const S = {
     skillView: { name: "", text: "" },
     skillEdit: { name: "", text: "" },
     kb: { stats: null, mode: "poc", q: "", items: [], detail: null, error: null },
+    intel: { reports: null, report: null, running: false, days: 7, error: null, last: null },
     netScopeDraft: null,
     loading: false, tried: false, error: null, busy: false, message: "",
     promptDraft: null, promptDirty: false,
@@ -1411,6 +1412,49 @@ async function openKbItem(id) {
   } catch (e) { toast(simpleReason(e)); }
 }
 
+/* 情报巡检：跑一次（真实出网，最长 3 分钟）+ 读历史报告 */
+async function runIntel() {
+  const it = S.host.intel = Object.assign({}, S.host.intel);
+  if (it.running) return;
+  const days = Number(($("#intelDays") || {}).value || it.days || 7);
+  it.days = days;
+  if (!window.confirm(`跑一次巡检（近 ${days} 天）？会真实出网抓 7 个源，最长约 3 分钟。`)) return;
+  it.running = true;
+  it.error = null;
+  it.last = "";
+  renderPage();
+  try {
+    const d = await request("/api/intel/sweep", { method: "POST", body: { confirm: true, days: days } });
+    if (!d) throw new Error("没有响应");
+    if (d.ok === false) {
+      it.error = new Error(d.error === "timeout" ? "巡检超时（3 分钟没跑完）" : (d.detail || d.error || "巡检失败"));
+      if (d.stdoutTail) it.last = "部分输出：\n" + d.stdoutTail.slice(-1500);
+    } else {
+      it.last = `巡检完成：近 ${d.days} 天 · 耗时 ${(d.elapsedMs / 1000).toFixed(1)}s` + (d.reportName ? ` · 产物 ${d.reportName}` : "");
+      it.reports = await request("/api/intel/reports").catch(() => it.reports);
+      if (d.reportName) {
+        const rep = await request("/api/intel/report?name=" + encodeURIComponent(d.reportName)).catch(() => null);
+        it.report = rep && rep.ok ? rep : it.report;
+      }
+    }
+  } catch (e) {
+    it.error = e;
+  } finally {
+    it.running = false;
+    renderPage();
+  }
+}
+
+async function openIntelReport(name) {
+  const it = S.host.intel;
+  if (!it) return;
+  try {
+    const d = await request("/api/intel/report?name=" + encodeURIComponent(name));
+    it.report = d && d.ok ? d : null;
+    renderPage();
+  } catch (e) { toast(simpleReason(e)); }
+}
+
 /* 统一流程里的公共控件（两模式共用）：注入/卸载/还原、重新识别、注入正文编辑 */
 function bindFlowControls() {
   $$("#page [data-simple-host]").forEach((el) => {
@@ -1454,6 +1498,11 @@ function bindFlowControls() {
     if (e.key === "Enter") { e.preventDefault(); searchKb(kbQueryEl.value, ($("#kbMode") || {}).value || "poc"); }
   });
   $$("#page [data-kb-open]").forEach((el) => el.addEventListener("click", () => openKbItem(el.dataset.kbOpen)));
+  // 情报巡检
+  $$("#page [data-intel-run]").forEach((el) => el.addEventListener("click", () => runIntel()));
+  $$("#page [data-intel-open]").forEach((el) => el.addEventListener("click", () => openIntelReport(el.dataset.intelOpen)));
+  const intelDaysEl = $("#intelDays");
+  if (intelDaysEl) intelDaysEl.addEventListener("change", () => { S.host.intel = Object.assign({}, S.host.intel, { days: Number(intelDaysEl.value) || 7 }); });
   const hp = $("#hostPrompt");
   if (hp) {
     hp.addEventListener("input", () => {
@@ -2146,8 +2195,36 @@ function renderFlowExtraPanels() {
       </div>
     </details>`;
 
+  const intel = h.intel || { reports: null, report: null, running: false, days: 7, error: null, last: null };
+  const intelReports = (intel.reports && intel.reports.reports) || [];
+  const intelRows = intelReports.map((r) => `<div class="s-row">
+      <div class="s-row-main"><strong>${esc(r.name)}</strong><span class="mono small">${esc(r.kind || "")} · ${fmtNum(r.bytes)} 字节 · ${esc(r.mtime ? fmtTime(r.mtime) : "")}</span></div>
+      <div class="actions"><button type="button" class="small" data-intel-open="${esc(r.name)}">查看</button></div>
+    </div>`).join("");
+  const intelBlock = `<details class="grp" data-group="extra:intel">
+      <summary><span class="grp-title">情报巡检</span><span class="grp-hint">7 个源 · 历史报告 ${intelReports.length} 份${intel.running ? " · 正在跑…" : ""}</span></summary>
+      <div class="grp-body">
+        <div class="s-choices" style="grid-template-columns:1fr 1fr;align-items:end">
+          <label class="field"><span>看近几天</span><select id="intelDays">
+            <option value="1"${intel.days === 1 ? " selected" : ""}>近 1 天</option>
+            <option value="3"${intel.days === 3 ? " selected" : ""}>近 3 天</option>
+            <option value="7"${intel.days === 7 ? " selected" : ""}>近 7 天</option>
+          </select></label>
+          <div class="actions"><button type="button" class="primary" data-intel-run${intel.running ? " disabled" : ""}>${intel.running ? "巡检中…" : "跑一次巡检"}</button></div>
+        </div>
+        <p class="hint">会真实出网抓 Exploit-DB / 吾爱破解 / 看雪 / oss-sec / 先知 / FreeBuf / GitHub Advisory，最坏约 3 分钟；产物落 ~/.dsh/redteam/intel-sweep-YYYYMMDD.md。</p>
+        ${intel.error ? alertBox("巡检失败", simpleReason(intel.error)) : ""}
+        ${intel.last ? okBox(intel.last) : ""}
+        ${intelRows || `<p class="small muted">还没有巡检报告。</p>`}
+        ${intel.report ? `<div class="card" style="margin-top:8px">
+          <div class="s-row"><div class="s-row-main"><strong>${esc(intel.report.name)}</strong><span class="mono small">${fmtNum(intel.report.bytes)} 字节${intel.report.truncated ? " · 已截断" : ""}</span></div></div>
+          <textarea rows="14" readonly spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px;width:100%">${esc(intel.report.text || "")}</textarea>
+        </div>` : ""}
+      </div>
+    </details>`;
+
   return `<section class="section">
-    <h2><span class="num">3+</span>其他四栏<span class="count">规则 ${(rules.files || []).length} · 技能 ${(skills.skills || []).length} · 白名单 ${ns.lines || 0} 行 · POC ${kbStats ? fmtNum(kbStats.poc) : "?"}</span></h2>
+    <h2><span class="num">3+</span>其他五栏<span class="count">规则 ${(rules.files || []).length} · 技能 ${(skills.skills || []).length} · 白名单 ${ns.lines || 0} 行 · POC ${kbStats ? fmtNum(kbStats.poc) : "?"} · 巡检 ${intelReports.length}</span></h2>
 
     <details class="grp" data-group="extra:rules">
       <summary><span class="grp-title">规则集</span><span class="grp-hint">~/.dsh/rules/*.md · ${(rules.files || []).length} 个${rules.exists ? "" : "（目录还没建，保存时自动建）"}</span></summary>
@@ -2187,6 +2264,7 @@ function renderFlowExtraPanels() {
     </details>
 
     ${kbBlock}
+    ${intelBlock}
   </section>`;
 }
 
@@ -2338,6 +2416,7 @@ async function loadHostStatus(force = false) {
       S.host.skills = skills0;
       S.host.netScope = netScope0;
       S.host.kb = Object.assign({}, S.host.kb, { stats: kbStats0 || null });
+      S.host.intel = Object.assign({}, S.host.intel, { reports: await request("/api/intel/reports").catch(() => null) });
     } catch (e) {
       S.host.error = e;
     } finally {

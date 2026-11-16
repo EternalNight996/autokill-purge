@@ -854,7 +854,7 @@ async function assert7() {
     const copy = __copyBtns()[0];
     if (!copy) return { ok: false, reason: '找不到「复制」按钮' };
     const before = __firstCardText();
-    const ex = btns.filter((x) => /展开|全文/.test(__label(x)))[0] || null;
+    const ex = (copy.closest('.payload') && copy.closest('.payload').querySelector('summary')) || btns.filter((x) => /展开|全文/.test(__label(x)))[0] || null;
     if (ex) { try { ex.scrollIntoView({ block: 'center' }); } catch (_) {} ; try { ex.click(); } catch (_) {} }
     return { ok: true, hadExpand: !!ex, beforeLen: (before || '').length };
   `),

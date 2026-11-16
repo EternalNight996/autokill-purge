@@ -13,6 +13,7 @@ import { run as breakRun, BreakError } from '../break/break.mjs';
 import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
 import { detectLiveModels } from './models-live.mjs';
 import { kbStats, searchPoc, readPoc, searchNotes, readNote, recentPoc } from './kb.mjs';
+import { listIntelReports, readIntelReport, runIntelSweep } from './intel.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -478,6 +479,7 @@ function slugify(s) {
 
 // ---- API router --------------------------------------------------------------
 // ---- 实时模型识别（30s 缓存，force=true 强制重扫） ---------------------------------
+let intelRunning = false;
 let liveCache = { at: 0, data: null };
 async function liveModels(force) {
   if (!force && liveCache.data && Date.now() - liveCache.at < 30000) return liveCache.data;
@@ -869,6 +871,28 @@ async function handleApi(req, res, url, state) {
   if (p === '/api/kb/recent' && method === 'GET') {
     try { return send(res, 200, recentPoc(url.searchParams.get('limit') || 8)); }
     catch (e) { return send(res, 503, { ok: false, error: 'kb_recent_failed', detail: publicError(e) }); }
+  }
+
+  // ---- 情报巡检（驱动 dsh-purge 的 intel-sweep：7 个源，真实出网） -------------------
+  if (p === '/api/intel/reports' && method === 'GET') {
+    try { return send(res, 200, await listIntelReports()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'intel_list_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/intel/report' && method === 'GET') {
+    try { return send(res, 200, await readIntelReport(url.searchParams.get('name') || '')); }
+    catch (e) { return send(res, 400, { ok: false, error: 'intel_read_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/intel/sweep' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '巡检会真实出网抓 7 个源（最长 3 分钟），传 confirm:true' });
+    if (intelRunning) return send(res, 409, { ok: false, error: 'busy', hint: '上一次巡检还在跑，等它结束' });
+    intelRunning = true;
+    try {
+      const r = await runIntelSweep({ days: body.days || 7 });
+      return send(res, 200, Object.assign({ ok: r.ok !== false }, r));
+    } finally {
+      intelRunning = false;
+    }
   }
 
   // breach (FR-2)
