@@ -977,7 +977,21 @@ async function handleApi(req, res, url, state) {
       promptText = await readPromptScope(body.template, body.scope || 'full');
       if (!promptText) return send(res, 400, { ok: false, error: 'unknown template: ' + body.template });
     }
-    const result = buildPayload(body.model, body.layer, techniques, body.task, body.role, body.output, promptText);
+    const models = Array.isArray(body.models) && body.models.length
+      ? body.models.filter((m) => typeof m === 'string' && m)
+      : (body.model ? [body.model] : []);
+    if (!models.length) return send(res, 400, { ok: false, error: 'model or models is required' });
+    // 多选：每个模型各出一套变体（带 model 标记），前端按模型分卡展示
+    const perModel = models.map((mid) => Object.assign({ model: mid }, buildPayload(mid, body.layer, techniques, body.task, body.role, body.output, promptText)));
+    const result = perModel.length === 1
+      ? Object.assign({}, perModel[0], { models: models })
+      : {
+        models: models,
+        variants: perModel.reduce((acc, r) => acc.concat(r.variants.map((v) => Object.assign({ model: r.model }, v))), []),
+        advice: perModel.reduce((acc, r) => acc.concat(r.advice), []),
+        zero_wide_sample: perModel[0].zero_wide_sample,
+        templateChars: perModel[0].templateChars,
+      };
     result.template = body.template || 'none';
     result.scope = body.scope || 'full';
     return send(res, 200, { ok: true, result: result });
@@ -1011,7 +1025,7 @@ async function handleApi(req, res, url, state) {
     if (!body.preset || !Array.isArray(body.agents) || body.agents.length === 0) return send(res, 400, { ok: false, error: 'preset and agents[] are required' });
     return withLock(async () => {
       const s = await readState();
-      const equipment = { id: 'e' + (s.equipment.length + 1), preset: body.preset, agents: body.agents, permissions: body.permissions || 'read-only', notes: body.notes || '', at: new Date().toISOString() };
+      const equipment = { id: 'e' + (s.equipment.length + 1), preset: body.preset, agents: body.agents, permissions: body.permissions || 'read-only', items: Array.isArray(body.items) ? body.items : [], notes: body.notes || '', at: new Date().toISOString() };
       s.equipment.push(equipment);
       await writeState(s);
       return send(res, 200, { ok: true, equipment: equipment });

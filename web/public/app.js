@@ -97,12 +97,37 @@ const AGENTS = [
 ];
 
 const PRESETS = [
-  { id: "redteam", name: "红队全装", desc: "侦察、打点、横向、权限维持，一条链的默认装备。", agents: ["dsh"] },
-  { id: "recon", name: "侦察刀", desc: "被动收集、资产测绘、指纹识别；只读，不碰目标。", agents: ["dsh", "autokill"] },
-  { id: "lateral", name: "内网横向", desc: "隧道、凭据、域内枚举；要求受控权限。", agents: ["dsh"] },
-  { id: "radio", name: "无线电 / IoT", desc: "BLE、RFID、固件；偏硬件，动作小。", agents: ["mengbot"] },
-  { id: "re", name: "逆向研究", desc: "样本、二进制、协议；本地隔离，只读原件。", agents: ["autokill"] },
-  { id: "custom", name: "自定义", desc: "自己选智能体、权限与备注。", agents: [] },
+  { id: "redteam", name: "红队全装", desc: "侦察、打点、横向、权限维持，一条链的默认装备。", agents: ["dsh"], items: [
+    { id: "recon", name: "侦察与资产测绘", desc: "被动/主动收集、指纹识别、资产落库" },
+    { id: "vuln", name: "漏洞验证与打点", desc: "Nday/1day、未授权、Web 漏洞链" },
+    { id: "shell", name: "WebShell 与隧道", desc: "冰蝎/哥斯拉马、suo5 socks5" },
+    { id: "lateral", name: "内网横向", desc: "凭据复用、域内枚举、跳板" },
+    { id: "report", name: "战果与报告", desc: "攻击链、复现命令、证据截图" },
+  ] },
+  { id: "recon", name: "侦察刀", desc: "被动收集、资产测绘、指纹识别；只读，不碰目标。", agents: ["dsh", "autokill"], items: [
+    { id: "passive", name: "被动收集", desc: "FOFA / crt.sh / 备案 / 被动 DNS" },
+    { id: "fingerprint", name: "指纹识别", desc: "框架、中间件、CMS、组件版本" },
+    { id: "asset-graph", name: "资产图谱", desc: "域名↔IP↔C 段↔证书↔服务" },
+    { id: "surface", name: "攻击面清单", desc: "边缘资产、未备案、暴露服务" },
+  ] },
+  { id: "lateral", name: "内网横向", desc: "隧道、凭据、域内枚举；要求受控权限。", agents: ["dsh"], items: [
+    { id: "tunnel", name: "隧道代理", desc: "suo5 / chisel / frp 出网" },
+    { id: "cred", name: "凭据获取与复用", desc: "抓取、喷洒、PtH" },
+    { id: "ad-enum", name: "域内枚举", desc: "BloodHound、Kerberoast、ACL" },
+    { id: "privesc", name: "提权", desc: "配置类优先，内核最后" },
+  ] },
+  { id: "radio", name: "无线电 / IoT", desc: "BLE、RFID、固件；偏硬件，动作小。", agents: ["mengbot"], items: [
+    { id: "ble", name: "BLE 抓包与重放", desc: "HCI 抓包、service/characteristic 还原" },
+    { id: "rfid", name: "RFID / 门禁", desc: "读卡、克隆、重放" },
+    { id: "firmware", name: "固件解包", desc: "ubifs / squashfs、CGI 审计" },
+  ] },
+  { id: "re", name: "逆向研究", desc: "样本、二进制、协议；本地隔离，只读原件。", agents: ["autokill"], items: [
+    { id: "static", name: "静态逆向", desc: "r2 / Ghidra、符号与交叉引用" },
+    { id: "dynamic", name: "动态调试", desc: "x64dbg / Frida、断点与 hook" },
+    { id: "unpack", name: "脱壳与样本", desc: "加壳识别、dump、IAT 修复" },
+    { id: "protocol", name: "协议还原", desc: "C2 协议、加密字段、重放" },
+  ] },
+  { id: "custom", name: "自定义", desc: "自己选智能体、权限与备注。", agents: [], items: [] },
 ];
 
 const PERMISSIONS = [
@@ -118,6 +143,57 @@ const RESULTS = [
 ];
 
 const KINDS = ["skill", "knowledge", "project", "mistake", "prompt", "core", "content", "business"];
+
+/* 中英跟随系统：navigator.language 以 en 开头就出英文，其余（含 zh-CN / zh-TW / ja 等）出中文 */
+const LANG_ZH = (() => {
+  try {
+    const l = String(navigator.language || "zh").toLowerCase();
+    return !l.startsWith("en");
+  } catch {
+    return true;
+  }
+})();
+const L = (zh, en) => (LANG_ZH ? zh : en);
+
+/* 还没做好的页面（禁用到开发完成） */
+const WIP_PAGES = {
+  assign: {
+    eyebrow: "SOON",
+    zhTitle: "记忆分发 · 开发中",
+    enTitle: "Memory distribution · In development",
+    zhLead: "把记忆库里的技能与工作流按智能体分发出去。功能还没上，先别用这一页。",
+    enLead: "Distributing skills and workflows from the memory library to each agent. Not ready yet.",
+  },
+  intel: {
+    eyebrow: "SOON",
+    zhTitle: "情报巡检 · 开发中",
+    enTitle: "Intel sweep · In development",
+    zhLead: "7 个源的情报巡检正在重做，产物与历史报告暂时不开放。",
+    enLead: "The 7-source intel sweep is being rebuilt; reports and history are temporarily unavailable.",
+  },
+  drill: {
+    eyebrow: "SOON",
+    zhTitle: "演练台 · 开发中",
+    enTitle: "Drill console · In development",
+    zhLead: "授权与法律声明流程正在重做。这段时间注入 / 卸载不会再用这页做门禁。",
+    enLead: "Authorization and legal flow is being rebuilt. Injection no longer gates on this page.",
+  },
+};
+
+function renderWipPage(tab) {
+  const w = WIP_PAGES[tab] || WIP_PAGES.assign;
+  $("#page").innerHTML = `
+    <div class="page-head"><div>
+      <p class="eyebrow">${esc(w.eyebrow)}</p>
+      <h1>${esc(L(w.zhTitle, w.enTitle))}</h1>
+      <p class="lead">${esc(L(w.zhLead, w.enLead))}</p>
+    </div>
+    <div class="head-meta">${badge(L("开发中", "In development"), "warn")}</div></div>
+    <section class="section">
+      ${emptyState(L("这一页暂时锁着", "This page is locked for now"), L("等做好会在这里直接开放，不需要你重新配置。", "It will open here once it is ready; nothing to reconfigure."))}
+    </section>
+  `;
+}
 
 const BREAK_ACTIONS = [
   { id: "info", name: "定性", cmd: "break info", desc: "格式、架构、节表、熵、加壳信号" },
@@ -190,6 +266,7 @@ const S = {
   },
   breach: {
     model: "",
+    models: [],
     layer: "prompt",
     techniques: [],
     task: "",
@@ -999,18 +1076,18 @@ function renderPage() {
   if (modeIsTechnical()) {
     if (S.tab === "breach") renderBreach();
     else if (S.tab === "equip") renderEquip();
-    else if (S.tab === "assign") renderAssign();
+    else if (S.tab === "assign") renderWipPage("assign");
     else if (S.tab === "memory") renderMemory();
-    else if (S.tab === "intel") renderIntelPage();
-    else if (S.tab === "drill") renderDrillPage();
+    else if (S.tab === "intel") renderWipPage("intel");
+    else if (S.tab === "drill") renderWipPage("drill");
     else if (S.tab === "settings") renderSettings();
     else renderAbout();
   } else {
     if (S.tab === "breach") renderSimpleBreach();
     else if (S.tab === "equip") renderSimpleEquip();
     else if (S.tab === "memory") renderSimpleMemory();
-    else if (S.tab === "intel") renderIntelPage();
-    else if (S.tab === "drill") renderDrillPage();
+    else if (S.tab === "intel") renderWipPage("intel");
+    else if (S.tab === "drill") renderWipPage("drill");
     else renderSimpleSettings();
   }
   // 记忆库是整页 iframe，再插一条技术模式提示会把面板往下顶 63px、还溢出
@@ -1585,11 +1662,7 @@ function bindFlowControls() {
 
 function bindSimpleBreach() {
   $$("#page [data-model]").forEach((el) => {
-    el.addEventListener("click", () => {
-      S.breach.model = el.dataset.model;
-      S.attempt.model = el.dataset.model;
-      renderPage();
-    });
+    el.addEventListener("click", () => toggleModel(el.dataset.model));
   });
   const task = $("#sTask");
   if (task) {
@@ -1657,7 +1730,7 @@ async function simpleBuild() {
     const data = await request("/api/breach/build", {
       method: "POST",
       body: {
-        model, layer: "prompt", techniques, task,
+        model, models: breachModels(), layer: "prompt", techniques, task,
         role: "安全研究员",
         output: outputTextFor(b.outputChoice),
         template: b.template || "none",
@@ -1740,6 +1813,16 @@ function simpleEquippedItems() {
 
 function renderSimpleEquip() {
   const items = simpleEquippedItems();
+  const base = PRESETS.find((p) => p.id === "redteam") || PRESETS[0];
+  const baseItems = base.items || [];
+  const chosen = Array.isArray(S.simple.equipItems) ? S.simple.equipItems.filter((id) => baseItems.some((it) => it.id === id)) : baseItems.map((it) => it.id);
+  const itemCards = baseItems.map((it) => {
+    const on = chosen.includes(it.id);
+    return `<button type="button" class="pick" data-simple-item="${esc(it.id)}" data-focus="sitem-${esc(it.id)}" aria-pressed="${on}">
+        <span class="pick-top"><span class="pick-name">${esc(it.name)}</span>${on ? badge("装", "accent") : ""}</span>
+        <span class="pick-note">${esc(it.desc)}</span>
+      </button>`;
+  }).join("");
   const rows = items.length
     ? `<div class="card">${items.map((it) => `<div class="s-row">
         <div class="s-row-main"><strong>${esc(simpleText(it.name))}</strong><span>${esc(simpleText(it.desc))}</span></div>
@@ -1760,19 +1843,41 @@ function renderSimpleEquip() {
         <span class="s-status-detail">${items.length ? "这些能力都装好了，可以直接用。" : "还没有装能力，点下面这个按钮一次装好。"}</span>
       </div>
     </section>
+    <section class="section" aria-labelledby="s-eq-pick">
+      <h2 id="s-eq-pick"><span class="num">1</span>装哪些能力<span class="count">${chosen.length} / ${baseItems.length} 项</span></h2>
+      <p class="hint">先勾再装：不勾的这项不会出现在配置里。</p>
+      <div class="grid models">${itemCards}</div>
+    </section>
     <section class="section">
-      <button type="button" class="primary s-generate" id="sEquipAll"${S.simple.equipBusy ? ' disabled aria-busy="true"' : ""}>${S.simple.equipBusy ? "装备中…" : "一键装备推荐组合"}</button>
+      <button type="button" class="primary s-generate" id="sEquipAll"${S.simple.equipBusy || !chosen.length ? ' disabled aria-busy="true"' : ""}>${S.simple.equipBusy ? "装备中…" : (chosen.length ? `装备选中的 ${chosen.length} 项` : "先勾至少一项")}</button>
       <div id="sEquipOut" style="margin-top:10px">${out}</div>
     </section>
     <section class="section" aria-labelledby="s-eq-h">
-      <h2 id="s-eq-h"><span class="num">1</span>已装的<span class="count">${items.length} 件</span></h2>
+      <h2 id="s-eq-h"><span class="num">2</span>已装的<span class="count">${items.length} 件</span></h2>
       ${rows}
     </section>
   `;
   bindSimpleEquip();
 }
 
+function simpleChosenItems() {
+  const base = PRESETS.find((p) => p.id === "redteam") || PRESETS[0];
+  const all = (base.items || []).map((it) => it.id);
+  if (!Array.isArray(S.simple.equipItems)) return all;
+  return S.simple.equipItems.filter((id) => all.includes(id));
+}
+
 function bindSimpleEquip() {
+  $$("#page [data-simple-item]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.simpleItem;
+      const cur = simpleChosenItems();
+      S.simple.equipItems = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+      S.simple.equipError = "";
+      S.simple.equipResult = "";
+      renderPage();
+    });
+  });
   const all = $("#sEquipAll");
   if (all) all.addEventListener("click", () => simpleEquipPreset());
   $$("#page [data-simple-unequip]").forEach((el) => el.addEventListener("click", () => {
@@ -1790,7 +1895,7 @@ async function simpleEquipPreset() {
   S.simple.equipError = "";
   S.simple.equipResult = "";
   renderPage();
-  const body = { preset: "redteam", agents: ["dsh"], permissions: "read-only", notes: "" };
+  const body = { preset: "redteam", agents: ["dsh"], permissions: "read-only", notes: "", items: simpleChosenItems() };
   try {
     const data = await request("/api/equipment", { method: "POST", body });
     if (!data || data.ok === false) throw payloadError(data, "装备失败");
@@ -1799,7 +1904,11 @@ async function simpleEquipPreset() {
     else S.equipment = [...S.equipment, Object.assign({}, body, { at: new Date().toISOString() })];
     S.simple.removed = [];
     const items = simpleEquippedItems();
-    S.simple.equipResult = `已装备 ${items.length} 件：${items.map((i) => simpleText(i.name)).join("、")}`;
+    const chosen = simpleChosenItems();
+    const base = PRESETS.find((p) => p.id === "redteam") || PRESETS[0];
+    S.simple.equipResult = chosen.length
+      ? `已装 ${chosen.length} 项能力：${chosen.map((id) => ((base.items || []).find((x) => x.id === id) || { name: id }).name).join("、")}`
+      : "这次一项都没勾，没有装任何能力。";
   } catch (e) {
     if (isAgreementError(e)) return;
     S.simple.equipError = simpleReason(e);
@@ -2060,6 +2169,34 @@ function flowToneBadge(p) {
   return `<span class="patch-state tone-${esc(tone)}">${esc(label)}</span>`;
 }
 
+/* 当前选中的模型列表（单选也走同一个数组；至少保留一个） */
+function breachModels() {
+  const b = S.breach;
+  const list = Array.isArray(b.models) && b.models.length ? b.models.slice() : (b.model ? [b.model] : []);
+  return list;
+}
+
+/* 点模型：多选 toggle；取消到空就不动（至少留一个） */
+function toggleModel(id) {
+  if (!id) return;
+  const b = S.breach;
+  let list = breachModels();
+  const i = list.indexOf(id);
+  if (i >= 0) {
+    if (list.length === 1) {
+      toast(L("至少留一个模型", "Keep at least one model"));
+      return;
+    }
+    list.splice(i, 1);
+  } else {
+    list.push(id);
+  }
+  b.models = list;
+  b.model = list[0] || "";
+  S.attempt.model = b.model;
+  renderPage();
+}
+
 function renderFlowModelStep(mode) {
   const tech = mode === "technical";
   const live = S.modelsLive;
@@ -2075,10 +2212,12 @@ function renderFlowModelStep(mode) {
     }
     return out;
   })();
+  const pickedModels = breachModels();
   const card = (m) => {
-    const on = m.id === S.breach.model;
+    const idx = pickedModels.indexOf(m.id);
+    const on = idx >= 0;
     return `<button type="button" class="pick" data-model="${esc(m.id)}" data-focus="model-${esc(m.id)}" aria-pressed="${on}">
-      <span class="pick-top"><span class="pick-name">${esc(simpleText(m.name))}</span>${on ? badge("已选", "accent") : ""}</span>
+      <span class="pick-top"><span class="pick-name">${esc(simpleText(m.name))}</span>${on ? (pickedModels.length > 1 ? badge(String(idx + 1), "accent") : badge("已选", "accent")) : ""}</span>
       <span class="pick-note">${esc(simpleText(m.tagline || m.notes || m.family || ""))}</span>
       ${m.liveProvider ? `<span class="pick-meta">${esc(m.liveProvider)}</span>` : ""}
     </button>`;
@@ -2096,17 +2235,30 @@ function renderFlowPlanStep(mode) {
   const pr = S.host.prompt;
   const tplCount = (S.prompts || []).length;
   const promptInfo = pr ? `${fmtNum((pr.text || "").length)} 字符` : "";
+  const picked = breachModels();
+  const multi = picked.length > 1;
+  const firstMeta = (S.models || []).find((m) => m.id === picked[0]) || {};
+  const firstSupports = firstMeta.dshPurge === "default" || firstMeta.dshPurge === "supported";
+  // 多选模型时不给单一模板：显示「智能匹配」，单选时把该模型的适配情况标在选项上
+  const tplField = multi
+    ? `<label class="field"><span>破甲模板</span>
+        <input type="text" readonly value="智能匹配（${picked.length} 个模型）" data-focus="sTemplateAuto">
+        <span class="help">已选 ${picked.length} 个模型：各自按自己的适配出载荷，这里不再指定单一模板。</span>
+      </label>`
+    : `<label class="field"><span>破甲模板</span>
+        ${tplCount
+          ? `<select id="sTemplate" data-focus="sTemplate">${S.prompts.map((p) => `<option value="${esc(p.id)}"${p.id === b.template ? " selected" : ""}>${esc(p.name)}${p.id === "sauce-1171" && firstSupports ? "（该模型已支持）" : ""}</option>`).join("")}</select>`
+          : `<input type="text" value="none" readonly>`}
+        <span class="help">${pr && pr.isBuiltin ? "当前注入的就是这套（与内置默认一致）" : "换模板只影响生成的载荷；宿主里注入的那份在下面第 3 步旁边可以改。"}${promptInfo ? " · 注入正文 " + promptInfo : ""}</span>
+      </label>`;
   const rows = [
-    `<label class="field"><span>破甲模板</span>
-      ${tplCount ? `<select id="sTemplate" data-focus="sTemplate">${optionHtml(S.prompts, b.template)}</select>` : `<input type="text" value="none" readonly>`}
-      <span class="help">${pr && pr.isBuiltin ? "当前注入的就是这套（与内置默认一致）" : "换模板只影响生成的载荷；宿主里注入的那份在下面第 3 步旁边可以改。"}${promptInfo ? " · 注入正文 " + promptInfo : ""}</span>
-    </label>`,
+    tplField,
     `<label class="field"><span>任务类型</span><select id="sPreset" data-focus="sPreset">${optionHtml(S.taskPresets, b.taskPreset)}</select></label>`,
     `<label class="field"><span>输出要求</span><select id="sOutput" data-focus="sOutput">${optionHtml(S.outputChoices, b.outputChoice)}</select></label>`,
   ];
-  const extra = tech ? "" : "";
+  const extra = "";
   return `<section class="section" aria-labelledby="f-plan-h">
-    <h2 id="f-plan-h"><span class="num">2</span>选方案<span class="count">${tplCount} 套模板 · ${(S.taskPresets || []).length} 种任务</span></h2>
+    <h2 id="f-plan-h"><span class="num">2</span>选方案<span class="count">${multi ? "智能匹配" : tplCount + " 套模板"} · ${(S.taskPresets || []).length} 种任务</span></h2>
     <div class="s-choices">${rows.join("")}</div>
     ${extra}
   </section>`;
@@ -2583,11 +2735,13 @@ function renderBreach() {
   const model = S.models.find((m) => m.id === b.model) || S.models[0] || null;
   const techCount = b.techniques.length;
   const stats = normalizeBreachStats(S.breachStats, S.attempts);
+  const pickedModels = breachModels();
   const modelsHtml = S.models.length
     ? `<div class="grid models">${S.models.map((m) => {
-      const on = m.id === b.model;
+      const midx = pickedModels.indexOf(m.id);
+      const on = midx >= 0;
       return `<button type="button" class="pick" data-model="${esc(m.id)}" data-focus="model-${esc(m.id)}" aria-pressed="${on}">
-        <span class="pick-top"><span class="pick-name">${esc(m.name)}</span>${m.live ? badge("实时", "") : ""}${m.dshDefault ? badge("当前默认", "good") : ""}${m.dshPurge === "default" ? badge("dsh-purge 默认", "accent") : (m.dshPurge === "supported" ? badge("dsh-purge 支持", "") : "")}${on ? badge("已选", "accent") : ""}</span>
+        <span class="pick-top"><span class="pick-name">${esc(m.name)}</span>${m.live ? badge("实时", "") : ""}${m.dshDefault ? badge("当前默认", "good") : ""}${m.dshPurge === "default" ? badge("dsh-purge 默认", "accent") : (m.dshPurge === "supported" ? badge("dsh-purge 支持", "") : "")}${on ? (pickedModels.length > 1 ? badge(String(midx + 1), "accent") : badge("已选", "accent")) : ""}</span>
         <span class="pick-note">${esc(m.notes || m.refusal || m.desc || "—")}</span>
         ${m.family ? `<span class="pick-meta">${esc(m.family)}</span>` : ""}
         ${m.live ? `<span class="pick-meta">${esc(m.liveProvider || m.liveSourceType || "")}${m.liveSource ? " · " + esc(m.liveSource) : ""}</span>` : ""}
@@ -2822,11 +2976,7 @@ function renderBreach() {
 
 function bindBreach() {
   $$("#page [data-model]").forEach((el) => {
-    el.addEventListener("click", () => {
-      S.breach.model = el.dataset.model;
-      S.attempt.model = el.dataset.model;
-      renderPage();
-    });
+    el.addEventListener("click", () => toggleModel(el.dataset.model));
   });
   $$("#page [data-layer]").forEach((el) => {
     el.addEventListener("click", () => {
@@ -2908,6 +3058,7 @@ async function buildPayload() {
       method: "POST",
       body: {
         model: b.model,
+        models: breachModels(),
         layer: b.layer,
         techniques: b.techniques,
         task: b.task.trim(),
@@ -3772,6 +3923,15 @@ function equipAgents(forPreview = false) {
   return out;
 }
 
+/* 当前要装的能力项（不勾的不进配置） */
+function equipChosenItems() {
+  const e = S.equip;
+  const p = PRESETS.find((x) => x.id === e.preset) || PRESETS[0];
+  const all = (p.items || []).map((it) => it.id);
+  if (!Array.isArray(e.items)) return all;
+  return e.items.filter((id) => all.includes(id));
+}
+
 function equipConfig(item) {
   if (item) {
     return {
@@ -3805,6 +3965,10 @@ function renderEquip() {
   const e = S.equip;
   const config = equipConfig();
   const customSelected = e.agents.includes("custom");
+  const currentPreset = PRESETS.find((p) => p.id === e.preset) || PRESETS[0];
+  const presetItems = currentPreset.items || [];
+  // 没挑过就默认全装（保持原来「一键装整包」的手感）
+  const chosenItems = Array.isArray(e.items) && e.items.length ? e.items.filter((id) => presetItems.some((it) => it.id === id)) : presetItems.map((it) => it.id);
   const presetCards = PRESETS.map((p) => {
     const on = p.id === e.preset;
     return `<button type="button" class="pick" data-preset="${esc(p.id)}" data-focus="preset-${esc(p.id)}" aria-pressed="${on}">
@@ -3848,6 +4012,24 @@ function renderEquip() {
     <section class="section" aria-labelledby="h-preset">
       <h2 id="h-preset"><span class="num">1</span>装备包<span class="count">${PRESETS.length} 个</span></h2>
       <div class="grid presets">${presetCards}</div>
+    </section>
+
+    <section class="section" aria-labelledby="h-items">
+      <h2 id="h-items"><span class="num">1+</span>装备哪些能力<span class="count">${chosenItems.length} / ${presetItems.length} 项</span></h2>
+      ${presetItems.length
+        ? `<p class="hint">勾选后才装：不勾的这项不会出现在配置里。</p>
+          <div class="grid models">${presetItems.map((it) => {
+            const on = chosenItems.includes(it.id);
+            return `<button type="button" class="pick" data-equip-item="${esc(it.id)}" data-focus="eitem-${esc(it.id)}" aria-pressed="${on}">
+                <span class="pick-top"><span class="pick-name">${esc(it.name)}</span>${on ? badge("装", "accent") : ""}</span>
+                <span class="pick-note">${esc(it.desc)}</span>
+              </button>`;
+          }).join("")}</div>
+          <div class="actions" style="margin-top:8px">
+            <button type="button" class="ghost" data-equip-all>全选</button>
+            <button type="button" class="ghost" data-equip-none>全不选</button>
+          </div>`
+        : `<p class="hint">这个包没有预置能力项（自定义包请直接用备注写清要装什么）。</p>`}
     </section>
 
     <section class="section" aria-labelledby="h-agents">
@@ -3921,11 +4103,34 @@ function bindEquip() {
       const p = PRESETS.find((x) => x.id === el.dataset.preset);
       S.equip.preset = el.dataset.preset;
       if (p) S.equip.agents = [...p.agents];
+      S.equip.items = p && p.items ? p.items.map((it) => it.id) : [];
       S.equip.error = null;
       S.equip.ok = null;
       renderPage();
     });
   });
+  // 能力项勾选：装之前先挑，不勾的不进配置
+  $$("#page [data-equip-item]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.equipItem;
+      const cur = Array.isArray(S.equip.items) && S.equip.items.length
+        ? S.equip.items.slice()
+        : ((PRESETS.find((p) => p.id === S.equip.preset) || PRESETS[0]).items || []).map((it) => it.id);
+      S.equip.items = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+      S.equip.error = null;
+      S.equip.ok = null;
+      renderPage();
+    });
+  });
+  $$("#page [data-equip-all]").forEach((el) => el.addEventListener("click", () => {
+    const p = PRESETS.find((x) => x.id === S.equip.preset) || PRESETS[0];
+    S.equip.items = (p.items || []).map((it) => it.id);
+    renderPage();
+  }));
+  $$("#page [data-equip-none]").forEach((el) => el.addEventListener("click", () => {
+    S.equip.items = [];
+    renderPage();
+  }));
   $$("#page [data-agent]").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.dataset.agent;
@@ -3976,7 +4181,7 @@ async function issueEquipment() {
   try {
     const data = await request("/api/equipment", {
       method: "POST",
-      body: { preset: e.preset, agents, permissions: e.permissions, notes: e.notes.trim() },
+      body: { preset: e.preset, agents, permissions: e.permissions, notes: e.notes.trim(), items: equipChosenItems() },
     });
     if (!data || data.ok === false) throw payloadError(data, "发放失败");
     if (Array.isArray(data.equipment)) S.equipment = data.equipment;
