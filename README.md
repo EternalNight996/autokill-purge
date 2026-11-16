@@ -220,7 +220,7 @@ MIT. 图标与截图为本仓库自制；`dsh-purge` 内容按其原许可证（
 | --- | --- | --- |
 | **GitHub** | ✅ 已发布（140 文件 / 41 张截图 / README 顶部图标 + 两张截图正常渲染） | https://github.com/EternalNight996/autokill-purge |
 | **npm** | ✅ 已发布 `autokill-purge@1.1.1`（latest；含 1.1.0 与 `0.0.0-stage` 占位） | https://www.npmjs.com/package/autokill-purge |
-| **Gitee** | 🔑 token 有效（`eternalnight996`，82 个仓库可写），但属**仓库级令牌**建不了新仓库（403）；网页建一个空仓库后即可推 | https://gitee.com/eternalnight996 |
+| **Gitee** | ✅ 已发布（140 文件 / 41 张截图，与 GitHub 同源） | https://gitee.com/eternalnight996/autokill-purge |
 
 ### npm 说明
 
