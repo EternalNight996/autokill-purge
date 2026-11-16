@@ -35,6 +35,40 @@ function run(cmd, args, opts = {}) {
   return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: Object.assign({}, env, opts.env || {}) }).trim();
 }
 
+const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+/** 仓库不存在就建（GitHub 用 API；Gitee 也支持） */
+async function ensureRepo(kind) {
+  const c = cfg[kind];
+  if (!c.token || !c.repo) return false;
+  const [owner, name] = c.repo.split('/');
+  if (!owner || !name) return false;
+  if (kind === 'github') {
+    const h = { authorization: 'token ' + c.token, 'user-agent': 'autokill-purge', accept: 'application/vnd.github+json' };
+    const probe = await fetch(`https://api.github.com/repos/${c.repo}`, { headers: h });
+    if (probe.status === 200) { console.log(`  仓库已存在：${c.repo}`); return true; }
+    if (probe.status !== 404) { console.log(`  ⚠ 探测仓库失败 HTTP ${probe.status}`); return false; }
+    const body = { name, description: 'Local console for dsh-purge: one-click injection, equipment, isolated memory vault, MCP.', private: false, has_issues: true, has_wiki: false };
+    const create = await fetch('https://api.github.com/user/repos', { method: 'POST', headers: Object.assign({ 'content-type': 'application/json' }, h), body: JSON.stringify(body) });
+    const d = await create.json().catch(() => ({}));
+    if (create.status === 201) { console.log(`  已创建仓库：${d.full_name}`); return true; }
+    console.log(`  ✗ 创建仓库失败 HTTP ${create.status} ${d.message || ''}`);
+    return false;
+  }
+  // gitee
+  const probe = await fetch(`https://gitee.com/api/v5/repos/${c.repo}?access_token=${encodeURIComponent(c.token)}`);
+  if (probe.status === 200) { console.log(`  仓库已存在：${c.repo}`); return true; }
+  const create = await fetch('https://gitee.com/api/v5/user/repos', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ access_token: c.token, name, private: false, description: 'autokill-purge console' }),
+  });
+  const d = await create.json().catch(() => ({}));
+  if (create.status === 201) { console.log(`  已创建仓库：${d.full_name}`); return true; }
+  console.log(`  ✗ 创建仓库失败 HTTP ${create.status} ${d.message || ''}`);
+  return false;
+}
+
 function git(args, opts) {
   return run('git', args, opts);
 }
@@ -87,7 +121,7 @@ function publishNpm() {
   const hadRc = existsSync(npmrc);
   if (!DRY) writeFileSync(npmrc, `//registry.npmjs.org/:_authToken=${cfg.npm.token}\n`, 'utf8');
   try {
-    run('npm', ['publish', '--access', 'public', '--no-git-checks']);
+    run(NPM, ['publish', '--access', 'public', '--no-git-checks']);
     console.log(`✓ npm 已发布：https://www.npmjs.com/package/${pkg.name}`);
     return true;
   } finally {
@@ -95,14 +129,23 @@ function publishNpm() {
   }
 }
 
-function main() {
+async function main() {
   console.log('发布目标：' + (ONLY.length ? ONLY.join(' + ') : 'github + gitee + npm') + (DRY ? '（dry-run）' : ''));
   if (!DRY) ensureCleanTree();
   const done = [];
-  if (want('github')) { try { if (pushTo('github')) done.push('github'); } catch (e) { console.error('✗ github 失败：' + (e.stdout || e.message)); } }
-  if (want('gitee')) { try { if (pushTo('gitee')) done.push('gitee'); } catch (e) { console.error('✗ gitee 失败：' + (e.stdout || e.message)); } }
-  if (want('npm')) { try { if (publishNpm()) done.push('npm'); } catch (e) { console.error('✗ npm 失败：' + (e.stdout || e.message)); } }
+  if (want('github')) {
+    try { const okRepo = await ensureRepo('github'); if (okRepo || DRY) { if (pushTo('github')) done.push('github'); } else console.error('✗ github：仓库建不出来，跳过'); }
+    catch (e) { console.error('✗ github 失败：' + (e.stdout || e.message)); }
+  }
+  if (want('gitee')) {
+    try { const okRepo = await ensureRepo('gitee'); if (okRepo || DRY) { if (pushTo('gitee')) done.push('gitee'); } else console.error('✗ gitee：仓库建不出来，跳过'); }
+    catch (e) { console.error('✗ gitee 失败：' + (e.stdout || e.message)); }
+  }
+  if (want('npm')) {
+    try { if (publishNpm()) done.push('npm'); }
+    catch (e) { console.error('✗ npm 失败：' + (e.stdout || e.message)); }
+  }
   console.log('\n完成：' + (done.length ? done.join(' · ') : '无（缺凭据或失败）'));
 }
 
-main();
+main().catch((e) => { console.error("发布异常：" + (e && e.message)); process.exit(1); });
