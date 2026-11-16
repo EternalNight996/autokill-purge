@@ -213,3 +213,39 @@ node _ui-test/ac-check.mjs    # 19 checks: end-to-end
 ### License
 
 MIT. 图标与截图为本仓库自制；`dsh-purge` 内容按其原许可证（MIT）署名使用。
+
+## 发布状态
+
+| 目标 | 状态 | 地址 |
+| --- | --- | --- |
+| **GitHub** | ✅ 已发布（140 文件 / 41 张截图 / README 顶部图标 + 两张截图正常渲染） | https://github.com/EternalNight996/autokill-purge |
+| **npm** | ⏳ 卡在 npm 的 staged publishing：`1.1.0` 已提交但需要你在网页端确认 | https://www.npmjs.com/package/autokill-purge |
+| **Gitee** | ⛔ token 无效（`Access token does not exist`），需要换一个 | — |
+
+### npm 说明
+
+`npm publish` 返回 `E409 Cannot publish over previously staged version "1.1.0"`，registry 里当前只有
+`0.0.0-stage`（description: *Temporary package placeholder for staged publishing*）——
+npm 现在对首次发版走 **staged publishing**：版本先进待审，维护者到包页面点确认后才上架。
+本机 npm 是 10.9.7，没有 `npm stage` 子命令，只能去网页确认。
+
+确认地址：https://www.npmjs.com/package/autokill-purge/manage  （或包页面的「Staged versions」）
+
+### 一键发布脚本
+
+```powershell
+# 凭据从 0600 文件读入环境变量（不回显、不进聊天）
+$envMap = @{}
+Get-Content C:\Users\Administrator\.dsh\creds.env | Where-Object { $_ -match '=' -and -not $_.StartsWith('#') } |
+  ForEach-Object { $i = $_.IndexOf('='); $envMap[$_.Substring(0,$i).Trim()] = $_.Substring($i+1).Trim().Trim('"') }
+$env:GITHUB_TOKEN = $envMap['GITHUB_TOKEN']; $env:GITHUB_REPO = 'EternalNight996/autokill-purge'
+$env:NPM_TOKEN    = $envMap['NPM_TOKEN'];    $env:NPM_NAME    = 'autokill-purge'
+
+node scripts/publish.mjs              # 全发（缺哪个凭据就跳过哪个）
+node scripts/publish.mjs --github     # 只推仓库
+node scripts/publish.mjs --npm        # 只发 npm
+node scripts/publish.mjs --dry-run    # 只看步骤
+```
+
+脚本做的事：发布前用 API 检查/创建仓库 → 用带 token 的 remote `git push -u`（推完立刻 set-url 去掉 token）
+→ 临时 `.npmrc`（gitignore 已排除）发 npm → 发完即删。
