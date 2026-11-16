@@ -913,11 +913,18 @@ function initAssignFromState() {
 /* ---------------------------------------------------------- 主题（黑客风） */
 const THEMES = [
   { id: "default", label: "默认蓝", color: "#6EA8FF" },
-  { id: "matrix", label: "矩阵绿（终端）", color: "#00ff9c" },
-  { id: "cyber", label: "赛博青（霓虹）", color: "#00e5ff" },
-  { id: "amber", label: "琥珀（CRT）", color: "#ffb000" },
+  { id: "terminal", label: "终端黑（零圆角·全等宽）", color: "#39ff14" },
+  { id: "ops", label: "军工橙（角标面板）", color: "#ff7a00" },
+  { id: "steel", label: "工程灰（Burp 风）", color: "#7cb7ff" },
+  { id: "matrix", label: "矩阵绿（扫描线）", color: "#00ff9c" },
+  { id: "cyber", label: "赛博青（霓虹网格）", color: "#00e5ff" },
+  { id: "amber", label: "琥珀 CRT", color: "#ffb000" },
 ];
 const THEME_KEY = "ap.theme";
+
+function themeMeta(id) {
+  return THEMES.find((x) => x.id === id) || THEMES[0];
+}
 
 function currentTheme() {
   const t = document.body.dataset.theme || "default";
@@ -936,7 +943,16 @@ function applyTheme(id, persist = true) {
 
 function syncThemeDots() {
   const cur = currentTheme();
-  $$(".theme-dots [data-theme-set]").forEach((b) => {
+  const meta = themeMeta(cur);
+  const btn = document.querySelector(".theme-pick > summary");
+  if (btn) {
+    btn.setAttribute("aria-label", "界面主题：" + meta.label + "（点击切换）");
+    const sw = btn.querySelector(".swatch");
+    if (sw) { sw.style.background = meta.color; sw.style.boxShadow = "0 0 8px " + meta.color; }
+    const txt = btn.querySelector(".theme-name");
+    if (txt) txt.textContent = meta.label.split("（")[0];
+  }
+  $$(".theme-pick li button[data-theme-set]").forEach((b) => {
     b.setAttribute("aria-pressed", b.dataset.themeSet === cur ? "true" : "false");
   });
 }
@@ -944,28 +960,28 @@ function syncThemeDots() {
 function mountThemeDots() {
   const host = document.querySelector(".topbar-right");
   if (!host) return;
-  if (host.querySelector(".theme-dots")) { syncThemeDots(); return; }
-  const box = document.createElement("div");
-  box.className = "theme-dots";
-  box.setAttribute("role", "group");
-  box.setAttribute("aria-label", "界面主题");
-  for (const t of THEMES) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.dataset.themeSet = t.id;
-    b.title = t.label;
-    b.setAttribute("aria-label", "主题：" + t.label);
-    b.setAttribute("aria-pressed", "false");
-    b.addEventListener("click", () => applyTheme(t.id));
-    box.appendChild(b);
-  }
+  if (host.querySelector(".theme-pick")) { syncThemeDots(); return; }
+  const box = document.createElement("details");
+  box.className = "theme-pick";
+  box.innerHTML = [
+    '<summary><span class="swatch"></span><span class="theme-name">主题</span></summary>',
+    "<ul>",
+    THEMES.map((t) => `<li><button type="button" data-theme-set="${t.id}" aria-pressed="false"><i style="background:${t.color};box-shadow:0 0 8px ${t.color}"></i>${t.label}</button></li>`).join(""),
+    "</ul>",
+  ].join("");
+  box.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-theme-set]");
+    if (!b) return;
+    applyTheme(b.dataset.themeSet);
+    box.open = false;
+  });
   host.insertBefore(box, host.firstChild);
   syncThemeDots();
 }
 
 function initTheme() {
-  let saved = "matrix";
-  try { saved = localStorage.getItem(THEME_KEY) || "matrix"; } catch { /* 忘记就矩阵绿 */ }
+  let saved = "terminal";
+  try { saved = localStorage.getItem(THEME_KEY) || "terminal"; } catch { /* 忘记就终端黑 */ }
   applyTheme(saved, false);
   mountThemeDots();
 }

@@ -1151,3 +1151,246 @@ body[data-theme="amber"]::after {
 .theme-dots [data-theme-set="matrix"] { background: #00ff9c; color: #00ff9c; }
 .theme-dots [data-theme-set="cyber"] { background: #00e5ff; color: #00e5ff; }
 .theme-dots [data-theme-set="amber"] { background: #ffb000; color: #ffb000; }
+
+/* ============================================================
+   第二批主题：换的是「结构感」不是只换颜色
+   terminal = 纯黑等宽终端（零圆角/零阴影/硬边框）
+   ops      = 军工控制台（硬边角标 + 橙高亮）
+   steel    = Burp/Yakit 式工程灰（克制、密度高）
+   ============================================================ */
+body[data-theme="terminal"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-soft: #050505;
+  --panel: #060606;
+  --panel-2: #0a0a0a;
+  --panel-3: #030303;
+  --line: #1f1f1f;
+  --line-strong: #3a3a3a;
+  --ink: #d9d9d9;
+  --dim: #8f8f8f;
+  --faint: #5c5c5c;
+  --accent: #39ff14;
+  --accent-ink: #001400;
+  --accent-soft: rgba(57, 255, 20, .08);
+  --accent-line: rgba(57, 255, 20, .35);
+  --radius: 0px;
+  --ok: #39ff14;
+  --ok-soft: rgba(57, 255, 20, .08);
+  --warn: #ffd400;
+  --warn-soft: rgba(255, 212, 0, .08);
+  --bad: #ff3b30;
+  --bad-soft: rgba(255, 59, 48, .1);
+}
+/* 整屏等宽 + 硬边：这是「终端」和「网页」最直观的区别 */
+body[data-theme="terminal"],
+body[data-theme="terminal"] button,
+body[data-theme="terminal"] input,
+body[data-theme="terminal"] select,
+body[data-theme="terminal"] textarea,
+body[data-theme="terminal"] h1,
+body[data-theme="terminal"] h2,
+body[data-theme="terminal"] .pick-name {
+  font-family: var(--mono);
+  letter-spacing: -0.01em;
+}
+body[data-theme="terminal"] .card,
+body[data-theme="terminal"] .pick,
+body[data-theme="terminal"] .s-status,
+body[data-theme="terminal"] .alert,
+body[data-theme="terminal"] button,
+body[data-theme="terminal"] input,
+body[data-theme="terminal"] select,
+body[data-theme="terminal"] textarea,
+body[data-theme="terminal"] iframe {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+body[data-theme="terminal"] h1::before { content: "> "; color: var(--accent); }
+body[data-theme="terminal"] h2 .num::before { content: "["; color: var(--faint); }
+body[data-theme="terminal"] h2 .num::after { content: "]"; color: var(--faint); }
+body[data-theme="terminal"] .topbar { background: #000; border-bottom: 1px solid var(--line-strong); }
+body[data-theme="terminal"] .primary { background: transparent !important; color: var(--accent) !important; border: 1px solid var(--accent) !important; }
+body[data-theme="terminal"] .primary:hover { background: var(--accent-soft) !important; }
+
+body[data-theme="ops"] {
+  color-scheme: dark;
+  --bg: #0b0d0e;
+  --bg-soft: #0e1112;
+  --panel: #111416;
+  --panel-2: #161a1c;
+  --panel-3: #0c0f10;
+  --line: #2b3033;
+  --line-strong: #3f4649;
+  --ink: #e7eaec;
+  --dim: #9aa3a7;
+  --faint: #6d777b;
+  --accent: #ff7a00;
+  --accent-ink: #140800;
+  --accent-soft: rgba(255, 122, 0, .1);
+  --accent-line: rgba(255, 122, 0, .42);
+  --radius: 3px;
+  --ok: #52d68a;
+  --ok-soft: rgba(82, 214, 138, .1);
+  --warn: #ffc44d;
+  --warn-soft: rgba(255, 196, 77, .1);
+  --bad: #ff4d4d;
+  --bad-soft: rgba(255, 77, 77, .1);
+}
+/* 军工面板感：四角硬标 + 顶部细亮线 */
+body[data-theme="ops"] .card,
+body[data-theme="ops"] .pick,
+body[data-theme="ops"] .s-status {
+  position: relative;
+  border-color: var(--line-strong) !important;
+  background-image: linear-gradient(180deg, rgba(255, 122, 0, .06), transparent 42px);
+}
+body[data-theme="ops"] .card::after,
+body[data-theme="ops"] .pick::after,
+body[data-theme="ops"] .s-status::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  opacity: .55;
+  pointer-events: none;
+}
+body[data-theme="ops"] .section > h2 {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+}
+
+body[data-theme="steel"] {
+  color-scheme: dark;
+  --bg: #16181c;
+  --bg-soft: #1a1d21;
+  --panel: #1e2126;
+  --panel-2: #24282e;
+  --panel-3: #141619;
+  --line: #2f343b;
+  --line-strong: #414852;
+  --ink: #e3e6ea;
+  --dim: #9aa3ad;
+  --faint: #6f7780;
+  --accent: #7cb7ff;
+  --accent-ink: #06101c;
+  --accent-soft: rgba(124, 183, 255, .1);
+  --accent-line: rgba(124, 183, 255, .34);
+  --radius: 6px;
+  --ok: #63c98d;
+  --ok-soft: rgba(99, 201, 141, .1);
+  --warn: #e0b356;
+  --warn-soft: rgba(224, 179, 86, .1);
+  --bad: #ef6b6b;
+  --bad-soft: rgba(239, 107, 107, .1);
+}
+body[data-theme="steel"] .topbar { background: #101216; border-bottom-color: var(--line-strong); }
+body[data-theme="steel"] .card,
+body[data-theme="steel"] .pick { box-shadow: 0 1px 0 rgba(255, 255, 255, .03) inset; }
+body[data-theme="steel"] .section > h2 { color: #cfd6dd; }
+
+/* 主题选择器：一颗按钮 + 下拉（7 套以上塞不下圆点） */
+.theme-pick { position: relative; margin-left: 4px; }
+.theme-pick > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--dim);
+  user-select: none;
+}
+.theme-pick > summary::-webkit-details-marker { display: none; }
+.theme-pick .swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+.theme-pick ul {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 80;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  min-width: 168px;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+}
+.theme-pick li button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.theme-pick li button:hover { background: var(--accent-soft); }
+.theme-pick li button[aria-pressed="true"] { color: var(--accent); }
+.theme-pick li i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+/* 终端/军工 主题下把原生控件也压成深色（否则 select 会露白底，破坏终端感） */
+body[data-theme="terminal"] select,
+body[data-theme="terminal"] input,
+body[data-theme="terminal"] textarea,
+body[data-theme="ops"] select,
+body[data-theme="ops"] input,
+body[data-theme="ops"] textarea,
+body[data-theme="steel"] select,
+body[data-theme="steel"] input,
+body[data-theme="steel"] textarea {
+  background: var(--panel-3) !important;
+  color: var(--ink) !important;
+  border: 1px solid var(--line-strong) !important;
+}
+body[data-theme="terminal"] option,
+body[data-theme="ops"] option,
+body[data-theme="steel"] option {
+  background: var(--panel-3);
+  color: var(--ink);
+}
+/* 终端风：序号方块改成 [n]，去掉圆角底色 */
+body[data-theme="terminal"] h2 .num {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+  color: var(--accent) !important;
+}
+body[data-theme="terminal"] h2 .num::before { content: "["; color: var(--faint); }
+body[data-theme="terminal"] h2 .num::after { content: "]"; color: var(--faint); }
+/* 终端风：顶栏导航像命令行 tab */
+body[data-theme="terminal"] #nav a {
+  border: 1px solid transparent;
+  border-radius: 0 !important;
+  font-family: var(--mono);
+}
+body[data-theme="terminal"] #nav a[aria-current="page"] {
+  border-color: var(--accent);
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+}
