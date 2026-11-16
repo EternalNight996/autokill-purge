@@ -1,7 +1,7 @@
 {
   "name": "autokill-purge",
-  "version": "1.1.1",
-  "description": "Local console for dsh-purge: one-click injection, equipment issuing, isolated memory vault, MCP management.",
+  "version": "1.1.2",
+  "description": "破甲控制台｜一键注入 · 83 补丁可视化 · 载荷生成 · 记忆库 · MCP 管理｜零依赖",
   "type": "module",
   "bin": {
     "autokill-purge": "scripts/launch.mjs"
@@ -33,11 +33,14 @@
   "keywords": [
     "dsh",
     "dsh-purge",
-    "console",
+    "deepseek",
     "memory-eternal",
     "mcp",
+    "control-panel",
     "redteam",
-    "payload"
+    "payload",
+    "zero-dependency",
+    "chinese"
   ],
   "repository": {
     "type": "git",
