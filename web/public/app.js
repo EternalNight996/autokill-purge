@@ -4,10 +4,12 @@
 window.__apErrors = [];
 window.addEventListener("error", (event) => {
   window.__apErrors.push({ kind: "error", message: event.message || "script error", source: event.filename || "", line: event.lineno || 0 });
+  try { renderRuntimeErrors(); } catch { /* 页面还没就绪 */ }
 });
 window.addEventListener("unhandledrejection", (event) => {
   const reason = event.reason;
   window.__apErrors.push({ kind: "rejection", message: reason && reason.message ? reason.message : String(reason) });
+  try { renderRuntimeErrors(); } catch { /* 页面还没就绪 */ }
 });
 
 
@@ -587,13 +589,23 @@ function copyBtn(text, label = "复制", cls = "small") {
 }
 
 let toastTimer = null;
-function toast(message) {
+const TOAST_MS = { ok: 2200, warn: 3200, bad: 4200 };
+/**
+ * 短提示条。kind: ok（默认，中性确认）/ warn（琥珀，需留意）/ bad（红色，失败）。
+ * 规则：凡是"没做成功 / 被拦住"的提示都走 toastError()，不要再静默成中性色。
+ */
+function toast(message, kind = "ok") {
   const el = $("#toast");
+  const tone = kind === "bad" || kind === "warn" ? kind : "";
   el.textContent = message;
+  el.className = "toast" + (tone ? " " + tone : "");
+  el.setAttribute("role", tone === "bad" ? "alert" : "status");
+  el.setAttribute("aria-live", tone === "bad" ? "assertive" : "polite");
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
+  toastTimer = setTimeout(() => { el.hidden = true; }, TOAST_MS[tone || "ok"]);
 }
+function toastError(message) { toast(message, "bad"); }
 
 /** 装备/破甲入库结果拼成一句人话（后端 absorbed 字段） */
 function absorbNote(absorbed) {
@@ -614,7 +626,7 @@ async function copyText(text, message = "已复制") {
     ta.style.opacity = "0";
     document.body.appendChild(ta);
     ta.select();
-    try { document.execCommand("copy"); toast(message); } catch { toast("复制失败，请手动选择文本"); }
+    try { document.execCommand("copy"); toast(message); } catch { toastError("复制失败，请手动选择文本"); }
     ta.remove();
   }
 }
@@ -1361,6 +1373,18 @@ function renderGlobalAlert() {
   }
 }
 
+/** 运行时 JS 错误（window.__apErrors）只在技术模式露出，且必须是红的 */
+function renderRuntimeErrors() {
+  const box = $("#runtimeErrors");
+  if (!box) return;
+  const list = Array.isArray(window.__apErrors) ? window.__apErrors : [];
+  if (!list.length || !modeIsTechnical()) { box.hidden = true; box.innerHTML = ""; return; }
+  const lines = list.map((x) => "[" + x.kind + "] " + x.message + (x.source ? " @ " + x.source + ":" + x.line : ""));
+  box.hidden = false;
+  box.innerHTML = '<div class="alert bad" role="alert"><strong>页面运行时错误 ' + fmtNum(list.length) + ' 条</strong>'
+    + '<span class="hint">这些错误不一定会拦住操作，但会让部分按钮失灵；普通模式不显示。</span>'
+    + '<details><summary>查看详情</summary><pre>' + esc(lines.join(String.fromCharCode(10))) + '</pre></details></div>';
+}
 function renderPage() {
   normalizeDelivery();
   // 记忆库整页铺满的标记：切到别的页面要撤掉，否则 <main> 的限宽会一直失效
@@ -1368,6 +1392,7 @@ function renderPage() {
   setNav();
   updateModeSwitch();
   renderGlobalAlert();
+  renderRuntimeErrors();
   resetCopyStore();
   const saved = captureFocus();
   const page = $("#page");
@@ -1564,7 +1589,7 @@ async function simpleHostAction(kind) {
         if (S.tab === "breach") renderPage();
       }
     }, 5200);
-    toast("失败：" + simpleReason(e));
+    toastError("失败：" + simpleReason(e));
   } finally {
     h.busy = false;
     h.busyKind = null;
@@ -1782,7 +1807,7 @@ async function uninjectPrompt() {
     const d = await request("/api/breach/uninject-host", { method: "POST", body: { host: S.hostTarget } });
     if (!d || d.ok === false) throw payloadError(d, "撤销失败");
     toast(d.removed ? `已摘掉注入块（文件 ${d.bytes} B，重启宿主生效）` : "没找到注入块，目标文件没被改过");
-  } catch (e) { toast(simpleReason(e)); }
+  } catch (e) { toastError(simpleReason(e)); }
 }
 
 /** 补丁层卸载：回到最近一次快照（应用前状态），当前状态也会先存一份 */
@@ -1793,7 +1818,7 @@ async function revertHostPatches() {
     if (!d || d.ok === false) throw payloadError(d, "撤回失败");
     toast("已撤回宿主补丁（重启 dsh 生效；本次操作同样存了快照）");
     loadHostStatus();
-  } catch (e) { toast(simpleReason(e)); }
+  } catch (e) { toastError(simpleReason(e)); }
 }
 
 /** 当前破甲方式的「一键卸载」动作；不改宿主的方式（载荷/入库）返回 null */
@@ -1815,13 +1840,13 @@ async function revertDreamBreak() {
     if (!d || d.ok === false) throw payloadError(d, "卸载失败");
     const killed = (d.side && d.side.killed) || [];
     const msg = `已卸载梦神破甲：恢复 ${d.restored}/${d.total} 项，MCP 插件与装备下拉一并移除${killed.length ? "，清掉残留进程 " + killed.length + " 个" : ""}${d.running ? "（AutoKill 在运行，建议退出后重跑）" : ""}；重启 AutoKill 生效`;
-    toast(msg);
+    toast(msg, d.running ? "warn" : "ok");
     S.breach.deliveryResult = { message: msg };
     S.ak.items = []; S.ak.loaded = false; S.ak.selected = null; S.ak.error = null;
     loadAkPatches(true);
   } catch (e) {
     S.breach.deliveryResult = { error: "卸载失败：" + simpleReason(e) };
-    toast(simpleReason(e));
+    toastError(simpleReason(e));
   }
 }
 
@@ -2322,20 +2347,20 @@ async function openRule(name) {
     const d = await request("/api/host/rule?name=" + encodeURIComponent(name));
     S.host.ruleEdit = { name: d.name || name, text: d.text || "" };
     renderPage();
-  } catch (e) { toast(simpleReason(e)); }
+  } catch (e) { toastError(simpleReason(e)); }
 }
 
 async function saveRule() {
   const e = S.host.ruleEdit || {};
   const name = String(e.name || "").trim();
-  if (!name) { toast("先写文件名，例如 strict.md"); return; }
+  if (!name) { toastError("先写文件名，例如 strict.md"); return; }
   try {
     const d = await request("/api/host/rule", { method: "POST", body: { confirm: true, name: name, text: String(e.text || "") } });
     if (!d || d.ok === false) throw payloadError(d, "保存规则失败");
     toast("规则已保存");
     S.host.ruleEdit = { name: d.name, text: e.text };
     await reloadHostExtras();
-  } catch (err) { toast(simpleReason(err)); }
+  } catch (err) { toastError(simpleReason(err)); }
 }
 
 async function deleteRuleFile(name) {
@@ -2346,7 +2371,7 @@ async function deleteRuleFile(name) {
     toast("已删除");
     if ((S.host.ruleEdit || {}).name === name) S.host.ruleEdit = { name: "", text: "" };
     await reloadHostExtras();
-  } catch (e) { toast(simpleReason(e)); }
+  } catch (e) { toastError(simpleReason(e)); }
 }
 
 async function saveNetScope() {
@@ -2357,7 +2382,7 @@ async function saveNetScope() {
     toast("白名单已保存");
     S.host.netScopeDraft = null;
     await reloadHostExtras();
-  } catch (e) { toast(simpleReason(e)); }
+  } catch (e) { toastError(simpleReason(e)); }
 }
 
 async function openSkill(name) {
@@ -2365,7 +2390,7 @@ async function openSkill(name) {
     const d = await request("/api/host/skill?name=" + encodeURIComponent(name));
     S.host.skillView = { name: d.name || name, text: d.text || "" };
     renderPage();
-  } catch (e) { toast(simpleReason(e)); }
+  } catch (e) { toastError(simpleReason(e)); }
 }
 
 async function deleteSkillFile(name) {
@@ -2376,21 +2401,21 @@ async function deleteSkillFile(name) {
     toast("已删除");
     if ((S.host.skillView || {}).name === name) S.host.skillView = { name: "", text: "" };
     await reloadHostExtras();
-  } catch (e) { toast(simpleReason(e)); }
+  } catch (e) { toastError(simpleReason(e)); }
 }
 
 async function saveSkill() {
   const e = S.host.skillEdit || {};
   const name = String(e.name || "").trim();
-  if (!name) { toast("先写技能目录名，例如 my-skill"); return; }
-  if (!String(e.text || "").trim()) { toast("SKILL.md 正文不能为空"); return; }
+  if (!name) { toastError("先写技能目录名，例如 my-skill"); return; }
+  if (!String(e.text || "").trim()) { toastError("SKILL.md 正文不能为空"); return; }
   try {
     const d = await request("/api/host/skill", { method: "POST", body: { confirm: true, name: name, text: String(e.text || "") } });
     if (!d || d.ok === false) throw payloadError(d, "保存技能失败");
     toast("技能已保存");
     S.host.skillView = { name: d.name, text: String(e.text || "") };
     await reloadHostExtras();
-  } catch (err) { toast(simpleReason(err)); }
+  } catch (err) { toastError(simpleReason(err)); }
 }
 
 /* 知识库：只读搜索 + 查看详情 */
@@ -2420,7 +2445,7 @@ async function openKbItem(id) {
     const d = await request(base + "?id=" + encodeURIComponent(id));
     kb.detail = (d && d.item) || null;
     renderPage();
-  } catch (e) { toast(simpleReason(e)); }
+  } catch (e) { toastError(simpleReason(e)); }
 }
 
 /* 情报巡检：跑一次（真实出网，最长 3 分钟）+ 读历史报告 */
@@ -2463,7 +2488,7 @@ async function openIntelReport(name) {
     const d = await request("/api/intel/report?name=" + encodeURIComponent(name));
     it.report = d && d.ok ? d : null;
     renderPage();
-  } catch (e) { toast(simpleReason(e)); }
+  } catch (e) { toastError(simpleReason(e)); }
 }
 
 /* 演练台授权：确认 / 撤销（门禁数据源） */
@@ -2614,7 +2639,7 @@ function bindSimpleBreach() {
     if (el.checked) {
       if (!list.includes(id)) list.push(id);
     } else {
-      if (list.length <= 1) { el.checked = true; toast("至少留一个目标模型"); return; }
+      if (list.length <= 1) { el.checked = true; toastError("至少留一个目标模型"); return; }
       list = list.filter((x) => x !== id);
     }
     S.breach.models = list;
@@ -2636,7 +2661,7 @@ function bindSimpleBreach() {
     if (el.checked) {
       if (!list.includes(id)) list.push(id);
     } else {
-      if (list.length <= 1) { el.checked = true; toast("至少留一个 bot"); return; }
+      if (list.length <= 1) { el.checked = true; toastError("至少留一个 bot"); return; }
       list = list.filter((x) => x !== id);
     }
     S.breach.botIds = list.filter((x) => all.includes(x));
@@ -2690,7 +2715,7 @@ function bindSimpleBreach() {
         ? (res.traces && res.traces.any ? "插槽已移除，但配置里还有残留：重启 AutoKill 后核对" : "插槽已从配置移除（重启 AutoKill 控件消失）")
         : (d.state && d.state.supported ? "已注入：重启 AutoKill 后构建助手旁与标题栏各有一个装备下拉" : "已写入配置（当前 AutoKill 版本不渲染，需新版）"));
       renderPage();
-    } catch (e) { toast(simpleReason(e)); }
+    } catch (e) { toastError(simpleReason(e)); }
   }));
   // MCP 插件挂载 / 卸下（装备在 AutoKill GUI 的可见面）
   $$("#page [data-ak-mcp]").forEach((el) => el.addEventListener("click", async () => {
@@ -2705,7 +2730,7 @@ function bindSimpleBreach() {
         ? (res.clean ? "已卸干净（配置无残留、无 mcp-server 进程）" : `已卸载，但仍有残留：${res.traces && res.traces.any ? "配置" : ""}${res.processes && res.processes.length ? " 进程 " + res.processes.length + " 个" : ""} —— 重启 AutoKill 才真正断开`)
         : "已挂载 autokill-purge：重启 AutoKill 后在「设置 → 插件」能看到");
       renderPage();
-    } catch (e) { toast(simpleReason(e)); }
+    } catch (e) { toastError(simpleReason(e)); }
   }));
   // 卸载入口：主按钮旁边一个（按破甲方式动态）+ 清单里各一个
   $$("#page [data-ak-revert]").forEach((el) => el.addEventListener("click", () => revertDreamBreak()));
@@ -2819,11 +2844,11 @@ async function injectHostPayload(key) {
   const b = S.breach;
   const list = Array.isArray(b.variants) ? b.variants : [];
   const variant = list.find((v, i) => String(v.id || v.technique || i) === String(key)) || list[0] || null;
-  if (!variant) { toast("先点一次「一键生成」再注入宿主。"); return; }
+  if (!variant) { toastError("先点一次「一键生成」再注入宿主。"); return; }
   if (b.injectArm !== key) {
     b.injectArm = key;
     renderPage();
-    toast("再点一次确认：这段载荷会写进宿主 prompt-inject.md（重启 dsh 生效）");
+    toast("再点一次确认：这段载荷会写进宿主 prompt-inject.md（重启 dsh 生效）", "warn");
     return;
   }
   b.injectArm = null;
@@ -2839,7 +2864,7 @@ async function injectHostPayload(key) {
     toast("已写入宿主提示词层（重启 dsh 生效）");
   } catch (e) {
     if (isAgreementError(e)) return;
-    toast(simpleReason(e));
+    toastError(simpleReason(e));
   } finally {
     b.injectBusy = false;
     renderPage();
@@ -2954,7 +2979,7 @@ async function applyDelivery(variants) {
     if (s.dsh) parts.push(s.dsh.ok ? "DSH 预设(" + (s.dsh.presets || []).length + " 套)" : "DSH 失败");
     if (s.mengbot) parts.push(s.mengbot.ok ? "MengBot·" + (s.mengbot.name || "bot") + "→" + s.mengbot.gear + (s.mengbot.restartRequired ? "(待重启)" : "") : "MengBot 失败");
     const msg = `梦神破甲：应用 ${d.applied}/${d.total} 项${bad.length ? "，失败 " + bad.length + " 项" : ""}；已同步 ${parts.join(" + ")}；重启 AutoKill 生效`;
-    toast(msg);
+    toast(msg, bad.length ? "warn" : "ok");
     return { message: msg };
   }
   if (mode === "memory") {
@@ -3017,11 +3042,11 @@ async function absorbVariant(key) {
   const b = S.breach;
   const list = Array.isArray(b.variants) ? b.variants : [];
   const variant = list.find((v, i) => String(v.id || v.technique || i) === String(key)) || list[0] || null;
-  if (!variant) { toast("先点一次『一键生成』再入库。"); return; }
+  if (!variant) { toastError("先点一次『一键生成』再入库。"); return; }
   const model = b.model || (S.models[0] && S.models[0].id) || "";
   const rawTech = String(variant.technique || variant.id || "").replace(/-(rot13|base64)$/i, "");
   const technique = S.techniques.some((t) => t.id === rawTech) ? rawTech : ((S.techniques[0] && S.techniques[0].id) || "");
-  if (!model || !technique) { toast("缺少模型或技术，先重新生成一次。"); return; }
+  if (!model || !technique) { toastError("缺少模型或技术，先重新生成一次。"); return; }
   S.simple.absorbBusy = true;
   try {
     const data = await request("/api/breach/absorb", {
@@ -3040,7 +3065,7 @@ async function absorbVariant(key) {
     toast("已入库待审：" + ((data.card && data.card.path) || ""));
   } catch (e) {
     if (isAgreementError(e)) return;
-    toast(simpleReason(e));
+    toastError(simpleReason(e));
   } finally {
     S.simple.absorbBusy = false;
     renderPage();
@@ -3054,7 +3079,7 @@ async function simpleAttempt(key, result) {  if (!key || !result || S.simple.att
   const model = b.model || (S.models[0] && S.models[0].id) || "";
   const rawTech = variant ? String(variant.technique || variant.id || "").replace(/-(rot13|base64)$/i, "") : "";
   const technique = S.techniques.some((t) => t.id === rawTech) ? rawTech : ((S.techniques[0] && S.techniques[0].id) || "");
-  if (!model || !technique) { toast("这次没能记录：先点一次『一键生成』。"); return; }
+  if (!model || !technique) { toastError("这次没能记录：先点一次『一键生成』。"); return; }
   S.simple.attemptBusy = true;
   try {
     const data = await request("/api/breach/attempt", { method: "POST", body: { model, technique, result, note: "简单模式记录" } });
@@ -3066,7 +3091,7 @@ async function simpleAttempt(key, result) {  if (!key || !result || S.simple.att
     toast("已记录");
   } catch (e) {
     if (isAgreementError(e)) return;
-    toast(simpleReason(e));
+    toastError(simpleReason(e));
   } finally {
     S.simple.attemptBusy = false;
     if (!modeIsTechnical() && S.tab === "breach") renderPage();
@@ -3231,7 +3256,7 @@ function simpleTogglePreset(id) {
   const cur = simpleEquipPresetObjs().map((p) => p.id);
   let next;
   if (cur.includes(id)) {
-    if (cur.length === 1) { toast(L("至少留一个装备包", "Keep at least one pack")); return; }
+    if (cur.length === 1) { toastError(L("至少留一个装备包", "Keep at least one pack")); return; }
     next = cur.filter((x) => x !== id);
   } else {
     next = cur.concat([id]);
@@ -3638,7 +3663,7 @@ function toggleModel(id) {
   const i = list.indexOf(id);
   if (i >= 0) {
     if (list.length === 1) {
-      toast(L("至少留一个模型", "Keep at least one model"));
+      toastError(L("至少留一个模型", "Keep at least one model"));
       return;
     }
     list.splice(i, 1);
@@ -3853,7 +3878,7 @@ async function opsAction(id, action) {
     toast(action === "plan" ? "预览已生成" : "已执行");
   } catch (e) {
     o.message[id] = simpleReason(e);
-    toast("失败：" + simpleReason(e));
+    toastError("失败：" + simpleReason(e));
   } finally {
     o.busy = "";
     try { await loadOps(true); } catch { /* 状态刷新失败不影响结果展示 */ }
@@ -4044,9 +4069,9 @@ function mcpServers() {
 async function mcpSave() {
   const m = mcpState();
   const ed = m.editor;
-  if (!String(ed.name || "").trim()) { toast(L("先写个名字", "Name is required")); return; }
+  if (!String(ed.name || "").trim()) { toastError(L("先写个名字", "Name is required")); return; }
   if (!String(ed.command || "").trim() && !String(ed.url || "").trim()) {
-    toast(L("要么填命令（stdio），要么填 URL（http）", "Provide a command or a URL"));
+    toastError(L("要么填命令（stdio），要么填 URL（http）", "Provide a command or a URL"));
     return;
   }
   m.busy = "save";
@@ -4112,7 +4137,7 @@ async function mcpCopyExport() {
     if (!d || !d.ok) throw new Error("导出失败");
     await copyText(d.json);
     toast(L("已复制 " + d.count + " 个 server 的 JSON（可粘进 Claude Desktop / Cursor）", "Copied " + d.count + " servers as JSON"));
-  } catch (e) { toast(simpleReason(e)); }
+  } catch (e) { toastError(simpleReason(e)); }
 }
 
 function renderMcpPage() {
@@ -4859,7 +4884,7 @@ async function refreshLiveModels() {
     renderPage();
     toast("已重新识别");
   } catch (e) {
-    toast(simpleReason(e));
+    toastError(simpleReason(e));
   }
 }
 
@@ -6098,7 +6123,7 @@ function equipTogglePreset(id) {
   const cur = equipPresets();
   let next;
   if (cur.includes(id)) {
-    if (cur.length === 1) { toast(L("至少留一个装备包", "Keep at least one pack")); return; }
+    if (cur.length === 1) { toastError(L("至少留一个装备包", "Keep at least one pack")); return; }
     next = cur.filter((x) => x !== id);
   } else {
     next = cur.concat([id]);
@@ -7560,7 +7585,7 @@ function bindPeer() {
     const code = String(f.code || "").trim().toUpperCase();
     const host = String(f.host || "").trim();
     const port = Number(f.port) || 7989;
-    if (!code && !host) { toast(L("填对方匹配码，或主机+端口", "Enter a pair code or host+port")); return; }
+    if (!code && !host) { toastError(L("填对方匹配码，或主机+端口", "Enter a pair code or host+port")); return; }
     peerAction("pair", host ? { host: host, port: port, code: code } : { code: code, mode: "connect" });
   }));
   $$("#page [data-peer-accept]").forEach((el) => el.addEventListener("click", () => peerAction("accept", { id: el.dataset.peerAccept })));
@@ -7854,6 +7879,16 @@ function railHostBadge(d) {
   return { cls: host.running ? "ok" : "", text: host.running ? "运行中" : "未运行" };
 }
 
+/** 注入生效行：文件在 ≠ 生效；未生效时由调用方加红色 class */
+function injectionRailText(inj) {
+  if (!inj) return "—";
+  if (!inj.ready) return "未写入（没有 prompt-inject.md）";
+  const tk = inj.estTokensPerRequest ? " · 约 " + fmtNum(inj.estTokensPerRequest) + " tokens/请求" : "";
+  if (inj.effective) return "生效中 · 最近 " + inj.checked + " 个会话已注入" + tk;
+  const older = inj.withInjection ? "，其中 " + inj.withInjection + " 个曾注入" : "";
+  return "文件在 · 未生效（最近 " + inj.checked + " 个会话里没有 project_instructions" + older + "）" + tk;
+}
+
 function renderInjectRail() {
   const el = document.getElementById("injectRail");
   if (!el) return;
@@ -7863,11 +7898,12 @@ function renderInjectRail() {
   if (!d) {
     el.dataset.host = want;
     el.dataset.loading = "1";
-    const why = railState.error
-      ? esc(simpleReason(railState.error))
+    const err = railState.error;
+    const why = err
+      ? esc(simpleReason(err))
       : (railState.hostId === want || !railState.hostId ? "读取中…" : "切换宿主，读取中…");
-    el.innerHTML = '<div class="rail-card"><h3>注入状态 <span class="badge">' + esc(hostLabel) + '</span></h3>' +
-      '<p class="mini">' + why + "</p>" +
+    el.innerHTML = '<div class="rail-card' + (err ? ' rail-err-card' : '') + '"><h3>注入状态 <span class="badge' + (err ? ' bad' : '') + '">' + esc(hostLabel) + '</span></h3>' +
+      '<p class="mini' + (err ? ' rail-err' : '') + '">' + why + "</p>" +
       '<div class="rail-foot"><a href="#" data-rail-refresh>重试</a></div></div>';
     const retry = el.querySelector("[data-rail-refresh]");
     if (retry) retry.addEventListener("click", (ev) => { ev.preventDefault(); loadInjectSummary(true); });
@@ -7893,10 +7929,14 @@ function renderInjectRail() {
     const ok = (p.byLayerApplied || {})[l] || 0;
     return '<li><span>' + esc(l) + '</span><b class="rail-num">' + fmtNum(ok) + '/' + fmtNum(all) + '</b></li>';
   }).join("");
-  const notable = (p.notable || []).map((x) =>
-    '<li><span>' + esc(x.nameZh || x.name || ("#" + x.id)) + '</span><em class="mini">' + esc(x.status || "") + '</em></li>').join("");
-  const patchItems = (p.items || []).slice(0, 8).map((x) =>
-    '<li><span>' + esc(x.label || x.id) + '</span><em class="mini">' + (x.applied ? "已应用" : esc(x.current || "未应用")) + '</em></li>').join("");
+  const notable = (p.notable || []).map((x) => {
+    const bad = /fail|missing|error|失效/i.test(String(x.status || ""));
+    return '<li><span>' + esc(x.nameZh || x.name || ("#" + x.id)) + '</span><em class="mini' + (bad ? " bad" : "") + '">' + esc(x.status || "") + '</em></li>';
+  }).join("");
+  const patchItems = (p.items || []).slice(0, 8).map((x) => {
+    const bad = !x.applied && /fail|missing|error|失效/i.test(String(x.current || ""));
+    return '<li><span>' + esc(x.label || x.id) + '</span><em class="mini' + (bad ? " bad" : "") + '">' + (x.applied ? "已应用" : esc(x.current || "未应用")) + '</em></li>';
+  }).join("");
   const plugRows = (pl.installed || []).map((x) =>
     '<div class="rail-plug"><span class="mono">' + esc(String(x.name).replace("autokill-purge-plugin", "autokill 插件")) + '</span><em>' +
     esc(x.version || "未装") + (x.inBundles ? " · 已登记" : " · 未登记") + '</em></div>').join("");
@@ -7942,19 +7982,25 @@ function renderInjectRail() {
     + (capDots ? '  <div class="rail-dots">' + capDots + '</div>' : "")
     + railNoteHtml(cap.note)
     + '</div>';
+  // 后端取数期间的错误（summary.errors）也必须是红的，不许静默吞掉
+  const errRows = (Array.isArray(d.errors) ? d.errors : []).map((m) =>
+    '<div class="rail-kv"><span class="rail-err">错误</span><span class="rail-err mono">' + esc(String(m)) + '</span></div>').join("");
+  const errCard = errRows ? '<div class="rail-card rail-err-card"><h3>取数错误</h3>' + errRows + '</div>' : "";
 
   el.innerHTML = ''
     + '<div class="rail-card">'
     + '  <h3>本机 · 宿主 <span class="badge ' + badge.cls + '">' + esc(hostLabel) + '</span></h3>'
     + railRowsHtml(host.rows)
     + (d.hostId === "dsh" && badge.cls !== "ok" ? '  <div class="rail-kv"><span>状态</span><span class="mini">' + esc(badge.text) + '</span></div>' : "")
+    + (d.injection ? '  <div class="rail-kv"><span>提示词注入</span><span class="mini' + (d.injection.ready && !d.injection.effective ? ' rail-err' : '') + '">' + esc(injectionRailText(d.injection)) + '</span></div>' : "")
     + railNoteHtml(host.note)
     + '</div>'
     + patchCard
     + pluginCard
     + capCard
+    + errCard
     + '<div class="rail-foot">' + esc(hostLabel) + ' · 更新于 ' + esc(new Date(railState.at || Date.now()).toLocaleTimeString("zh-CN", { hour12: false }))
-    + ' · <a href="#" data-rail-refresh>刷新</a>' + (railState.error ? " · " + esc(simpleReason(railState.error)) : "") + '</div>';
+    + ' · <a href="#" data-rail-refresh>刷新</a>' + (railState.error ? ' · <span class="rail-err">' + esc(simpleReason(railState.error)) + '</span>' : "") + '</div>';
 
   const btn = el.querySelector("[data-rail-refresh]");
   if (btn) btn.addEventListener("click", (ev) => { ev.preventDefault(); loadInjectSummary(true); });

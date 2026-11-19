@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 const DATA = 'F:/MyApp/eternal/autokill-purge/data';
 const PROFILE = 'C:/Users/Administrator/.dsh/profiles/desktop';
+const READONLY = process.argv.includes('--readonly');
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
   if (cond) { pass++; console.log('PASS  ' + name + (extra ? ' — ' + extra : '')); }
@@ -48,6 +49,7 @@ const b4 = { pkg: mtime(pkgPath), lock: mtime(lockPath) };
 ok('4. dryRun ok 且 changed=false', dry.ok === true && dry.changed === false);
 ok('4b. dryRun 不改 profile', b3.pkg === b4.pkg && b3.lock === b4.lock);
 
+if (!READONLY) {
 // 5) run 幂等（已装 → 跳过 pnpm）
 const b5 = { pkg: mtime(pkgPath), lock: mtime(lockPath) };
 const run1 = await mod.run(ctx, { plugins: ['autokill-purge-plugin'] });
@@ -66,6 +68,9 @@ for (const n of ['autokill-purge-plugin', 'dsh-purge', 'memory-eternal']) {
 // 7) bundles 含插件
 const manifest = JSON.parse(readFileSync(pkgPath, 'utf8'));
 ok('7. bundles 含插件', (manifest.dsh.profile.bundles || []).includes('autokill-purge-plugin'), (manifest.dsh.profile.bundles || []).length + ' 项');
+} else {
+  console.log('SKIP 5-7（--readonly：run() 会真的 pnpm add + 改 profile，跳过）');
+}
 
 console.log('\nsummary: ' + pass + ' PASS / ' + fail + ' FAIL');
 process.exit(fail ? 1 : 0);

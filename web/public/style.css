@@ -320,6 +320,10 @@ button[aria-busy="true"] { opacity: .7; cursor: progress; }
 .alert.info { border-color: var(--line); background: var(--panel-2); }
 .alert.info strong { color: var(--accent); }
 .alert pre { margin: 5px 0 0; border: 0; background: transparent; padding: 0; color: var(--bad); }
+/* 运行时 JS 错误条（技术模式） */
+#runtimeErrors { margin-bottom: 10px; }
+#runtimeErrors details { margin-top: 6px; }
+#runtimeErrors pre { max-height: 240px; overflow: auto; white-space: pre-wrap; }
 .inline-note {
   margin: 8px 0; padding: 9px 11px;
   border: 1px solid var(--line); border-left: 2px solid var(--accent-line);
@@ -536,6 +540,14 @@ details.lib > summary:hover { color: var(--ink); }
   background: #1a2230; color: var(--ink); font-size: 12.5px;
   box-shadow: 0 10px 34px rgba(0, 0, 0, .45);
 }
+/* 失败/错误一律红色；确认仍中性，警告琥珀色 */
+.toast.bad {
+  border-color: var(--bad);
+  background: var(--bad-soft);
+  color: var(--ink);
+  font-weight: 600;
+}
+.toast.warn { border-color: var(--warn); background: var(--warn-soft); }
 
 /* ---------------------------------------------------------------- mode switch */
 .topbar-right {
@@ -1611,6 +1623,9 @@ main {
 .inject-rail .rail-foot { font-size: 11px; color: var(--muted, #8b949e); text-align: right; }
 .inject-rail .rail-note { margin: 6px 0 0; line-height: 1.6; color: var(--muted, #8b949e); }
 .inject-rail .rail-note.mini { font-size: 11.5px; }
+.inject-rail .rail-err { color: var(--bad, #f85149); }
+.inject-rail .rail-card.rail-err-card { border-color: var(--bad, #f85149); background: var(--bad-soft, rgba(248, 81, 73, .08)); }
+.inject-rail .rail-list em.bad, .inject-rail .rail-plug em.bad { color: var(--bad, #f85149); font-style: normal; }
 
 @media (max-width: 1180px) {
   main { grid-template-columns: minmax(0, 1fr); width: min(1180px, 100%); }

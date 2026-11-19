@@ -7,11 +7,12 @@
 // 宿主是唯一维度：`?host=dsh|mengbot|autokill`，返回同一套骨架（host / patches / plugins /
 // capabilities），每段都带 applicable —— 不适用的段给 note 说明为什么，而不是留空或编数。
 import os from 'node:os';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostStatus, patchCatalog } from './host.mjs';
 import { listOps } from './ops/index.mjs';
 import { mbStatus, mbListBots } from './mengbot.mjs';
+import { decodeSession, listSessionFiles } from './ops/rewind.mjs';
 
 export const SUMMARY_HOSTS = ['dsh', 'mengbot', 'autokill'];
 const HOST_NAME = { dsh: 'DSH', mengbot: 'MengBot', autokill: 'AutoKill' };
@@ -38,6 +39,74 @@ function rows(list) {
   return (list || []).filter((x) => x && x.v !== undefined && x.v !== null).map((x) => ({ k: x.k, v: String(x.v), mono: x.mono !== false }));
 }
 
+const INJECT_MARK = '<project_instructions>';
+/**
+ * 「注入生效」探针：prompt-inject.md 在盘上 ≠ 模型真的收到。
+ * 读最近 N 个会话的 system/message，看 <project_instructions> 是否真的下发；
+ * token 按 0.288 tokens/字符（本模板实测口径，见 docs/注入token消耗分析.md）估算。
+ */
+function injectionProbe(dshHome, opts = {}) {
+  const limit = Number(opts.limit) || 4;
+  const maxBytes = Number(opts.maxBytes) || 24 * 1024 * 1024;
+  const home = String(dshHome || '');
+  const file = home ? join(home, 'prompt-inject.md') : '';
+  let fileInfo = null;
+  let estTokens = null;
+  if (file) {
+    try {
+      const st = statSync(file);
+      if (st.isFile()) {
+        fileInfo = { path: file, bytes: st.size, mtimeMs: st.mtimeMs };
+        const raw = readFileSync(file, 'utf8');
+        const crs = raw.split('\r').length - 1;
+        estTokens = Math.round((raw.length - crs) * 0.288);
+      }
+    } catch { fileInfo = null; }
+  }
+  const found = [];
+  if (home) {
+    let rowsList = [];
+    try { rowsList = listSessionFiles(join(home, 'sessions')); } catch { rowsList = []; }
+    // 按"会话创建时间"判定，而不是文件 mtime：老会话被续写时 mtime 会插到最前，
+    // 那会让「最新会话有没有注入」在同一个宿主上反复跳（实测 16:55 触发过一次）。
+    for (const row of rowsList) {
+      if (found.length >= 12) break;
+      if (row.sizeBytes > maxBytes) continue;
+      let text = '';
+      try { text = decodeSession(readFileSync(row.path)).text; } catch { continue; }
+      const lines = text.split(String.fromCharCode(10));
+      let createdAt = row.mtimeMs;
+      try { const head = JSON.parse(lines[0] || '{}'); if (head && head.createdAt) createdAt = Number(head.createdAt); } catch { /* 用 mtime */ }
+      const line = lines.find((l) => l.includes(String.fromCharCode(34) + "system/message" + String.fromCharCode(34)));
+      if (!line) continue;
+      let hasInjection = false;
+      let sysChars = 0;
+      try {
+        const m = JSON.parse(line);
+        const content = (m.data && m.data.message && m.data.message.content) || [];
+        const t = (Array.isArray(content) ? content : []).map((x) => (typeof x === 'string' ? x : (x && x.text) || '')).join('');
+        sysChars = t.length;
+        hasInjection = t.includes(INJECT_MARK);
+      } catch { continue; }
+      found.push({ id: row.id, project: row.project, at: createdAt, sysChars, hasInjection });
+    }
+  }
+  found.sort((a, b) => b.at - a.at);
+  const checked = found.slice(0, limit);
+  const latest = checked[0] || null;
+  const withInjection = checked.filter((x) => x.hasInjection).length;
+  return {
+    ready: !!fileInfo,
+    effective: !!(fileInfo && latest && latest.hasInjection),
+    latestHasInjection: !!(latest && latest.hasInjection),
+    file: fileInfo,
+    checked: checked.length,
+    withInjection,
+    sessions: checked,
+    estTokensPerRequest: estTokens,
+    note: '按最近 ' + limit + ' 个会话的 system/message 判定；token 为估算（0.288 tokens/字符）',
+  };
+}
 function baseOut(hostId) {
   return {
     ok: true,
@@ -131,6 +200,8 @@ async function dshPayload(out, dataDir) {
     primaryHost: st.primaryHost ? { aiBase: st.primaryHost.aiBase, kind: st.primaryHost.kind } : null,
     files: (st.files || []).length,
   };
+
+  out.injection = injectionProbe(st.dshHome || join(os.homedir(), '.dsh'));
 
   const catalog = catalogRaw;
   const byLayer = {};

@@ -38,7 +38,7 @@ node scripts/install-desktop.mjs   # desktop icon + autostart (Windows)
 
 | Capability | Details |
 |---|---|
-| **Purge** | **梦神破甲** template (follows the package version, currently 1.1.19) + **83 host patches with bilingual labels**, green = applied / red = failed / gray = skipped, plus **sealed-asar handoff** (rename app.asar aside + relaunch) - without it the patched files are never loaded |
+| **Purge** | **梦神破甲** template (follows the package version, currently 1.1.20) + **83 host patches with bilingual labels**, green = applied / red = failed / gray = skipped, plus **sealed-asar handoff** (rename app.asar aside + relaunch) - without it the patched files are never loaded |
 | **Rollback** | Auto snapshot before every write; one-click factory restore from the official asar; auto-rollback on failure |
 | **Payloads** | 27+ models detected live (multi-select → smart match), 12 techniques, text / Base64 / ROT13 variants, 7 binary `break` actions |
 | **梦神装甲 (armor)** | 6 multi-selectable packs, paged by pack, real skill names attached, cracked models included; issue to dsh / mengbot / autokill. **A matching nav item (icon + name) sits at the bottom of the DSH sidebar and jumps back to this console.** |

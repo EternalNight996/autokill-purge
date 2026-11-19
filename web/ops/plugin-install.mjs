@@ -30,8 +30,44 @@ function profileDir(ctx) {
   return join(ctx.dshHome || '', 'profiles', PROFILE_NAME);
 }
 
+/**
+ * pnpm 入口解析。历史教训：DSH 0.1.x 把 pnpm 埋在 resources/runtime/primary-runtime 下，
+ * 0.2.x 改成 corepack 缓存（%LOCALAPPDATA%\\node\\corepack\\v1\\pnpm\\<ver>\\bin\\pnpm.mjs）——
+ * 写死单一路径会在宿主升级后变成「找不到 pnpm」，插件注入整条能力不可用（1.1.20 实测踩到）。
+ * 顺序：环境变量覆盖 → 旧版 runtime → corepack（版本高到低）→ 系统 hermes/node。
+ */
+function byVersionDesc(a, b) {
+  const pa = String(a).split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = String(b).split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pb[i] || 0) - (pa[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+function pnpmCandidates(ctx) {
+  const out = [];
+  if (process.env.PURGE_PNPM_ENTRY) out.push(process.env.PURGE_PNPM_ENTRY);
+  const res = ctx.resourcesDir || '';
+  out.push(join(res, 'runtime', 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs'));
+  out.push(join(res, 'runtime', 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.cjs'));
+  const local = process.env.LOCALAPPDATA || '';
+  const corepack = local ? join(local, 'node', 'corepack', 'v1', 'pnpm') : '';
+  if (corepack && existsSync(corepack)) {
+    try {
+      const vers = readdirSync(corepack).filter((v) => /^\d+\./.test(v)).sort(byVersionDesc);
+      for (const v of vers) {
+        out.push(join(corepack, v, 'bin', 'pnpm.mjs'));
+        out.push(join(corepack, v, 'bin', 'pnpm.cjs'));
+      }
+    } catch { /* 读不到就继续找别的 */ }
+  }
+  if (local) out.push(join(local, 'hermes', 'node', 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'));
+  return out.filter(Boolean);
+}
 function pnpmEntry(ctx) {
-  return join(ctx.resourcesDir || '', 'runtime', 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs');
+  const list = pnpmCandidates(ctx);
+  return list.find((p) => existsSync(p)) || list[0] || '';
 }
 
 function bootEntry(ctx) {
@@ -84,6 +120,19 @@ function resolveSpec(ctx, name) {
 
 export const DEFAULT_PLUGINS = ['autokill-purge-plugin'];
 
+/**
+ * 已知插件：pnpm add 会按 profile 的 dependencies 重算整棵树，
+ * **不在 dependencies 里的目录会被清掉**（1.1.15 踩过 dsh-purge 消失的坑）。
+ * 所以安装前记一份"在不在"，装完发现少了就按本机 tgz 补回来 —— 别让一次升级顺手下掉别的插件。
+ */
+const KNOWN_PLUGINS = ['autokill-purge-plugin', 'dsh-purge', 'memory-eternal'];
+
+function presentPlugins(profile) {
+  const out = {};
+  for (const name of KNOWN_PLUGINS) out[name] = existsSync(join(profile, 'node_modules', name, 'package.json'));
+  return out;
+}
+
 function runNode(ctx, args, { cwd, timeoutMs = 300000 } = {}) {
   return new Promise((resolve) => {
     let out = '';
@@ -118,9 +167,10 @@ function pnpmInstallFrozen(ctx, profile) {
 
 export async function status(ctx) {
   const profile = profileDir(ctx);
+  const candidates = pnpmCandidates(ctx);
   const pnpm = pnpmEntry(ctx);
   const hasProfile = existsSync(join(profile, 'package.json'));
-  const hasPnpm = existsSync(pnpm);
+  const hasPnpm = !!pnpm && existsSync(pnpm);
   const manifest = hasProfile ? (() => { try { return readManifest(profile); } catch { return null; } })() : null;
   const bundles = (manifest && manifest.dsh && manifest.dsh.profile && manifest.dsh.profile.bundles) || [];
   const rows = [];
@@ -150,10 +200,11 @@ export async function status(ctx) {
     available: ready,
     summary: ready
       ? 'profile 就绪 · bundles ' + bundles.length + ' 项 · 跳过 ' + skipped.length
-      : (!hasProfile ? '找不到 profile' : !hasPnpm ? '找不到 pnpm' : '有 bundle 被跳过：' + skipped.length),
+      : (!hasProfile ? '找不到 profile' : !hasPnpm ? '找不到 pnpm（找过 ' + candidates.length + ' 处，可用 PURGE_PNPM_ENTRY 指定）' : '有 bundle 被跳过：' + skipped.length),
     detail: {
       profile,
       pnpm,
+      pnpmCandidates: candidates,
       hasProfile,
       hasPnpm,
       bundles,
@@ -244,6 +295,7 @@ export async function run(ctx, opts = {}) {
   const skipped = [];
   let changed = false;
   const baseline = versionBaseline(profile);
+  const before = presentPlugins(profile);
 
   try {
     for (const name of wanted) {
@@ -255,6 +307,21 @@ export async function run(ctx, opts = {}) {
       const r = await pnpmAdd(ctx, profile, spec);
       performed.push({ name, action: 'pnpm add', code: r.code, tail: (r.stdout || '').split('\n').filter(Boolean).slice(-3).join(' | ') });
       if (r.code !== 0) throw new Error('pnpm add ' + name + ' 失败：' + (r.stderr || r.stdout || 'code ' + r.code));
+      changed = true;
+    }
+
+    // 被 pnpm 顺手下掉的已知插件 → 用本机 tgz 补回来（不改依赖声明的话，下次还会被清）
+    for (const name of KNOWN_PLUGINS) {
+      if (!before[name] || wanted.includes(name)) continue;
+      if (existsSync(join(profile, 'node_modules', name, 'package.json'))) continue;
+      const spec = resolveSpec(ctx, name);
+      if (!spec) {
+        skipped.push({ name, reason: 'pruned-by-pnpm-and-no-local-source' });
+        continue;
+      }
+      const r = await pnpmAdd(ctx, profile, spec);
+      performed.push({ name, action: 'restore-pruned', code: r.code, tail: (r.stdout || '').split('\n').filter(Boolean).slice(-3).join(' | ') });
+      if (r.code !== 0) throw new Error('恢复被移除的插件 ' + name + ' 失败：' + (r.stderr || r.stdout || 'code ' + r.code));
       changed = true;
     }
 

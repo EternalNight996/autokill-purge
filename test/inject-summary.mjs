@@ -35,6 +35,10 @@ ok('1b. 补丁段适用且 total=83', dsh.j.patches && dsh.j.patches.applicable 
 ok('1c. 插件段适用且 bundles 有值', dsh.j.plugins && dsh.j.plugins.applicable === true && Array.isArray(dsh.j.plugins.bundles), 'bundles=' + ((dsh.j.plugins && dsh.j.plugins.bundles) || []).length);
 ok('1d. 能力段适用且 6 项', dsh.j.capabilities && dsh.j.capabilities.applicable === true && dsh.j.capabilities.total === 6, 'total=' + (dsh.j.capabilities && dsh.j.capabilities.total));
 ok('1e. host.rows 有 DSH 版本行', (dsh.j.host.rows || []).some((r) => r.k === 'DSH'));
+ok('1f. 注入探针字段齐全', !!dsh.j.injection && typeof dsh.j.injection.ready === 'boolean' && Array.isArray(dsh.j.injection.sessions));
+ok('1g. 探针给出每请求 token 估算', Number(dsh.j.injection.estTokensPerRequest) > 4000, 'est=' + (dsh.j.injection && dsh.j.injection.estTokensPerRequest));
+const newest = (dsh.j.injection.sessions || [])[0] || null;
+ok('1h. effective = 最新会话是否注入', dsh.j.injection.effective === !!(newest && newest.hasInjection), 'eff=' + dsh.j.injection.effective + ' newest=' + (newest && newest.hasInjection));
 
 // 2) MengBot：没有补丁层/插件层 → applicable=false + 说明，不许留空
 const mb = await get('?host=mengbot&fresh=1');
@@ -45,6 +49,7 @@ ok('2c. 补丁段给出该宿主真实计数', Array.isArray(mb.j.patches.stats)
 ok('2d. 插件段不适用但有说明', mb.j.plugins.applicable === false && String(mb.j.plugins.note || '').length > 10);
 ok('2e. 能力段不适用并指明只对 DSH', mb.j.capabilities.applicable === false && /DSH/.test(String(mb.j.capabilities.note || '')));
 ok('2f. 无摘要错误', (mb.j.errors || []).length === 0, (mb.j.errors || []).join('; '));
+ok('2g. 非 DSH 不给注入探针', mb.j.injection === undefined);
 
 // 3) AutoKill：梦神破甲 9 项 + 进程/config
 const ak = await get('?host=autokill&fresh=1');

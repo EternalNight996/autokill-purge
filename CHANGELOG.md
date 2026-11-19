@@ -2,6 +2,66 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.20] — 2026-11-19（报错统一红色标识：toast 三色 + 右侧栏错误红）
+
+### 问题
+控制台的 toast 原本是"只有确认"的单色提示条（`web/public/style.css` 原注释写着 *never errors*），
+但代码里 30+ 处失败路径（catch / 输入校验拦截 / 复制失败）全部走 `toast()` —— 失败和成功长得一模一样，
+用户点完不知道到底成没成；右侧「注入状态」取数失败时也只有一行普通灰字。
+
+### Changed · 前端
+- `web/public/app.js`
+  - `toast(message, kind = "ok")`：新增 **`warn`（琥珀）** / **`bad`（红色）** 两态；红态 `role=alert` + `aria-live=assertive`，
+    停留 4.2s（确认 2.2s / 警告 3.2s）；每次调用重置 `className`，不会把上一次的红色残留下来。
+  - 新增 `toastError()`：失败一律走它。
+  - 替换 38 处失败/拦截提示：全部 `catch` 的 `simpleReason()`、失败前缀、校验拦截（先写文件名 / 至少留一个模型 / SKILL.md 不能为空 / 先一键生成…）、复制失败。
+  - 结果里本身带失败项或"建议退出宿主"的降级成琥珀 `warn`（不再伪装成功）：梦神破甲应用失败项计数、AutoKill 卸载时 running。
+  - 右侧「注入状态」：取数失败时卡片红边红底（`rail-err-card`）、badge 变红、底部错误文字变红（`rail-err`）；
+    `summary.errors` 从"静默吞掉"改成红色「取数错误」卡片；补丁 / notable 清单里 fail|missing|error 状态标红。
+- `web/public/style.css`：`.toast.bad`（--bad 描边 + --bad-soft 底 + 加粗）、`.toast.warn`、
+  `.inject-rail .rail-err`、`.rail-card.rail-err-card`、清单 `em.bad`。
+
+### Added · 测试
+- `test/ui-error-red.mjs`（16 断言，静态，不需要控制台在跑）：toast 三态 / 失败路径零漏网 / toastError 调用数 /
+  rail 错误红色 / 既有 tone-fail、alert.bad 不回归；已进 `npm test` 链。
+
+### 实测
+```
+node --check web/public/app.js   → OK
+node test/ui-error-red.mjs       → 16 PASS / 0 FAIL（toastError 调用点 39 = 1 定义 + 38 处调用）
+GET /style.css                   → 200，含 .toast.bad（静态资源即改即生效，刷新页面即可）
+```
+
+### Fixed · 能力层
+- `web/ops/plugin-install.mjs`：pnpm 入口从「写死 resources/runtime/primary-runtime/...」改成候选解析——
+  环境变量 `PURGE_PNPM_ENTRY` → 旧版 runtime → **corepack 缓存**（`%LOCALAPPDATA%\node\corepack\v1\pnpm\<ver>\bin\pnpm.mjs`，按版本高到低）
+  → 系统 hermes/node。DSH 0.2.x 把 pnpm 挪进 corepack，写死路径导致「插件注入」整条能力显示不可用（实测 `available=false` · 找不到 pnpm）。
+- `status()` 现在返回 `detail.pnpmCandidates`；找不到时 summary 直接说"找过 N 处，可用 PURGE_PNPM_ENTRY 指定"，不再只有一句"找不到 pnpm"。
+- 实测：`available=false → true`，命中 `...\11.22.0\bin\pnpm.mjs`，profile 就绪 · bundles 9 项 · 跳过 0。
+
+### Added · 注入生效探针（文件在 ≠ 生效）
+- `web/summary.mjs`：`injectionProbe()` 读最近 4 个会话的 `system/message`，判 `<project_instructions>` 是否真的下发；
+  按**会话创建时间**排序（文件 mtime 会被老会话续写带偏，实测触发过"最新会话有注入"的假阳性）。
+  返回 `ready/effective/latestHasInjection/withInjection/file/estTokensPerRequest`（token 按 0.288 tokens/字符估算 = 6,039/请求）。
+- `web/public/app.js`：右侧栏新增「提示词注入」行——生效中（中性）/ 文件在但未生效（**红色**）/ 未写入（中性），并带每请求 token 估算。
+- 实测：本机 `ready=true / effective=false`（文件 25,128B 在盘上，最近 4 个会话都没有 `project_instructions`）——把"注入没生效"从人工解 zstd 变成一屏可见。
+
+### Added · 运行时错误红色横幅
+- `web/public/index.html` + `app.js`：`renderRuntimeErrors()` 把 `window.__apErrors` 渲染成 `.alert.bad`（含 `<details>` 堆栈），
+  **只在技术模式显示**，普通模式不打扰；两个全局错误处理器触发时也会即时重渲染。
+
+### Changed · 测试
+- `test/ui-error-red-browser.mjs`（新，10 断言，headless Chrome/CDP）：失败请求 → toast 红色（类名 + `role=alert` + 边框色 = `--bad`）、
+  确认 toast 仍中性、运行时横幅只在技术模式出现且为 `.alert.bad`、「提示词注入」行未生效时标红、全程 `__apErrors=0`。
+- `test/ops-plugin-install.mjs` 加 `--readonly`：只跑 status/plan/dryRun，跳过会真的 `pnpm add` 的 `run()`；
+  `npm test` 链默认带 `--readonly`（本机插件未装，之前跑全量会静默安装一次）。
+- `test/inject-summary.mjs`：补 1f/1g/1h/2g 四条注入探针契约（31 断言）。
+- `test/ui-error-red.mjs`：补 5/5a/5b/5c/6/6a 六条（22 断言）。
+- 真机：控制台重启到 `1.1.20`；`/api/ops` 的 `plugin-install` 由不可用变可用（pnpm 命中 corepack 11.22.0）。
+### 还缺
+- 浏览器级红色断言已落到独立的 `test/ui-error-red-browser.mjs`（不在 `ux2layer-ui` 里，避免那套 16 条受 Chrome 环境影响）。
+- 运行时 JS 错误（`window.__apErrors`）目前只在验收脚本里读，UI 上还没有红色提示条（下一步：技术模式里加一条可折叠的红色横幅）。
+- `test/ops-plugin-install.mjs` 假设"插件已装好、run() 走跳过"，但本机 profile 里还没装 autokill-purge-plugin（plan 步骤是 add）——直接跑它会真的 `pnpm add`。需要加 `--readonly`（只跑 status/plan）或先明确"装不装"。
 ## [1.1.19] — 2026-11-19（DSH 侧栏导航「梦神装甲」；装备页改名「梦神装甲」）
 
 ### Added · 插件在 DSH 里挂导航（图标 + 名称 → 点开回控制台）
