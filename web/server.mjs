@@ -543,6 +543,24 @@ async function akPatchStatus() {
   });
 }
 
+/** 右侧栏用的 AutoKill 聚合：没装 CLI 也要给结构，不能抛错把整栏带崩 */
+async function akSummary() {
+  const cli = akCliPath();
+  const base = { installed: existsSync(cli), cli, config: akConfigPath() };
+  if (!base.installed) return base;
+  try {
+    const [items, running, version] = await Promise.all([akPatchStatus(), akAppRunning(), akVersion()]);
+    return Object.assign(base, {
+      items,
+      running,
+      version,
+      support: Object.assign({ tester: 'AutoKill', label: HOST_SUPPORT.autokill.label, verified: HOST_SUPPORT.autokill.verified }, versionStatus(version, HOST_SUPPORT.autokill.verified)),
+    });
+  } catch (e) {
+    return Object.assign(base, { items: [], running: false, error: String((e && e.message) || e) });
+  }
+}
+
 // ---- 宿主版本兼容矩阵 ---------------------------------------------------------
 // 破甲能力是绑版本的：83 补丁表按 dsh-purge 1.1.71 验证，梦神破甲按 AutoKill 0.6.1 验证。
 // 版本不一致时不静默照用，而是把状态带回前端（exact / compatible / unknown），由界面提示。
@@ -1790,10 +1808,17 @@ async function handleApi(req, res, url, state) {
       });
     } catch (e) { return send(res, 500, { ok: false, error: 'apply_failed', detail: publicError(e), guardSnapshot: guard.id }); }
   }
-  // ---- 「注入了什么」一屏聚合（右侧栏用）----
+  // ---- 「注入了什么」一屏聚合（右侧栏用 · 按宿主取数）----
   if (p === '/api/inject/summary' && method === 'GET') {
-    try { return send(res, 200, await injectSummary(DATA_DIR)); }
-    catch (e) { return send(res, 500, { ok: false, error: 'summary_failed', detail: publicError(e) }); }
+    const host = String(url.searchParams.get('host') || 'dsh').toLowerCase();
+    const fresh = url.searchParams.get('fresh') === '1';
+    try { return send(res, 200, await injectSummary(DATA_DIR, host, { autokill: akSummary }, { fresh })); }
+    catch (e) {
+      if (e && e.code === 'unknown_host') {
+        return send(res, 400, { ok: false, error: 'unknown_host', host: host, hint: 'host 只接受 dsh | mengbot | autokill' });
+      }
+      return send(res, 500, { ok: false, error: 'summary_failed', detail: publicError(e) });
+    }
   }
 
   // ---- 能力补齐（dsh-purge 的 reapply / rewind / identity / redteam-pack / restart） ----
@@ -2862,6 +2887,10 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log('autokill-purge web: http://127.0.0.1:' + PORT);
+  // 预热右侧栏聚合（hostStatus + listOps 冷启动 ~2.3s）：页面打开时大概率已命中缓存，
+  // 用户看不到"读取中…"的空窗。失败不影响服务。
+  injectSummary(DATA_DIR, 'dsh', { autokill: akSummary }).catch(() => {});
+  injectSummary(DATA_DIR, 'autokill', { autokill: akSummary }).catch(() => {});
   // ---- 启动自检：宿主是否漂移（官方升级 / asar 又回来了 / 补丁被还原）----
   // 默认只记录 + 在「能力补齐」里提示，不擅自改宿主；
   // AUTOKILL_AUTO_REAPPLY=1 放行安全步骤（重放补丁），=auto 才允许解包 + 落地（会重启宿主）。

@@ -702,8 +702,17 @@ async function request(path, opts = {}) {
     if (isAgreementError(err)) lockAgreement();
     throw err;
   }
+  // 逻辑闭环：任何会改宿主状态的动作成功后，右侧栏按当前宿主重取（350ms 合并连击）
+  if (method !== "GET") {
+    const p0 = String(path).split("?")[0];
+    if (RAIL_MUTATION_RE.test(p0) || RAIL_MUTATION_EXTRA_RE.test(p0)) scheduleRailRefresh();
+  }
   return data;
 }
+
+/* 会改「注入了什么」的写接口：宿主补丁/卸载/还原、梦神破甲、MengBot 注入与装备、ops run */
+const RAIL_MUTATION_RE = /^\/api\/(host|autokill|mengbot)\//;
+const RAIL_MUTATION_EXTRA_RE = /^\/api\/ops\/[^/]+\/run$|^\/api\/breach\/(un)?inject-host$/;
 
 async function requestText(path) {
   let res;
@@ -980,6 +989,7 @@ async function loadHostInfo() {
       S.hostInfo.loaded = true;
       // 用户没手动切过宿主时，跟着本机探测结果走（默认 dsh 兜底）
       if (!S.hostInfo.touched) S.hostTarget = S.hostInfo.defaultHost;
+      if (railReady) loadInjectSummary(true); // 宿主可能刚被探测结果改过
     }
   } catch { /* 旧后端没有 /api/hosts：按 dsh 兜底 */ }
   finally {
@@ -1178,6 +1188,8 @@ function mountHostSwitch() {
     // 切到 AutoKill 时强制重读梦神破甲与 MCP 插件状态（这两块只属于 AutoKill）
     if (S.hostTarget === "autokill") loadAkPatches(true);
     renderPage();
+    // 右侧栏跟宿主同频：立刻清掉旧宿主的数字并拉新宿主的聚合
+    loadInjectSummary(true);
   });
   host.insertBefore(box, host.firstChild);
 }
@@ -1216,6 +1228,7 @@ async function boot() {
     renderPage();
     setStatus("loading", "记忆中心检查中…");
     refreshMemoryStatus();
+    refreshRail(); // 启动时 localStorage 里的宿主优先于探测值，栏按最终宿主再取一次
   } catch (e) {
     if (isAgreementError(e)) {
       S.locked = true;
@@ -7759,23 +7772,51 @@ function init() {
    为什么要它：破甲页的动作散在「补丁 / 插件 / 能力」三处，用户点完不知道到底注入了什么。
    这一栏常驻右侧，一屏给：本机与宿主、83 条补丁的分层账、插件与 bundles、6 个能力的开关。
    数据只打一个 /api/inject/summary（后端聚合），30 秒刷新一次，失败不影响主页面。 */
-const railState = { data: null, at: 0, loading: false, error: null };
+/* 宿主是唯一维度：栏里永远只显示**当前宿主**的数。切宿主 = 先清空再拉，
+   并用递增的 req 丢弃"切走之后才回来"的旧响应，避免 A 宿主的响应盖住 B 宿主的栏。 */
+const railState = { hostId: null, data: null, at: 0, loading: false, error: null, req: 0 };
+var railReady = false;      // 栏代码已初始化（request 的写接口钩子靠它做保护）
+var railTimer = null;       // 合并连击的刷新定时器
+
+function scheduleRailRefresh(delay = 350) {
+  if (!railReady) return;
+  clearTimeout(railTimer);
+  railTimer = setTimeout(() => loadInjectSummary(true), delay);
+}
+
+/** 任何会改宿主状态的动作跑完都调它：破甲/卸载/插件/梦神破甲/MengBot 注入/ops run */
+function refreshRail() {
+  return loadInjectSummary(true);
+}
+railReady = true;
 
 async function loadInjectSummary(force = false) {
-  if (railState.loading) return;
-  if (!force && railState.data && Date.now() - railState.at < 15000) return;
+  const hostId = S.hostTarget || "dsh";
+  if (railState.loading && railState.hostId === hostId) return;
+  if (!force && railState.hostId === hostId && railState.data && Date.now() - railState.at < 15000) return;
+  const req = ++railState.req;
+  if (railState.hostId !== hostId) {
+    railState.hostId = hostId;
+    railState.data = null;
+    railState.at = 0;
+    railState.error = null;
+    renderInjectRail(); // 立刻清掉上一个宿主的数字，进入「读取中」
+  }
   railState.loading = true;
   try {
-    const d = await request("/api/inject/summary");
-    if (!d || d.ok === false && !d.host) throw new Error((d && (d.error || d.detail)) || "summary 不可用");
+    const d = await request("/api/inject/summary?host=" + encodeURIComponent(hostId) + (force ? "&fresh=1" : ""));
+    if (req !== railState.req) return; // 期间又切了宿主，这份响应作废
+    if (!d || (d.ok === false && !d.hostId)) throw new Error((d && (d.error || d.detail)) || "summary 不可用");
     railState.data = d;
     railState.at = Date.now();
     railState.error = null;
   } catch (e) {
-    railState.error = e;
+    if (req === railState.req) railState.error = e;
   } finally {
-    railState.loading = false;
-    renderInjectRail();
+    if (req === railState.req) {
+      railState.loading = false;
+      renderInjectRail();
+    }
   }
 }
 
@@ -7788,27 +7829,64 @@ function railShortPath(p, keep = 2) {
   return parts.length <= keep ? parts.join("/") : "…/" + parts.slice(-keep).join("/");
 }
 
+function railRowsHtml(list) {
+  return (list || []).map((r) =>
+    '<div class="rail-kv"><span>' + esc(r.k) + '</span><span class="' + (r.mono === false ? "mini" : "mono") + '" title="' + esc(r.title || r.v) + '">' +
+    esc(r.mono === false ? r.v : railShortPath(r.v, 3)) + '</span></div>').join("");
+}
+
+function railStatsHtml(list) {
+  return (list || []).map((r) =>
+    '<div class="rail-kv"><span>' + esc(r.k) + '</span><span class="rail-num">' + esc(r.v) + '</span></div>').join("");
+}
+
+function railNoteHtml(text) {
+  return text ? '<p class="rail-note mini">' + esc(text) + '</p>' : "";
+}
+
+/** 头部徽标：DSH 看补丁是否生效，MengBot/AutoKill 看进程是否在跑 */
+function railHostBadge(d) {
+  const host = d.host || {};
+  if (d.hostId === "dsh") {
+    if (host.effective) return { cls: "ok", text: "补丁生效中" };
+    return { cls: "", text: host.desktopSealed ? "未落地" : "待确认" };
+  }
+  return { cls: host.running ? "ok" : "", text: host.running ? "运行中" : "未运行" };
+}
+
 function renderInjectRail() {
   const el = document.getElementById("injectRail");
   if (!el) return;
+  const want = S.hostTarget || "dsh";
+  const hostLabel = hostTargetName(want);
   const d = railState.data;
   if (!d) {
-    el.innerHTML = '<div class="rail-card"><h3>注入状态</h3><p class="mini">' +
-      (railState.error ? esc(simpleReason(railState.error)) : "读取中…") + "</p></div>";
+    el.dataset.host = want;
+    el.dataset.loading = "1";
+    const why = railState.error
+      ? esc(simpleReason(railState.error))
+      : (railState.hostId === want || !railState.hostId ? "读取中…" : "切换宿主，读取中…");
+    el.innerHTML = '<div class="rail-card"><h3>注入状态 <span class="badge">' + esc(hostLabel) + '</span></h3>' +
+      '<p class="mini">' + why + "</p>" +
+      '<div class="rail-foot"><a href="#" data-rail-refresh>重试</a></div></div>';
+    const retry = el.querySelector("[data-rail-refresh]");
+    if (retry) retry.addEventListener("click", (ev) => { ev.preventDefault(); loadInjectSummary(true); });
     return;
   }
-  const dev = d.device || {};
+  el.dataset.host = d.hostId || want;
+  el.dataset.loading = "0";
+  el.dataset.at = String(railState.at || 0);
+
   const host = d.host || {};
   const p = d.patches || {};
   const pl = d.plugins || {};
   const cap = d.capabilities || {};
+  const badge = railHostBadge(d);
   const total = p.total || 0;
   const applied = p.applied || 0;
   const pending = p.pending || 0;
   const failed = p.failed || 0;
   const na = p.na || 0;
-  const sealed = !!host.desktopSealed;
-  const effective = !!host.effective;
   const layers = Object.keys(p.byLayer || {});
   const layerRows = layers.map((l) => {
     const all = p.byLayer[l] || 0;
@@ -7817,6 +7895,8 @@ function renderInjectRail() {
   }).join("");
   const notable = (p.notable || []).map((x) =>
     '<li><span>' + esc(x.nameZh || x.name || ("#" + x.id)) + '</span><em class="mini">' + esc(x.status || "") + '</em></li>').join("");
+  const patchItems = (p.items || []).slice(0, 8).map((x) =>
+    '<li><span>' + esc(x.label || x.id) + '</span><em class="mini">' + (x.applied ? "已应用" : esc(x.current || "未应用")) + '</em></li>').join("");
   const plugRows = (pl.installed || []).map((x) =>
     '<div class="rail-plug"><span class="mono">' + esc(String(x.name).replace("autokill-purge-plugin", "autokill 插件")) + '</span><em>' +
     esc(x.version || "未装") + (x.inBundles ? " · 已登记" : " · 未登记") + '</em></div>').join("");
@@ -7825,34 +7905,55 @@ function renderInjectRail() {
   const rt = (pl.redteam && pl.redteam.summary) ? pl.redteam.summary : "";
   const idn = (pl.identity && pl.identity.summary) ? pl.identity.summary : "";
 
+  // 补丁卡：适用就画进度条与清单；不适用就写清"为什么没有"和该宿主真实的计数
+  const patchCard = !p.applicable
+    ? '<div class="rail-card">'
+      + '  <h3>' + esc(p.name || "补丁") + (p.total !== undefined ? ' <span class="mini">' + fmtNum(p.applied || 0) + '/' + fmtNum(p.total || 0) + ' ' + esc(p.unit || "") + '</span>' : '') + '</h3>'
+      + railNoteHtml(p.note)
+      + railStatsHtml(p.stats)
+      + '</div>'
+    : '<div class="rail-card">'
+      + '  <h3>' + esc(p.name || "宿主补丁") + ' <span class="mini">' + fmtNum(applied) + '/' + fmtNum(total) + ' ' + esc(p.unit || "") + '</span></h3>'
+      + '  <div class="rail-bar"><i class="ok" style="width:' + railPct(applied, total) + '%"></i><i class="wait" style="width:' + railPct(pending, total) + '%"></i><i class="fail" style="width:' + railPct(failed, total) + '%"></i><i class="na" style="width:' + railPct(na, total) + '%"></i></div>'
+      + '  <div class="rail-kv"><span>已应用 / 待应用</span><span class="rail-num">' + fmtNum(applied) + ' / ' + fmtNum(pending) + '</span></div>'
+      + (failed || na ? '  <div class="rail-kv"><span>失败 / 跳过</span><span class="rail-num">' + fmtNum(failed) + ' / ' + fmtNum(na) + '</span></div>' : "")
+      + (layerRows ? '  <ul class="rail-list">' + layerRows + '</ul>' : "")
+      + (patchItems ? '  <ul class="rail-list">' + patchItems + '</ul>' : "")
+      + (notable ? '  <ul class="rail-list">' + notable + '</ul>' : "")
+      + railNoteHtml(p.note)
+      + '</div>';
+
+  const pluginCard = !pl.applicable
+    ? '<div class="rail-card">'
+      + '  <h3>插件 · 装备</h3>'
+      + railNoteHtml(pl.note)
+      + railStatsHtml(pl.stats)
+      + '</div>'
+    : '<div class="rail-card">'
+      + '  <h3>插件 <span class="mini">bundles ' + fmtNum(pl.bundleCount || 0) + '</span></h3>'
+      + plugRows
+      + (rt ? '  <div class="rail-kv"><span>红队面</span><span class="mini">' + esc(rt) + '</span></div>' : "")
+      + (idn ? '  <div class="rail-kv"><span>身份</span><span class="mini">' + esc(idn) + '</span></div>' : "")
+      + railNoteHtml(pl.note)
+      + '</div>';
+
+  const capCard = '<div class="rail-card">'
+    + '  <h3>能力' + (cap.applicable ? ' <span class="mini">' + fmtNum(cap.available) + '/' + fmtNum(cap.total) + '</span>' : '') + '</h3>'
+    + (capDots ? '  <div class="rail-dots">' + capDots + '</div>' : "")
+    + railNoteHtml(cap.note)
+    + '</div>';
+
   el.innerHTML = ''
     + '<div class="rail-card">'
-    + '  <h3>本机 · 宿主 <span class="badge ' + (effective ? "ok" : "") + '">' + (effective ? "补丁生效中" : (sealed ? "未落地" : "待确认")) + '</span></h3>'
-    + '  <div class="rail-kv"><span>主机</span><span class="mono">' + esc(dev.hostname || "-") + '</span></div>'
-    + '  <div class="rail-kv"><span>IP</span><span class="mono">' + esc(dev.ip || "无外网卡") + '</span></div>'
-    + '  <div class="rail-kv"><span>DSH</span><span class="mono">' + esc(host.dshVersion || "-") + '</span></div>'
-    + '  <div class="rail-kv"><span>载入自</span><span class="mono">' + (sealed ? "app.asar（未生效）" : "resources/app（生效）") + '</span></div>'
-    + '  <div class="rail-kv"><span>宿主根</span><span class="mono" title="' + esc((host.primaryHost && host.primaryHost.aiBase) || "") + '">' + esc(railShortPath((host.primaryHost && host.primaryHost.aiBase) || "", 2)) + '</span></div>'
+    + '  <h3>本机 · 宿主 <span class="badge ' + badge.cls + '">' + esc(hostLabel) + '</span></h3>'
+    + railRowsHtml(host.rows)
+    + (d.hostId === "dsh" && badge.cls !== "ok" ? '  <div class="rail-kv"><span>状态</span><span class="mini">' + esc(badge.text) + '</span></div>' : "")
+    + railNoteHtml(host.note)
     + '</div>'
-    + '<div class="rail-card">'
-    + '  <h3>宿主补丁 <span class="mini">' + fmtNum(applied) + '/' + fmtNum(total) + '</span></h3>'
-    + '  <div class="rail-bar"><i class="ok" style="width:' + railPct(applied, total) + '%"></i><i class="wait" style="width:' + railPct(pending, total) + '%"></i><i class="fail" style="width:' + railPct(failed, total) + '%"></i><i class="na" style="width:' + railPct(na, total) + '%"></i></div>'
-    + '  <div class="rail-kv"><span>已注入 / 待注入</span><span class="rail-num">' + fmtNum(applied) + ' / ' + fmtNum(pending) + '</span></div>'
-    + '  <div class="rail-kv"><span>失败 / 跳过</span><span class="rail-num">' + fmtNum(failed) + ' / ' + fmtNum(na) + '</span></div>'
-    + (layerRows ? '  <ul class="rail-list">' + layerRows + '</ul>' : "")
-    + (notable ? '  <ul class="rail-list">' + notable + '</ul>' : "")
-    + '</div>'
-    + '<div class="rail-card">'
-    + '  <h3>插件 <span class="mini">bundles ' + fmtNum(pl.bundleCount || 0) + '</span></h3>'
-    + plugRows
-    + (rt ? '  <div class="rail-kv"><span>红队面</span><span class="mini">' + esc(rt) + '</span></div>' : "")
-    + (idn ? '  <div class="rail-kv"><span>身份</span><span class="mini">' + esc(idn) + '</span></div>' : "")
-    + '</div>'
-    + '<div class="rail-card">'
-    + '  <h3>能力 <span class="mini">' + fmtNum(cap.available || 0) + '/' + fmtNum(cap.total || 0) + '</span></h3>'
-    + '  <div class="rail-dots">' + capDots + '</div>'
-    + '</div>'
-    + '<div class="rail-foot">更新于 ' + esc(new Date(railState.at || Date.now()).toLocaleTimeString("zh-CN", { hour12: false }))
+    + patchCard
+    + pluginCard
+    + capCard
+    + '<div class="rail-foot">' + esc(hostLabel) + ' · 更新于 ' + esc(new Date(railState.at || Date.now()).toLocaleTimeString("zh-CN", { hour12: false }))
     + ' · <a href="#" data-rail-refresh>刷新</a>' + (railState.error ? " · " + esc(simpleReason(railState.error)) : "") + '</div>';
 
   const btn = el.querySelector("[data-rail-refresh]");

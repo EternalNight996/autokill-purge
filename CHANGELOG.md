@@ -2,6 +2,51 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.18] — 2026-11-19（右侧栏按宿主取数：切宿主即换数、任何写操作后自动重取）
+
+### 问题
+右侧「注入状态」栏是 1.1.16 之后加的，只认识 DSH 一套数：`/api/inject/summary` 不带宿主参数，
+栏里的 59/83、bundles、6 项能力在 **MengBot / AutoKill 宿主下也照显**——切了宿主栏不动，
+用户看到的是"上一个宿主的世界"，这是逻辑上不闭环的假信息。
+
+### Changed · 后端（web/summary.mjs 重写）
+- `injectSummary(dataDir, hostId, providers, { fresh })`：按 `dsh | mengbot | autokill` 取数，
+  三宿主同一套骨架 `host / patches / plugins / capabilities`，每段带 `applicable` + `note`：
+  - **DSH**：83 条补丁（分层 + 失败/待注入清单）、plugin bundles、6 项宿主内能力；
+  - **MengBot**：无补丁层/无 bundles → `applicable:false` 并写清原因（破甲只有 bot SOUL 一条路），
+    给出真实计数（bot 总数 / 已注入 SOUL / SOUL 字符 / 快照数 / 已装备 bot）+ 进程与端口；
+  - **AutoKill**：梦神破甲 9 项逐条 applied/current + 版本 / 进程 / config / CLI；无 bundles 同理说明。
+- 非法 host → **400 unknown_host**（不是 200 里塞错误，也不是 500）。
+- 性能：`hostStatus`(2.5s) / `listOps`(2.3s) 并行（`listOps` 内部也改成并行，reapply/restart/rewind 三块从串行 4s+ 降到 ~2.3s）；
+  15 秒 TTL 缓存 + **单飞**（启动预热与首屏同时到达不会算两遍，之前实测 7.7s）；`?fresh=1` 绕过缓存。
+- 启动预热 DSH/AutoKill 两份聚合，首屏大概率直接命中缓存。
+
+### Changed · 前端（web/public/app.js）
+- `railState` 带 `hostId` + 递增 `req`：切宿主**先清空**旧数据（不留 A 宿主的数字给 B 宿主看），
+  再按新宿主取；"切走之后才回来"的响应直接丢弃。
+- 宿主切换器 / 启动探测默认宿主 / boot 完成，三处都触发栏重取。
+- **写操作自动重取**：`request()` 里对 `/api/host/**`、`/api/autokill/**`、`/api/mengbot/**`、
+  `/api/ops/<id>/run`、`/api/breach/(un)inject-host` 的写请求成功后 `scheduleRailRefresh()`（350ms 合并连击），
+  带 `fresh=1` 绕过服务端缓存 —— 点完注入/卸载/装备，栏里立刻是新数。
+- 栏卡片泛化：`host.rows` / `patches.stats` / `capabilities.items` 驱动，DSH 之外不再假装有补丁/插件/能力；
+  `data-host` `data-loading` `data-at` 三个属性供验收断言。
+
+### Added · 测试
+- `test/inject-summary.mjs`（27 断言）：三宿主骨架、applicable/note、非法 host 400、缓存与 fresh 语义。
+- `test/rail-host.mjs`（15 断言，真 Chrome）：切宿主瞬间清空旧数 → 新宿主数据到位 → 切回复位；
+  **写操作（host/snapshot）后栏 `data-at` 必须变大**（闭环）；`window.__apErrors` 为空。
+- 两条都进 `npm test` 链。
+
+### 实测
+```
+/api/inject/summary?host=dsh        → 200 · 59/83 · bundles 11 · 能力 6/6   （fresh 2.2s / 缓存 50ms）
+/api/inject/summary?host=mengbot    → 200 · SOUL 0/1 bot · 无补丁层说明     （445ms）
+/api/inject/summary?host=autokill   → 200 · 梦神破甲 7/9 · config+CLI       （270ms）
+/api/inject/summary?host=evil       → 400 unknown_host
+test/inject-summary.mjs  → 27 PASS / 0 FAIL
+test/rail-host.mjs       → 15 PASS / 0 FAIL
+```
+
 ## [1.1.17] — 2026-11-19（三个真机 bug：启动器绕过自维护运行时、右侧状态栏首屏 TDZ、记忆库整页被挤成小窗）
 
 ### 问题

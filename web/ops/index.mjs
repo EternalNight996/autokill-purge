@@ -68,12 +68,12 @@ async function load(id) {
 /** 只读：所有能力的 META + 可用性摘要（UI 首屏用） */
 export async function listOps(dataDir) {
   const ctx = makeCtx(dataDir);
-  const rows = [];
-  for (const id of OPS_ORDER) {
+  // 并行探测：reapply(1.9s) / restart(1.3s) / rewind(0.9s) 是三个慢块，串行要 4s+，
+  // 右侧栏每次刷新都吃这个延迟。Promise.all 之后按 OPS_ORDER 顺序返回，顺序仍然稳定。
+  const rows = await Promise.all(OPS_ORDER.map(async (id) => {
     const mod = await load(id);
     if (!mod || mod.__loadError) {
-      rows.push({ id, zh: id, en: id, kind: 'both', available: false, reason: mod && mod.__loadError ? mod.__loadError : '模块不存在', summary: '' });
-      continue;
+      return { id, zh: id, en: id, kind: 'both', available: false, reason: mod && mod.__loadError ? mod.__loadError : '模块不存在', summary: '' };
     }
     let st = null;
     let reason = '';
@@ -83,7 +83,7 @@ export async function listOps(dataDir) {
       reason = String((e && e.message) || e);
       st = { ok: false, available: false, summary: '', detail: null };
     }
-    rows.push({
+    return {
       id,
       zh: (mod.META && (mod.META.zh || mod.META.id)) || id,
       en: (mod.META && (mod.META.en || mod.META.id)) || id,
@@ -94,8 +94,8 @@ export async function listOps(dataDir) {
       reason: reason || (st.ok ? '' : '状态读取失败'),
       summary: st.summary,
       detail: st.detail,
-    });
-  }
+    };
+  }));
   return { ok: true, contract: 1, ctx: { dshHome: ctx.dshHome, appDir: ctx.appDir, asarPath: ctx.asarPath }, ops: rows };
 }
 
