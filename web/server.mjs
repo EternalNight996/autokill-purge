@@ -146,12 +146,12 @@ const MODEL_ADVICE = {
 
 // ---- 破甲模板（本项目内置；正文源头是 dsh-purge v1.1.71 的默认槽，MIT） --------
 // 模板正文在 web/prompts/*.md；这里只登记清单，正文按需读取（不塞进 /api/state）。
-// 显示名跟包版本走：小码酱 · 梦神破甲 <VERSION>；id 保持 sauce-1171 不动（它是内部键，已有数据都按它存）。
+// 显示名跟包版本走：梦神破甲 <VERSION>；id 保持 sauce-1171 不动（它是内部键，已有数据都按它存）。
 const PROMPT_DIR = join(HERE, 'prompts');
 const PROMPTS = [
   {
     id: 'sauce-1171', file: 'sauce-1171.md',
-    name: `小码酱 · 梦神破甲 ${VERSION}`,
+    name: `梦神破甲 ${VERSION}`,
     note: `本项目内置的破甲提示词（源头是 dsh-purge v1.1.71 的默认槽，MIT，署名见 web/prompts/sauce-1171.md 头部）；随 autokill-purge ${VERSION}`,
     source: 'https://github.com/YuJunZhiXue/dsh-purge',
     scopes: ['full', 'identity']

@@ -37,7 +37,7 @@ node scripts/install-desktop.mjs   # 加桌面图标 + 开机自启（Windows）
 
 | 能力 | 具体 |
 |---|---|
-| **破甲** | **小码酱 · 梦神破甲** 模板（随包版本，当前 1.1.14）+ **83 条宿主补丁中英对照**，绿=已注入 / 红=失败 / 灰=跳过 + **落地并重启宿主**（密封 asar 必须让位才生效） |
+| **破甲** | **梦神破甲** 模板（随包版本，当前 1.1.17）+ **83 条宿主补丁中英对照**，绿=已注入 / 红=失败 / 灰=跳过 + **落地并重启宿主**（密封 asar 必须让位才生效） |
 | **回滚** | 每次写入前自动快照；一键还原到出厂（官方 asar 原件覆盖），失败自动回滚 |
 | **载荷** | 27+ 模型实时识别（可多选→智能匹配）、12 种技术、文本/Base64/ROT13 三变体、二进制 `break` 七动作 |
 | **装备** | 6 个装备包可多选、按包分页、挂真实技能名，连「已破甲模型」一起装给 dsh / mengbot / autokill |
@@ -94,7 +94,7 @@ npm i -g autokill-purge && autokill-purge
 
 | Feature | What you get |
 |---|---|
-| Purge | **小码酱 · 梦神破甲** template (follows the package version, currently 1.1.12) + **83 host patches with bilingual labels and tri-state colors** |
+| Purge | **梦神破甲** template (follows the package version, currently 1.1.17) + **83 host patches with bilingual labels and tri-state colors** |
 | Rollback | Auto snapshot before every write, factory restore from the official asar, auto-rollback on failure |
 | Payload | 27+ live models (multi-select → smart match), 12 techniques, text / Base64 / ROT13, 7 binary `break` actions |
 | Equipment | 6 multi-selectable packs, paged by pack, real skill names, cracked models included |

@@ -5027,7 +5027,7 @@ function renderBreach() {
               ? `<select id="bTemplate" data-focus="bTemplate">${optionHtml(S.prompts, b.template)}</select>`
               : `<input id="bTemplate" type="text" value="none" readonly>`}
             ${fieldDefault("template", b.template === "sauce-1171" ? "" : b.template, "sauce-1171")}
-            <span class="help">默认套「小码酱 · 梦神破甲」整段；选「不套模板」只出技术模板。</span>
+            <span class="help">默认套「梦神破甲」整段；选「不套模板」只出技术模板。</span>
           </label>
         </div>
       </div>

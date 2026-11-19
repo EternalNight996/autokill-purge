@@ -23,6 +23,10 @@
 - `web/public/style.css`：`body.mem-mode #app > main { align-items: stretch }`（清掉 grid 时代的
   `align-items:start`）+ `body.mem-mode .inject-rail { display: none }`（整页模式不显示状态栏）。
 
+### Changed（同轮改动）
+- **破甲模板显示名去掉前缀**：`小码酱 · 梦神破甲 <版本>` → `梦神破甲 <版本>`（`web/server.mjs` 的 PROMPTS 清单 + 破甲页模板下拉帮助文案 + 两份 README）。
+  `id: sauce-1171` 不变（内部键，已有状态/载荷都按它存）；模板正文 `web/prompts/sauce-1171.md` 里的角色身份（小码酱 / Little Code Sauce）不动 —— 改的是列表里的显示名，不是提示词的人格。
+
 ### 实测（真机）
 ```
 node scripts/launch.mjs --no-open
