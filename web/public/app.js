@@ -17,7 +17,7 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const cx = (...parts) => parts.filter(Boolean).join(" ");
 
 const TABS = ["inject", "breach", "equip", "memory", "assign", "mcp", "intel", "drill", "settings", "about"];
-const TAB_LABEL = { inject: "注入", breach: "破甲", equip: "装备", memory: "记忆", assign: "分发", mcp: "MCP", intel: "情报", drill: "演练", settings: "设置", about: "关于" };
+const TAB_LABEL = { inject: "注入", breach: "破甲", equip: "梦神装甲", memory: "记忆", assign: "分发", mcp: "MCP", intel: "情报", drill: "演练", settings: "设置", about: "关于" };
 
 /* ------------------------------------------------------- 宿主维度（第一步：只切视图标签） */
 const HOST_TARGETS = [
@@ -2868,7 +2868,7 @@ function equipInlineBlock(idPrefix) {
     <label class="pick-row" style="padding:6px 0">
       <input type="checkbox" id="${esc(idPrefix)}WithEquip"${b.withEquip ? " checked" : ""} aria-label="生成时一并发放装备">
       <span class="grow"><span class="t">生成时一并发放这份装备</span>
-        <span class="s">往「装备」记录追加一条，并把装备卡入库（待审）；装备包 / 能力项 / 模型在「装备」页勾选，这里跟着变。</span></span>
+        <span class="s">往「梦神装甲」记录追加一条，并把装备卡入库（待审）；装备包 / 能力项 / 模型在「梦神装甲」页勾选，这里跟着变。</span></span>
     </label>
   </details>`;
 }
@@ -3141,7 +3141,7 @@ function renderSimpleEquip() {
     : (S.simple.equipResult ? okBox(S.simple.equipResult) : "");
   $("#page").innerHTML = `
     <div class="page-head"><div>
-      <p class="eyebrow">装备</p><h1>装备</h1>
+      <p class="eyebrow">梦神装甲</p><h1>梦神装甲</h1>
       <p class="lead">把现成能力装到你的智能体上，装完就能用。可以同时选多个装备包。</p>
     </div></div>
     <section class="s-status ${items.length ? "green" : "yellow"}" aria-label="当前装备">
@@ -6428,7 +6428,7 @@ function renderEquip() {
     <div class="page-head">
       <div>
         <p class="eyebrow">CONTROL · 02</p>
-        <h1>装备</h1>
+        <h1>梦神装甲</h1>
         <p class="lead">把一套能力装到具体智能体上：dsh、mengbot、autokill，或你自己的。发出去就有一份可复制的配置，并留下发放历史。</p>
       </div>
       <div class="head-meta">${badge("6 个预设", "accent")}${badge("3 档权限", "")}${badge("可复制 JSON", "")}</div>

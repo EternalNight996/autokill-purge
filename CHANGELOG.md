@@ -2,6 +2,42 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.19] — 2026-11-19（DSH 侧栏导航「梦神装甲」；装备页改名「梦神装甲」）
+
+### Added · 插件在 DSH 里挂导航（图标 + 名称 → 点开回控制台）
+- `plugin/lib/client.js`（新）：浏览器侧 bundle（`__ModuleLoader__` 工厂格式），往 **`sidebar.footer.action`（list 槽）**
+  注册一项「**梦神装甲**」：展开显示 盾形图标 + 名称，收起只显示图标；点击 `window.open` 打开 `http://127.0.0.1:8792`
+  （可用 `localStorage["ap.consoleUrl"]` 覆盖地址）。
+- 选槽理由（都不是拍脑袋）：`shell.leading` / `sidebar.settings` / `sidebar.brand.*` 都是 **single** 槽且已被占用；
+  `shell.overlay` 是浮层（toast）不是导航；`sidebar.footer.action` 是**空闲的 list 槽**，位置在左侧栏底部，正合适。
+- `plugin/package.json`：`version 0.2.0 → 0.2.1`，新增 `exports["./client"]` 与 `dsh.client = { platform: "web" }`。
+  安装走既有官方通道：`npm pack` → `~/.dsh/local-pkgs/` → `POST /api/ops/plugin-install/run {confirm:true, force:true}`
+  （force 走升级路径，pnpm add + writeProfileBundles + loadProfileDirectory 校验）。
+- `test/client-nav.mjs`（新，17 断言）：清单声明 / bundle 格式与 id / 只注册 `sidebar.footer.action` /
+  展开有「梦神装甲」、收起只有图标、`aria-label` 与 onClick 存在 / **profile 安装版本与源码一致且带 client.js**。
+
+### Changed · 「装备」→「梦神装甲」
+- 控制台：`TAB_LABEL.equip`、简单模式装备页 `<h1>` 与 eyebrow、技术模式装备页 `<h1>`、以及「往『装备』记录追加一条」
+  「在『装备』页勾选」这类**指向该页/该记录**的文案，统一改成「梦神装甲」。**动作词不动**（「一并装备」「已装备 N 件」
+  「装备包」仍是原词，避免把动词写成名词）。
+- AutoKill 的 `[[ui.slots]]` 下拉：`label = "装备模式" → "梦神装甲"`，空选项 `"不装备" → "不装装甲"`。
+- DSH 注入的装备段落标题：`## 装备（按任务选用…）` → `## 梦神装甲（按任务选用…）`。
+
+### 实测
+```
+plugin → npm pack：autokill-purge-plugin-0.2.1.tgz（5 文件，含 lib/client.js 5012B）
+控制台 API：pnpm add 0.2.0 → 0.2.1 · bundles 11 项 · skippedBundles 0 · layers 含 autokill-purge-plugin
+profile：node_modules/autokill-purge-plugin/lib/client.js 已就位
+bundle 离线装载：slot=sidebar.footer.action · id=mengshen-armor · 展开渲染「梦神装甲」· 收起无名称
+控制台 #/equip：h1=梦神装甲 · eyebrow=梦神装甲 · __apErrors=[]
+node test/client-nav.mjs → 17 PASS / 0 FAIL
+```
+
+### 边界
+- 浏览器端 bundle 由 DSH 的 `dsh-client-modules` 装载；插件单权重启后会重新发布 `dsh.client` 声明，页面由 HMR 加载，
+  **不用重启宿主**。若你的 DSH 窗口是很久以前开的、且 HMR 断了，按一次 Ctrl+R 即可。
+- 这个 bundle 是手写的（与 tsdown 产物同格式），只能 `require` 平台内置模块；以后改它别再引第三方依赖。
+
 ## [1.1.18] — 2026-11-19（右侧栏按宿主取数：切宿主即换数、任何写操作后自动重取）
 
 ### 问题

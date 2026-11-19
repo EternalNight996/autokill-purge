@@ -1,6 +1,6 @@
 {
   "name": "autokill-purge",
-  "version": "1.1.18",
+  "version": "1.1.19",
   "description": "破甲控制台｜一键注入 · 83 补丁可视化 · 载荷生成 · 记忆库 · MCP 管理｜零依赖",
   "type": "module",
   "bin": {
@@ -14,7 +14,7 @@
     "seed": "node scripts/seed-redteam-memory.mjs",
     "check:pack": "node scripts/check-pack.mjs",
     "prepublishOnly": "node scripts/check-pack.mjs",
-    "test": "node test/acceptance.mjs && node test/ux2layer.mjs && node test/ux2layer-ui.mjs && node _ui-test/ac-check.mjs && node test/inject-summary.mjs && node test/rail-host.mjs && node test/ops-acceptance.mjs && node test/ops-identity.mjs && node test/ops-rewind.mjs && node test/ops-reapply.mjs && node test/ops-redteam-pack.mjs && node test/ops-plugin-install.mjs && node test/mem-runtime.mjs",
+    "test": "node test/acceptance.mjs && node test/ux2layer.mjs && node test/ux2layer-ui.mjs && node _ui-test/ac-check.mjs && node test/inject-summary.mjs && node test/rail-host.mjs && node test/client-nav.mjs && node test/ops-acceptance.mjs && node test/ops-identity.mjs && node test/ops-rewind.mjs && node test/ops-reapply.mjs && node test/ops-redteam-pack.mjs && node test/ops-plugin-install.mjs && node test/mem-runtime.mjs",
     "test:ops": "node test/ops-acceptance.mjs --dry-run && node test/ops-identity.mjs && node test/ops-rewind.mjs && node test/ops-reapply.mjs && node test/ops-redteam-pack.mjs && node test/ops-plugin-install.mjs && node test/mem-runtime.mjs"
   },
   "files": [

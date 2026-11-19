@@ -5,9 +5,30 @@
 
 | 文件 | 作用 |
 |---|---|
-| `package.json` | `dsh.bundle.patch` 指向 `cordis.patch.yml`；`main` 是插件入口 |
+| `package.json` | `dsh.bundle.patch` → `cordis.patch.yml`（宿主侧）；`dsh.client` + `exports["./client"]` → `lib/client.js`（浏览器侧）；`main` 是插件入口 |
 | `cordis.patch.yml` | `insert` 一个插件单元，`inject: [systemPrompt, tools]`，所有开关都在 config |
-| `lib/index.js` | `export const name / inject` + `export function apply(ctx, config)` |
+| `lib/index.js` | `export const name / inject` + `export function apply(ctx, config)`（宿主侧、Node） |
+| `lib/client.js` | 浏览器侧 bundle（`__ModuleLoader__` 工厂格式）：在 DSH 左侧栏底部注册「梦神装甲」，点击回到控制台 |
+
+## 梦神装甲（DSH 里的导航项）
+
+`lib/client.js` 只做一件事：往 **`sidebar.footer.action`（list 槽）** 加一项 —— 图标 + 名称「梦神装甲」，
+点一下用 `window.open` 打开 `http://127.0.0.1:8792`（可用 `localStorage["ap.consoleUrl"]` 覆盖）。
+
+为什么选这个槽：
+
+| 候选槽 | 类型 | 能不能用 |
+|---|---|---|
+| `shell.leading` | single | 已被 sidebar 的 HeaderLeadingControls 占用 |
+| `sidebar.settings` / `sidebar.brand.*` | single | 已被占用 |
+| `shell.overlay` | list | 能用，但那是浮层（toast / 遮罩），不是导航 |
+| **`sidebar.footer.action`** | **list** | **空闲的列表槽，正好放导航；收起时只显示图标，展开时显示名称** |
+
+约束：bundle 是手写的（与 tsdown 产物同格式），**不能 import 相对模块**，只能 `require` 平台内置模块
+（`react` / `react/jsx-runtime`）；CSS 用 `<style data-plugin-css>` 注入一次。
+改动后要重新打包安装：`cd plugin && npm pack` → 拷到 `~/.dsh/local-pkgs/` → 控制台
+`POST /api/ops/plugin-install/run {confirm:true, force:true}`（升级路径），DSH 会在插件单权重启后
+重新发布 `dsh.client` 声明；浏览器端由 HMR 装载，**不用重启宿主**。
 
 ## 与 dsh-purge 的分工（关键）
 

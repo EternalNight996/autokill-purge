@@ -38,10 +38,10 @@ node scripts/install-desktop.mjs   # desktop icon + autostart (Windows)
 
 | Capability | Details |
 |---|---|
-| **Purge** | **梦神破甲** template (follows the package version, currently 1.1.17) + **83 host patches with bilingual labels**, green = applied / red = failed / gray = skipped, plus **sealed-asar handoff** (rename app.asar aside + relaunch) - without it the patched files are never loaded |
+| **Purge** | **梦神破甲** template (follows the package version, currently 1.1.19) + **83 host patches with bilingual labels**, green = applied / red = failed / gray = skipped, plus **sealed-asar handoff** (rename app.asar aside + relaunch) - without it the patched files are never loaded |
 | **Rollback** | Auto snapshot before every write; one-click factory restore from the official asar; auto-rollback on failure |
 | **Payloads** | 27+ models detected live (multi-select → smart match), 12 techniques, text / Base64 / ROT13 variants, 7 binary `break` actions |
-| **Equipment** | 6 multi-selectable packs, paged by pack, real skill names attached, cracked models included; issue to dsh / mengbot / autokill |
+| **梦神装甲 (armor)** | 6 multi-selectable packs, paged by pack, real skill names attached, cracked models included; issue to dsh / mengbot / autokill. **A matching nav item (icon + name) sits at the bottom of the DSH sidebar and jumps back to this console.** |
 | **Memory** | Embeds memory-eternal in an **isolated vault** (`mem-purge` @ 7989, never touches your operations vault); MEM Pair for cross-instance card sync |
 | **MCP** | Manage local MCP servers with a **real handshake test** (initialize → tools/list) and export JSON for Claude / Cursor |
 | **Parity** | The 5 host-side dsh-purge capabilities rebuilt outside the host: **reapply** (startup replay / official-update heal), **restart** (reuses the upstream helper), **identity** (fragment library compiled into prompt-inject.md), **rewind** (multi-frame zstd session rewind), **redteam-pack** (48 skills + 3 roles installed; 58 `redteam_*` tools audited and hosted) |

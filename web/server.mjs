@@ -757,7 +757,7 @@ function tomlStr(s) {
 function purgeSlotBlocks(presets) {
   const wanted = Array.isArray(presets) ? presets.filter((id) => EQUIP_PRESETS.some((p) => p.id === id)) : [];
   const ids = wanted.length ? wanted : EQUIP_PRESETS.map((p) => p.id);
-  const opts = ['  { value = "", label = "不装备" },'];
+  const opts = ['  { value = "", label = "不装装甲" },'];
   for (const id of ids) {
     const p = EQUIP_PRESETS.find((x) => x.id === id);
     if (!p) continue;
@@ -769,7 +769,7 @@ function purgeSlotBlocks(presets) {
       '[[ui.slots]]',
       'id = "builder.side"',
       'kind = "select"',
-      'label = "装备模式"',
+      'label = "梦神装甲"',
       `hint = ${tomlStr('autokill-purge：本次带了 ' + ids.map((i) => (EQUIP_PRESETS.find((p) => p.id === i) || {}).name || i).join('、'))}`,
       'setting = "build.gear"',
       'mode = "one-of-list"',
@@ -2085,7 +2085,7 @@ async function handleApi(req, res, url, state) {
         hint: action === 'unmount' && !residue.traces.any
           ? '插槽已从配置里移除（重启 AutoKill 后控件消失）'
           : (state.supported
-            ? '重启 AutoKill 后，构建助手旁（builder.side）与标题栏（titlebar.side）各出现一个装备下拉'
+            ? '重启 AutoKill 后，构建助手旁（builder.side）与标题栏（titlebar.side）各出现一个「梦神装甲」下拉'
             : '这个 AutoKill 版本还没带 ui.slots，槽位已写入但不会被渲染'),
       }));
     } catch (e) {
