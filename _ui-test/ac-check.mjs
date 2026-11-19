@@ -96,13 +96,17 @@ const stats = await api('/api/memory/stats');
 check('memory stats reachable', stats.status === 200 && stats.data?.ok === true && typeof stats.data?.total === 'number', `total ${stats.data?.total}`);
 const cards = await api('/api/memory/cards?limit=3');
 const cardList = cards.data?.cards || [];
+// 多拉一批：AC-5.3 要从里面挑「确认非 skill」的卡，不能依赖主库前 3 张的构成
+const cardsAll = await api('/api/memory/cards?limit=40');
+const allList = cardsAll.data?.cards || [];
 if (cards.status === 200 && cardList.length === 0) {
   skip('memory cards reachable', '隔离库 mem-purge 还是空的（0 张卡），写入卡片后再跑');
 } else {
   check('memory cards reachable', cards.status === 200 && cardList.length > 0, `${cardList.length} cards`);
 }
 
-const equip = await api('/api/equipment', { method: 'POST', body: JSON.stringify({ preset: 'recon', agents: ['qa-ac'], permissions: 'read-only', notes: 'AC probe' }) });
+// absorb:false —— 验收探针不该往记忆库里堆待审卡（正式使用才自动入库）
+const equip = await api('/api/equipment', { method: 'POST', body: JSON.stringify({ preset: 'recon', agents: ['qa-ac'], permissions: 'read-only', notes: 'AC probe', absorb: false }) });
 check('AC-4 equipment issue', equip.status === 200 && equip.data?.ok === true && equip.data?.equipment?.preset === 'recon', `HTTP ${equip.status}`);
 
 if (cardList.length >= 3) {
@@ -116,9 +120,18 @@ if (cardList.length >= 3) {
   const md3 = await api('/api/assign/' + agent + '.md');
   const count3 = (String(md3.text).match(/^- path: /gm) || []).length;
   check('AC-5.2 add a third card -> endpoint 3 sections without restart', save3.status === 200 && count3 === 3, `HTTP ${save3.status}, sections ${count3}`);
-  const saveSkill = await api('/api/assign', { method: 'POST', body: JSON.stringify({ agent, cards: paths.slice(0, 3), mode: { skillsOnly: true, autoSync: true } }) });
-  const mdSkill = await api('/api/assign/' + agent + '.md');
-  check('AC-5.3 skillsOnly filters non-skill cards and reports count', saveSkill.status === 200 && /已过滤\s*3\s*张非技能卡/.test(String(mdSkill.text)) && !/^- path: /m.test(String(mdSkill.text)), String(mdSkill.text).slice(0, 80));
+  // 用「确认非 skill」的卡测过滤，避免主库 skill 比例变化把这条断言打成 flaky
+  const pool = (allList.length ? allList : cardList).filter((c) => c.kind !== 'skill').slice(0, 3);
+  if (pool.length) {
+    const saveSkill = await api('/api/assign', { method: 'POST', body: JSON.stringify({ agent, cards: pool.map((c) => c.path), mode: { skillsOnly: true, autoSync: true } }) });
+    const mdSkill = await api('/api/assign/' + agent + '.md');
+    const okAll = saveSkill.status === 200
+      && new RegExp('已过滤\\s*' + pool.length + '\\s*张非技能卡').test(String(mdSkill.text))
+      && !/^- path: /m.test(String(mdSkill.text));
+    check('AC-5.3 skillsOnly filters non-skill cards and reports count', okAll, `过滤 ${pool.length} 张 · ${String(mdSkill.text).slice(0, 60)}`);
+  } else {
+    skip('AC-5.3 skillsOnly filters non-skill cards', '库里没有非 skill 卡可用来测过滤');
+  }
   await api('/api/assign', { method: 'POST', body: JSON.stringify({ agent, cards: paths.slice(0, 3), mode: { skillsOnly: false, autoSync: true } }) });
 } else {
   skip('AC-5.1/5.2/5.3 assign endpoint', '隔离库 mem-purge 还没有 3 张卡可供分发测试');

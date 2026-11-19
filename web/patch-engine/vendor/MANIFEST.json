@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "vendored_at": "2026-11-18T09:25:00.046Z",
+  "upstream": {
+    "root": "F:/MyApp/dsh-purge-v1.1.71",
+    "package": "dsh-purge",
+    "version": "1.1.71"
+  },
+  "entry": "web/patch-engine/vendor/core.js",
+  "modules": [
+    {
+      "rel": "lib/core.js",
+      "size": 344503,
+      "sha256": "f3ae3105988bf84c381d9d4a2b5e24443327ad91472c5735cfc658ac9c89a654"
+    },
+    {
+      "rel": "lib/desktop.js",
+      "size": 71334,
+      "sha256": "b0fb707fb1024239c0d0177c277e1e184d5996e806c293559e35d2b2e1ef44b9"
+    },
+    {
+      "rel": "lib/asset-table.js",
+      "size": 16684,
+      "sha256": "ce1321ecb003a0d3595ff8140d6f5740829aba9f086e4d343171e6b91a91fb6b"
+    },
+    {
+      "rel": "lib/extract-asar.js",
+      "size": 15744,
+      "sha256": "5a235a2e0040aad7e981197821347672f7b068bd350d16e0be8ca4c4305699a0"
+    },
+    {
+      "rel": "lib/hide-console.js",
+      "size": 11804,
+      "sha256": "93509f224c9884fa4483bbd47940fc18bb84060a7760315d1f64248ebb1d66f9"
+    },
+    {
+      "rel": "lib/hooks-deny.js",
+      "size": 8054,
+      "sha256": "77b3bf38048df223b5f8ca7625b92bf9e229bbb6fc8672bbb407d273b8e2474e"
+    },
+    {
+      "rel": "lib/surface.js",
+      "size": 3838,
+      "sha256": "c27259aa8deb2e3f576a1c8a065f3c13b3b4a9efc80a0509259fcdce6df2aed2"
+    },
+    {
+      "rel": "lib/official-update.js",
+      "size": 1832,
+      "sha256": "b044b2bd748026e6e6b6154313b9f5161e064b3286bc50a768b5543f409626f9"
+    },
+    {
+      "rel": "lib/table-key.js",
+      "size": 915,
+      "sha256": "cd7ab3512992f35f5bc08150da245f60bf4f11efbf83f3120583a8e7ef821cda"
+    },
+    {
+      "rel": "lib/phase1-keep.js",
+      "size": 904,
+      "sha256": "ed5beaf3339ec1e33765aa2b2bbd2d40c0b30c90476621e593b0e79e7d1b5104"
+    },
+    {
+      "rel": "lib/host-clean.js",
+      "size": 819,
+      "sha256": "355623495de5a7e622bc70af12ab570a482a6f1f52bc0f9d8c0775ffb445077c"
+    },
+    {
+      "rel": "lib/table-read.js",
+      "size": 567,
+      "sha256": "b97cd96220253eadacb1f9164bf574287b3eda7b5d9c2fad41911993ade8bf8e"
+    }
+  ],
+  "moduleCount": 12,
+  "assets": [
+    {
+      "rel": "lib/child-process-hide.mjs",
+      "size": 3010,
+      "sha256": "d22546fd288373c529376835acb5dd2d54c96261c7a9c7f42f6ca44251668088",
+      "role": "asset"
+    },
+    {
+      "rel": "lib/restart-desktop.js",
+      "size": 14482,
+      "sha256": "7814cd28a2bc71382889bbb192273e3b94a831c60ca5db50655cdecf6d5c55ea",
+      "role": "asset"
+    }
+  ],
+  "totalBytes": 494490,
+  "bareImports": [],
+  "missing": [],
+  "note": "只含 lib/core.js 的相对 import 闭包 + 被当数据读取的旁挂资产；不含 redteam/* 与 client.js。重新生成：node scripts/vendor-dsh-engine.mjs"
+}

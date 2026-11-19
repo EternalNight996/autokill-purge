@@ -980,7 +980,11 @@ body.mem-mode #app > main {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* main 基础样式里有 align-items:start（给 grid 用），在 flex 列里会把 #page 收缩成 300px 宽 */
+  align-items: stretch;
 }
+/* 记忆库整页只放面板：右侧注入状态栏在这一页不出现（否则被压成 300×121 的小窗） */
+body.mem-mode .inject-rail { display: none; }
 
 /* 普通模式装备页：装备包/能力卡要能一眼看出选中 */
 .pick[aria-pressed="true"] {
@@ -1451,4 +1455,163 @@ body[data-theme="terminal"] #nav a[aria-current="page"] {
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---- 顶部宿主切换器（第一步骨架） ---- */
+.host-pick { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; }
+.host-pick .mini { color: var(--faint); font-size: 11px; }
+.host-pick select {
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 2px 6px; font: inherit; font-size: 12px;
+}
+.host-pick select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 破甲台顶部：宿主 + 已支持版本 */
+.s-hostsupport { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+  padding: 6px 10px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg-soft); font-size: 12px; color: var(--ink); }
+.s-hostsupport b { font-weight: 600; }
+.s-hostsupport .mini { color: var(--faint); font-size: 11px; }
+.s-hostsupport .sep { color: var(--faint); }
+
+/* 破甲台：第一屏操作条（方式 + 模型并排，窄屏堆叠） */
+.s-opbar { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.s-opbar.three { grid-template-columns: 1.1fr 1.4fr 1.1fr; }
+.s-opbar.three.eq { grid-template-columns: 1fr 1fr 1fr; align-items: start; }
+.s-opbar.one { grid-template-columns: 1fr; }
+.s-opbar.two { grid-template-columns: 1fr 1fr; align-items: start; }
+.s-opbar .field { margin: 0; }
+@media (max-width: 720px) { .s-opbar.three { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .s-opbar { grid-template-columns: 1fr; } }
+
+/* 多选下拉（模型 / 补丁）：details 当浮层，不挤压上下布局，勾选不重绘整页 */
+.s-multi { position: relative; }
+.s-multi > summary { display: block; min-height: 34px; box-sizing: border-box;
+  padding: 7px 26px 7px 10px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+  background: var(--panel); font-size: 13px; color: var(--ink); line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-multi > summary::after { content: "▾"; position: absolute; right: 9px; top: 9px; color: var(--faint); font-size: 11px; }
+.s-multi > summary .cnt { color: var(--ink); }
+.s-multi[open] > summary { border-color: var(--accent-line); }
+.s-multi-list { position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 4px);
+  max-height: 280px; overflow: auto; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--panel); box-shadow: 0 12px 32px rgba(0, 0, 0, .45); padding: 6px;
+  display: grid; gap: 2px; }
+.m-pick { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; font-size: 13px; }
+.m-pick:hover { background: var(--accent-soft); }
+.m-pick input { margin: 0; }
+.m-pick > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 补丁条目：中文名 +（层 · 状态 · 英文常量）两行 */
+.m-pick .mp-main { display: flex; flex-direction: column; min-width: 0; gap: 1px; overflow: hidden; }
+.m-pick .mp-main .t { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-pick .mp-main .s { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 已补的整行加绿标，未补的保持原色（一眼分辨哪些已经打过） */
+.m-pick[data-status="applied"] { border-left: 2px solid #16a34a; padding-left: 6px; }
+.m-pick[data-status="applied"] .mp-main .t { color: var(--dim); }
+.m-pick[data-status="pending"] { border-left: 2px solid #d97706; padding-left: 6px; }
+.m-pick[data-status="missing_file"] { border-left: 2px solid #d97706; padding-left: 6px; }
+
+/* 补丁清单是常驻列表（不是弹层），用 static 覆盖浮层定位 */
+.s-multi-list.static { position: static; box-shadow: none; max-height: 240px; }
+
+/* 主按钮下方的操作结果（应用/卸载后立刻可见） */
+.s-result { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; font-size: 12.5px; line-height: 1.5; }
+.s-result.ok { background: rgba(22, 163, 74, .12); border: 1px solid rgba(22, 163, 74, .45); color: #86efac; }
+.s-result.bad { background: rgba(185, 28, 28, .12); border: 1px solid rgba(185, 28, 28, .5); color: #fca5a5; }
+/* 一并装备：多选预设 + 逐项配置 */
+.s-actions { display: flex; gap: 8px; align-items: stretch; }
+.s-actions .s-generate { flex: 1; }
+.s-actions .secondary { white-space: nowrap; }
+/* 卸载类动作统一红色（危险操作，别和主按钮混） */
+button.danger, .secondary.danger {
+  background: #451a1a; color: #fca5a5; border: 1px solid #b91c1c;
+}
+button.danger:hover { background: #b91c1c; color: #fff; border-color: #dc2626; }
+button.danger:focus-visible { outline: 2px solid #f87171; outline-offset: 1px; }
+.s-multi-list.eq-list { min-width: 460px; max-height: 420px; }
+.eq-preset { border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-bottom: 4px; }
+.eq-preset:last-of-type { border-bottom: 0; }
+.eq-items { display: grid; gap: 1px; margin: 2px 0 6px; padding-left: 20px; border-left: 1px dashed var(--line); }
+/* 操作台里的装备明细 */
+.eq-wrap { padding: 0 10px; }
+.eq-head { display: flex; align-items: center; gap: 8px; padding: 6px 0 2px; font-size: 13px; }
+.eq-head b { font-weight: 600; }
+.eq-head .mini { color: var(--faint); font-size: 11px; }
+.eq-head button { margin-left: 0; }
+.eq-head button:first-of-type { margin-left: auto; }
+
+/* 操作台里的子折叠（本轮补丁） */
+.ops-sub { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin: 8px 0; }
+.ops-sub > summary { padding: 8px 10px; cursor: pointer; font-size: 13px; color: var(--dim); }
+.ops-sub[open] > summary { color: var(--ink); border-bottom: 1px solid var(--line); }
+.ops-sub > *:not(summary) { padding: 0 10px; }
+.ops-sub > *:last-child { padding-bottom: 10px; }
+
+/* ---- 高级折叠：默认收起，展开状态记在 S.simple.advOpen ---- */
+.adv-fold { margin-top: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-soft); }
+.adv-fold > summary { padding: 10px 14px; cursor: pointer; color: var(--dim); font-size: 13px; }
+.adv-fold[open] > summary { border-bottom: 1px solid var(--line); color: var(--ink); }
+.adv-fold > *:not(summary) { padding-left: 14px; padding-right: 14px; }
+.adv-fold > *:last-child { padding-bottom: 12px; }
+
+/* ---------------------------------------------------------------- 右侧注入状态栏 */
+main {
+  width: min(1560px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 336px;
+  gap: 20px;
+  align-items: start;
+}
+#globalAlert, #page { grid-column: 1; }
+.inject-rail {
+  grid-column: 2;
+  position: sticky;
+  top: 74px;
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 20px;
+}
+.inject-rail .rail-card {
+  border: 1px solid var(--line, #2a2f37);
+  border-radius: 12px;
+  padding: 12px 13px;
+  background: var(--surface, rgba(255, 255, 255, .02));
+}
+.inject-rail .rail-card h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted, #8b949e);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.inject-rail .rail-kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; line-height: 1.9; }
+.inject-rail .rail-kv span:first-child { color: var(--muted, #8b949e); flex: 0 0 auto; }
+.inject-rail .rail-kv span:last-child { text-align: right; word-break: break-all; }
+.inject-rail .rail-num { font-variant-numeric: tabular-nums; font-weight: 600; }
+.inject-rail .rail-bar { height: 6px; border-radius: 999px; background: rgba(127,127,127,.18); overflow: hidden; display: flex; margin: 6px 0 4px; }
+.inject-rail .rail-bar i { display: block; height: 100%; }
+.inject-rail .rail-bar .ok { background: var(--ok, #3fb950); }
+.inject-rail .rail-bar .wait { background: var(--warn, #d29922); }
+.inject-rail .rail-bar .fail { background: var(--bad, #f85149); }
+.inject-rail .rail-bar .na { background: rgba(127,127,127,.35); }
+.inject-rail .rail-list { margin: 6px 0 0; padding: 0; list-style: none; font-size: 11.5px; line-height: 1.7; }
+.inject-rail .rail-list li { display: flex; justify-content: space-between; gap: 8px; }
+.inject-rail .rail-list li b { font-weight: 600; }
+.inject-rail .rail-plug { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; line-height: 1.9; }
+.inject-rail .rail-plug em { font-style: normal; color: var(--muted, #8b949e); }
+.inject-rail .rail-dots { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.inject-rail .rail-dot { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line, #2a2f37); }
+.inject-rail .rail-dot.on { border-color: var(--ok, #3fb950); color: var(--ok, #3fb950); }
+.inject-rail .rail-dot.off { opacity: .5; }
+.inject-rail .rail-foot { font-size: 11px; color: var(--muted, #8b949e); text-align: right; }
+
+@media (max-width: 1180px) {
+  main { grid-template-columns: minmax(0, 1fr); width: min(1180px, 100%); }
+  .inject-rail { grid-column: 1; position: static; max-height: none; order: -1; }
+  .inject-rail .rail-card { padding: 10px 12px; }
 }

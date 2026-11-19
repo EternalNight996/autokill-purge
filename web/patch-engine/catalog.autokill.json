@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "host": "autokill",
+  "name": "AutoKill · 宿主补丁目录（配置层）",
+  "upstream": {
+    "package": "autokill",
+    "version": "verified 0.6.1",
+    "root": "%LOCALAPPDATA%\\Programs\\AutoKill",
+    "config": "%APPDATA%\\autokill\\config.toml",
+    "note": "Rust 编译宿主：autokill.exe / autokill-cli.exe 无可 patch 的 JS 源码，补丁只能落在 config.toml 配置层与 CLI 后端开关上"
+  },
+  "generated_at": "2026-11-18T02:15:00.000Z",
+  "anchor_policy": {
+    "must_be_unique": true,
+    "note": "TOML 键必须唯一；写入走文本级替换（一次写盘），不走 settings_set（多次异步落盘会互相覆盖）"
+  },
+  "verification": {
+    "after_apply": "用 autokill-cli settings_show 读回，或直接解析 config.toml 比对键值",
+    "revert": "按每条 patch 的 was 值写回（不依赖 .bak）",
+    "restart": "桌面端在跑时会持有内存配置，改完需重启 AutoKill 或先退出托盘"
+  },
+  "count": 9,
+  "patches": [
+    { "id": "ak-no-ask", "name": "ASK_BEFORE_RUNNING_OFF", "layer": "配置", "kind": "setting", "key": "ask_before_running", "was": true, "target": false, "desc": "不弹审批直接执行", "risk": "误操作没有拦截" },
+    { "id": "ak-deep", "name": "DEEP_MODE_ON", "layer": "配置", "kind": "setting", "key": "deep_mode", "was": false, "target": true, "desc": "深度模式（读目标代码/文件/页面源码）", "risk": "会读更多目标内容" },
+    { "id": "ak-runtime", "name": "RUNTIME_STUDY_ON", "layer": "配置", "kind": "setting", "key": "runtime_study", "was": false, "target": true, "desc": "运行时研究（跑起来观察）", "risk": "会真的执行目标" },
+    { "id": "ak-budget", "name": "BUDGET_50", "layer": "配置", "kind": "setting", "key": "assets.budget_usd", "was": 5, "target": 50, "desc": "预算上限 5 → 50", "risk": "花钱更多" },
+    { "id": "ak-good", "name": "GOOD_ENOUGH_75", "layer": "配置", "kind": "setting", "key": "build.good_enough", "was": 90, "target": 75, "desc": "收敛门槛 90 → 75（更快出结果）", "risk": "质量可能下降" },
+    { "id": "ak-rounds", "name": "MAX_ROUNDS_12", "layer": "配置", "kind": "setting", "key": "build.max_rounds", "was": 6, "target": 12, "desc": "迭代轮数 6 → 12", "risk": "更久" },
+    { "id": "ak-parallel", "name": "PARALLEL_4", "layer": "配置", "kind": "setting", "key": "build.parallel", "was": 2, "target": 4, "desc": "并行 2 → 4", "risk": "吃资源" },
+    { "id": "ak-ai-codex", "name": "AI_CODEX_ON", "layer": "后端", "kind": "ai", "name_enabled": "Codex", "was": "off", "target": "on", "desc": "启用 Codex 后端（走 CLI：autokill-cli ai on Codex）", "risk": "多挂一个后端", "needs_cli": true },
+    { "id": "ak-ai-claude", "name": "AI_CLAUDE_ON", "layer": "后端", "kind": "ai", "name_enabled": "Claude Code", "was": "off", "target": "on", "desc": "启用 Claude Code 后端（走 CLI：autokill-cli ai on \"Claude Code\"）", "risk": "多挂一个后端", "needs_cli": true }
+  ]
+}

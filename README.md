@@ -37,12 +37,13 @@ node scripts/install-desktop.mjs   # 加桌面图标 + 开机自启（Windows）
 
 | 能力 | 具体 |
 |---|---|
-| **破甲** | dsh-purge 1.1.71 全套内容 + **83 条宿主补丁中英对照**，绿=已注入 / 红=失败 / 灰=跳过 |
+| **破甲** | **小码酱 · 梦神破甲** 模板（随包版本，当前 1.1.14）+ **83 条宿主补丁中英对照**，绿=已注入 / 红=失败 / 灰=跳过 + **落地并重启宿主**（密封 asar 必须让位才生效） |
 | **回滚** | 每次写入前自动快照；一键还原到出厂（官方 asar 原件覆盖），失败自动回滚 |
 | **载荷** | 27+ 模型实时识别（可多选→智能匹配）、12 种技术、文本/Base64/ROT13 三变体、二进制 `break` 七动作 |
 | **装备** | 6 个装备包可多选、按包分页、挂真实技能名，连「已破甲模型」一起装给 dsh / mengbot / autokill |
 | **记忆库** | 内嵌 memory-eternal（独立库 `mem-purge` @ 7989，不碰你的运营库），MEM Pair 配对互传卡 |
 | **MCP** | 管理本机 MCP 服务器，**真握手**（initialize → tools/list），导出 Claude / Cursor 可用 JSON |
+| **补齐** | dsh-purge 的 5 项宿主内能力做成外部等价物：**reapply**（启动重放 / 官方升级回写）、**restart**（复用上游优雅重启）、**identity**（片段库编译成 prompt-inject.md）、**rewind**（多帧 zstd 会话回溯）、**redteam-pack**（48 技能 + 3 角色落地，58 个 redteam_* 工具体检托管） |
 | **主题** | 7 套：军工橙（默认）/ 终端黑 / 工程灰 / 矩阵绿 / 赛博青 / 琥珀 CRT / 默认蓝 |
 
 ## 📊 对比同类
@@ -85,7 +86,7 @@ npm test    # acceptance 21 · ux2layer 18 · ux2layer-ui 16 · ac-check 19
 
 ## English
 
-**One command, a full control console for dsh-purge.**
+**One command, a full control console for autokill-purge.**
 
 ```bash
 npm i -g autokill-purge && autokill-purge
@@ -93,7 +94,7 @@ npm i -g autokill-purge && autokill-purge
 
 | Feature | What you get |
 |---|---|
-| Purge | Full dsh-purge 1.1.71 content + **83 host patches with bilingual labels and tri-state colors** |
+| Purge | **小码酱 · 梦神破甲** template (follows the package version, currently 1.1.12) + **83 host patches with bilingual labels and tri-state colors** |
 | Rollback | Auto snapshot before every write, factory restore from the official asar, auto-rollback on failure |
 | Payload | 27+ live models (multi-select → smart match), 12 techniques, text / Base64 / ROT13, 7 binary `break` actions |
 | Equipment | 6 multi-selectable packs, paged by pack, real skill names, cracked models included |

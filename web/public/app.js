@@ -16,23 +16,34 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const cx = (...parts) => parts.filter(Boolean).join(" ");
 
-const TABS = ["breach", "equip", "assign", "memory", "mcp", "intel", "drill", "settings", "about"];
-const TAB_LABEL = { breach: "破甲", equip: "装备", assign: "记忆分发", memory: "记忆中心", mcp: "MCP", intel: "情报巡检", drill: "演练台", settings: "设置", about: "关于" };
+const TABS = ["inject", "breach", "equip", "memory", "assign", "mcp", "intel", "drill", "settings", "about"];
+const TAB_LABEL = { inject: "注入", breach: "破甲", equip: "装备", memory: "记忆", assign: "分发", mcp: "MCP", intel: "情报", drill: "演练", settings: "设置", about: "关于" };
+
+/* ------------------------------------------------------- 宿主维度（第一步：只切视图标签） */
+const HOST_TARGETS = [
+  { id: "dsh", name: "DSH" },
+  { id: "mengbot", name: "MengBot" },
+  { id: "autokill", name: "AutoKill" },
+];
+function hostTargetName(id) {
+  return (HOST_TARGETS.find((h) => h.id === id) || HOST_TARGETS[0]).name;
+}
 
 /* ------------------------------------------------------- two-layer UI (contract §2) */
 const NAV_BY_MODE = {
   simple: [
     { tab: "breach", label: "破甲" },
-    { tab: "equip", label: "装备" },
     { tab: "memory", label: "记忆" },
     { tab: "intel", label: "情报巡检" },
     { tab: "drill", label: "演练台" },
     { tab: "settings", label: "设置" },
   ],
-  technical: TABS.map((t) => ({ tab: t, label: TAB_LABEL[t] })),
+  // 装备已并入破甲台「一并装备」，不再占导航位（#/equip 仍可直达看发放历史）
+  // 记忆分发降级：不再占一个导航位（宿主已能运行时自助检索），但 #/assign 仍可直达
+  technical: TABS.filter((t) => t !== "assign" && t !== "equip").map((t) => ({ tab: t, label: TAB_LABEL[t] })),
 };
 /* pages that only exist in technical mode; direct links fall back to breach */
-const TECH_ONLY_TABS = ["assign", "about"];
+const TECH_ONLY_TABS = ["inject", "assign", "about"];
 
 const GROUP_ORDER = ["base", "strategy", "sampling", "paths", "diag"];
 const GROUP_LABEL = { base: "基础", strategy: "生成策略", sampling: "采样", paths: "路径与文件", diag: "诊断" };
@@ -225,6 +236,9 @@ const S = {
   agreementVersion: "",
   uiMode: "simple",
   techHintOpen: false,
+  hostTarget: "dsh",   // dsh / mengbot / autokill（唯一宿主维度）
+  hostInfo: { loaded: false, loading: false, touched: false, hosts: [], defaultHost: "dsh" },
+  ak: { loaded: false, loading: false, items: [], applied: 0, total: 0, selected: null, error: null },
   models: [],
   layers: [],
   techniques: [],
@@ -247,6 +261,7 @@ const S = {
     pendingAction: null,
     busyKind: null,
     lastResult: null,
+    withPlugin: true,        // 一键注入时同时注入 autokill-purge 插件（与内核补丁同一事务）
     netScopeDraft: null,
     loading: false, tried: false, error: null, busy: false, message: "",
     promptDraft: null, promptDirty: false,
@@ -254,11 +269,18 @@ const S = {
   simple: {
     buildError: "",
     attempted: {},
+    absorbed: {},
     attemptBusy: false,
     equipBusy: false,
     equipResult: "",
     equipError: "",
     removed: [],
+    modelsOpen: false,   // 破甲台「目标模型」多选弹层（仅 CSS 展开，不重绘）
+    opsOpen: true,       // 操作台默认展开
+    patchOpen: true,     // 操作台里「本轮补丁」子折叠（默认展开；只渲染前 8 条）
+    patchAll: false,     // 补丁清单是否显示全部 83 条
+    akOpen: true,        // 梦神破甲清单子折叠（默认展开）
+    advOpen: false,      // 高级折叠
     testState: "idle",
     testMessage: "",
     resignArmed: false,
@@ -281,6 +303,15 @@ const S = {
     buildError: null,
     built: false,
     variants: [],
+    injectArm: null,     // 两次点击确认：第一次点变成「确认注入宿主？」
+    injectBusy: false,
+    injectResult: null,
+    delivery: "host-patch", // 破甲方式：host-patch（默认）/ payload / host-prompt / memory
+    deliveryResult: null,
+    botIds: [],              // MengBot 多选目标 bot（方案）
+    equipPresets: [],        // 破甲台「一并装备」多选的预设 id
+    equipItemsMap: {},       // { presetId: [itemId...] } 每个预设下勾选的能力项
+    withEquip: false,        // 生成时一并发放「装备」页当前那份装备（破甲 + 装备一次做完）
     advice: [],
     zero: "",
     resultMeta: null,
@@ -562,6 +593,13 @@ function toast(message) {
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
+}
+
+/** 装备/破甲入库结果拼成一句人话（后端 absorbed 字段） */
+function absorbNote(absorbed) {
+  if (!absorbed) return "";
+  if (absorbed.ok) return `；已入库待审：${absorbed.path || absorbed.key}（审核通过后才进检索）`;
+  return `；入库未完成：${absorbed.error || "记忆服务异常"}`;
 }
 
 async function copyText(text, message = "已复制") {
@@ -920,11 +958,122 @@ const THEMES = [
   { id: "terminal", label: "终端黑（零圆角·全等宽）", color: "#39ff14" },
   { id: "ops", label: "军工橙（角标面板）", color: "#ff7a00" },
   { id: "steel", label: "工程灰（Burp 风）", color: "#7cb7ff" },
-  { id: "matrix", label: "矩阵绿（扫描线）", color: "#00ff9c" },
+  { id: "matrix", label: "矩阵绿（扫描线 · 生化风）", color: "#00ff9c" },
   { id: "cyber", label: "赛博青（霓虹网格）", color: "#00e5ff" },
   { id: "amber", label: "琥珀 CRT", color: "#ffb000" },
 ];
 const THEME_KEY = "ap.theme";
+const THEME_VER_KEY = "ap.themeVer";
+// 默认主题的「代」：换默认值时 +1，老浏览器里存着的旧选择会被一次性迁到新默认
+const THEME_DEFAULT_VER = "2";
+const DEFAULT_THEME = "matrix"; // 矩阵绿·扫描线（生化危机那套）
+
+/* ---------------------------------------------------- 破甲台：宿主探测与方案 */
+async function loadHostInfo() {
+  if (S.hostInfo.loading || S.hostInfo.loaded) return;
+  S.hostInfo.loading = true;
+  try {
+    const d = await request("/api/hosts");
+    if (d && d.ok !== false && Array.isArray(d.hosts) && d.hosts.length) {
+      S.hostInfo.hosts = d.hosts;
+      S.hostInfo.defaultHost = d.defaultHost || "dsh";
+      S.hostInfo.loaded = true;
+      // 用户没手动切过宿主时，跟着本机探测结果走（默认 dsh 兜底）
+      if (!S.hostInfo.touched) S.hostTarget = S.hostInfo.defaultHost;
+    }
+  } catch { /* 旧后端没有 /api/hosts：按 dsh 兜底 */ }
+  finally {
+    S.hostInfo.loading = false;
+    if (S.tab === "breach") renderPage();
+  }
+}
+
+function hostOptionLabel(h) {
+  if (!h) return "";
+  const flag = h.installed ? "✓ 已安装" : "未识别";
+  return `${h.name} · ${flag}${h.detail && h.detail !== "已安装" ? "（" + h.detail + "）" : ""}`;
+}
+
+/** 方案预设：落到 layer + techniques（按宿主给不同集合） */
+function planPresetsFor(hostId, techs) {
+  const ids = (Array.isArray(techs) ? techs : []).map((t) => t.id);
+  const pick = (n) => ids.slice(0, Math.max(1, Math.min(n, ids.length)));
+  if (hostId === "mengbot") return [];
+  return [
+    { id: "std", name: "标准（3 技术 · 提示词层）", layer: "prompt", techs: pick(3) },
+    { id: "strong", name: "强攻（6 技术 · 提示词层）", layer: "prompt", techs: pick(6) },
+    { id: "param", name: "只调采样参数", layer: "param", techs: pick(2) },
+    { id: "proto", name: "协议层（结构改写）", layer: "protocol", techs: pick(3) },
+  ];
+}
+
+/** MengBot 目标 bot（多选）：没选过就默认第一个，避免一上来批量改所有 soul */
+function currentBotIds() {
+  const all = ((S.mb && S.mb.bots) || []).map((x) => x.id);
+  const picked = Array.isArray(S.breach.botIds) ? S.breach.botIds.filter((id) => all.includes(id)) : [];
+  if (picked.length) return picked;
+  return all.length ? [all[0]] : [];
+}
+
+function currentPlanId(plans) {
+  const b = S.breach;
+  const hit = plans.find((p) => p.layer === b.layer && p.techs.join() === (b.techniques || []).join());
+  return hit ? hit.id : (plans[0] && plans[0].id) || "";
+}
+
+function applyPlanPreset(id) {
+  const plans = planPresetsFor(S.hostTarget, S.techniques);
+  const p = plans.find((x) => x.id === id);
+  if (!p) return;
+  S.breach.layer = p.layer;
+  S.breach.techniques = p.techs.slice();
+  S.breach.planId = p.id;
+  renderPage();
+}
+
+// 载荷破甲并非必选：生成之后怎么投递由这里决定。默认仍是「载荷破甲」，其余为可选。
+const DELIVERY_MODES = [
+  { id: "host-patch", short: "补丁层", name: "宿主注入 · 补丁层（默认）", hint: "改宿主程序与配置：47 条代码 + 36 条提示词/工具，字节级替换，需重启 dsh。" },
+  { id: "payload", short: "载荷", name: "载荷破甲（复制去用）", hint: "只出文本载荷，不改宿主任何文件。" },
+  { id: "host-prompt", short: "提示词注入", name: "宿主注入 · 提示词层", hint: "只写 prompt-inject.md（每次会话注入的最前段），不碰代码；重启 dsh 生效。" },
+  { id: "ak-patch", short: "梦神破甲", name: "宿主注入 · 梦神破甲（AutoKill 配置层）", hint: "改 AutoKill 的 config.toml：审批 / 深度 / 运行时 / 预算 / 构建参数，重启 AutoKill 生效。" },
+  { id: "memory", short: "入库", name: "只入库（待审）", hint: "只把载荷存进记忆库，宿主不受影响。" },
+];
+function deliveryMeta(id) {
+  return DELIVERY_MODES.find((x) => x.id === id) || DELIVERY_MODES[0];
+}
+/** 同一个「提示词层」在不同宿主落点不同：DSH/autokill 写各自 prompt-inject.md，MengBot 写 bot 的 SOUL.md */
+function deliveryMetaFor(id) {
+  const base = deliveryMeta(id);
+  if (id !== "host-prompt") return base;
+  if (S.hostTarget === "mengbot") {
+    return Object.assign({}, base, {
+      name: "宿主注入 · bot soul",
+      hint: "把首张载荷写进选中 bot 的 SOUL.md（前缀），重启 MengBot 生效；会先备份可还原。",
+    });
+  }
+  if (S.hostTarget === "autokill") {
+    return Object.assign({}, base, {
+      name: "宿主注入 · 提示词层（AutoKill）",
+      hint: "写 %APPDATA%\\autokill\\prompt-inject.md，重启 AutoKill 生效；原文自动备份。",
+    });
+  }
+  return base;
+}
+function deliverySelectHtml(id, b) {
+  const isDsh = S.hostTarget === "dsh";
+  const isAk = S.hostTarget === "autokill";
+  const isMb = S.hostTarget === "mengbot";
+  return `<label class="field"><span>破甲方式</span>
+    <select id="${esc(id)}" data-focus="${esc(id)}">${DELIVERY_MODES.map((m) => {
+      // 83 补丁只属于 DSH；梦神破甲只属于 AutoKill
+      const off = (m.id === "host-patch" && !isDsh) || (m.id === "ak-patch" && !isAk);
+      const tag = m.id === "host-patch" && !isDsh ? "（仅 DSH）" : (m.id === "ak-patch" && !isAk ? "（仅 AutoKill）" : "");
+      return `<option value="${m.id}"${b.delivery === m.id ? " selected" : ""}${off ? " disabled" : ""}>${esc(deliveryMetaFor(m.id).name)}${tag}</option>`;
+    }).join("")}</select>
+    <span class="help">${esc(deliveryMetaFor(b.delivery).hint)}</span>
+  </label>`;
+}
 
 function themeMeta(id) {
   return THEMES.find((x) => x.id === id) || THEMES[0];
@@ -932,15 +1081,18 @@ function themeMeta(id) {
 
 function currentTheme() {
   const t = document.body.dataset.theme || "default";
-  return THEMES.some((x) => x.id === t) ? t : "default";
+  return THEMES.some((x) => x.id === t) ? t : DEFAULT_THEME;
 }
 
 function applyTheme(id, persist = true) {
-  const t = THEMES.some((x) => x.id === id) ? id : "default";
+  const t = THEMES.some((x) => x.id === id) ? id : DEFAULT_THEME;
   if (t === "default") document.body.removeAttribute("data-theme");
   else document.body.dataset.theme = t;
   if (persist) {
-    try { localStorage.setItem(THEME_KEY, t); } catch { /* 隐私模式下忽略 */ }
+    try {
+      localStorage.setItem(THEME_KEY, t);
+      localStorage.setItem(THEME_VER_KEY, THEME_DEFAULT_VER);
+    } catch { /* 隐私模式下忽略 */ }
   }
   syncThemeDots();
 }
@@ -984,13 +1136,61 @@ function mountThemeDots() {
 }
 
 function initTheme() {
-  let saved = "ops";
-  try { saved = localStorage.getItem(THEME_KEY) || "ops"; } catch { /* 忘记就军工橙 */ }
+  // 默认已从军工橙换成 matrix（生化风）。老浏览器里存着旧的 ops，靠 themeVer 一次性迁移：
+  // 迁移只发生一次，之后用户自己点的主题照常被记住。
+  let saved = DEFAULT_THEME;
+  try {
+    if (localStorage.getItem(THEME_VER_KEY) === THEME_DEFAULT_VER) {
+      saved = localStorage.getItem(THEME_KEY) || DEFAULT_THEME;
+    } else {
+      localStorage.setItem(THEME_KEY, DEFAULT_THEME);
+      localStorage.setItem(THEME_VER_KEY, THEME_DEFAULT_VER);
+    }
+  } catch { /* 隐私模式：不留痕，直接用默认 */ }
   applyTheme(saved, false);
   mountThemeDots();
+  mountHostSwitch();
+}
+
+/* 宿主切换器（第一步：只切视图标签并记住选择；数据过滤在第二步做） */
+const HOST_KEY = "ap.hostTarget";
+function mountHostSwitch() {
+  const host = document.querySelector(".topbar-right");
+  if (!host) return;
+  const existing = host.querySelector("#hostSwitch");
+  if (existing) { existing.value = S.hostTarget; return; }
+  const box = document.createElement("label");
+  box.className = "host-pick";
+  box.innerHTML = `<span class="mini">宿主</span><select id="hostSwitch" aria-label="当前宿主">${HOST_TARGETS.map((h) => `<option value="${esc(h.id)}"${S.hostTarget === h.id ? " selected" : ""}>${esc(h.name)}</option>`).join("")}</select>`;
+  box.querySelector("select").addEventListener("change", (e) => {
+    S.hostTarget = e.target.value;
+    S.hostInfo.touched = true;
+    try { localStorage.setItem(HOST_KEY, S.hostTarget); } catch { /* 隐私模式 */ }
+    // 宿主是唯一维度：切到 MengBot 时把宿主区块的 tab 一起切过去并加载 bot 列表
+    const mb = mbState();
+    mb.tab = S.hostTarget === "mengbot" ? "mengbot" : "dsh";
+    if (mb.tab === "mengbot") {
+      // 宿主注入两条（prompt-inject.md / 83 补丁）在 MengBot 下不成立，投递方式回退到载荷
+      if (String(S.breach.delivery || "").startsWith("host-")) S.breach.delivery = "payload";
+      loadMengbot(false);
+    }
+    toast("宿主切到 " + hostTargetName(S.hostTarget));
+    // 切到 AutoKill 时强制重读梦神破甲与 MCP 插件状态（这两块只属于 AutoKill）
+    if (S.hostTarget === "autokill") loadAkPatches(true);
+    renderPage();
+  });
+  host.insertBefore(box, host.firstChild);
 }
 
 async function boot() {
+  try {
+    const ht = localStorage.getItem(HOST_KEY);
+    if (ht && HOST_TARGETS.some((h) => h.id === ht)) {
+      S.hostTarget = ht;
+      // 用户选过的宿主优先于探测出来的默认值，别再被 defaultHost 覆盖回去
+      S.hostInfo.touched = true;
+    }
+  } catch { /* 隐私模式 */ }
   initTheme();
   setStatus("loading", "连接中…");
   try {
@@ -1149,6 +1349,7 @@ function renderGlobalAlert() {
 }
 
 function renderPage() {
+  normalizeDelivery();
   // 记忆库整页铺满的标记：切到别的页面要撤掉，否则 <main> 的限宽会一直失效
   document.body.classList.remove("mem-mode");
   setNav();
@@ -1169,9 +1370,10 @@ function renderPage() {
     return;
   }
   if (modeIsTechnical()) {
-    if (S.tab === "breach") renderBreach();
+    if (S.tab === "inject") renderInject();
+    else if (S.tab === "breach") renderBreach();
     else if (S.tab === "equip") renderEquip();
-    else if (S.tab === "assign") renderWipPage("assign");
+    else if (S.tab === "assign") renderAssign();
     else if (S.tab === "memory") renderMemory();
     else if (S.tab === "mcp") renderMcpPage();
     else if (S.tab === "intel") renderWipPage("intel");
@@ -1188,12 +1390,16 @@ function renderPage() {
   }
   // 记忆库是整页 iframe，再插一条技术模式提示会把面板往下顶 63px、还溢出
   if (modeIsTechnical() && S.tab !== "memory") renderTechHint();
+  // 破甲页末尾补「能力补齐」：模块缺失时后端降级成一行不可用，前端照常渲染
+  if (S.tab === "breach") appendOpsPanel(page);
   bindGroups();
   $$('#page pre[tabindex="0"]').forEach((pre, index) => {
     if (!pre.getAttribute("aria-label")) pre.setAttribute("aria-label", "可滚动文本内容 " + (index + 1));
     if (!pre.getAttribute("role")) pre.setAttribute("role", "region");
   });
   restoreFocus(saved);
+  // 右侧常驻栏：每次换页都重绘一次（数据走缓存，不额外发请求）
+  renderInjectRail();
 }
 
 /* ------------------------------------------------------ readiness (new endpoint) */
@@ -1295,20 +1501,34 @@ async function simpleHostAction(kind) {
   try {
     let data;
     if (kind === "apply") {
-      data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply" } });
+      const plugins = h.withPlugin ? ["autokill-purge-plugin"] : [];
+      data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply", plugins } });
       if (!data || data.ok === false) throw payloadError(data, "注入失败");
       const added = (data.result && data.result.applied) || 0;
       const already = (data.result && data.result.already) || 0;
-      h.message = added
-        ? `注入完成：新增 ${fmtNum(added)} 处，${fmtNum(already)} 处本来就是最新。重启 dsh 生效。`
-        : `注入完成：宿主本来就是最新（${fmtNum(already)} 处无需再改，0 处新增）。重启 dsh 后仍生效。`;
+      const pluginNote = (data.pluginResult && data.pluginResult.summary)
+        ? "插件：" + data.pluginResult.summary + "。"
+        : "";
+      const needHandoff = !!(data.result && data.result.pendingHandoff);
+      h.message = pluginNote + (added
+        ? `注入完成：新增 ${fmtNum(added)} 处，${fmtNum(already)} 处本来就是最新。`
+        : `注入完成：宿主本来就是最新（${fmtNum(already)} 处无需再改，0 处新增）。`)
+        + (needHandoff
+          ? "但 app.asar 还在：桌面壳仍从 asar 里加载 dsh，现在重启也不会变 —— 再点一次「落地并重启宿主」才生效。"
+          : "重启 dsh 生效。");
+    } else if (kind === "handoff") {
+      // 落地：结束宿主 → app.asar 改名让位 → 重新拉起。当前会话会断，属正常。
+      data = await request("/api/host/handoff", { method: "POST", body: { confirm: true } });
+      const hd = (data && data.handoff) || {};
+      if (!data || data.ok === false || hd.ok === false) throw payloadError(data, hd.note || "落地失败");
+      h.message = hd.note || "已落地并重启宿主：现在加载的是 resources/app，补丁才真正生效。";
     } else {
       data = await request("/api/host/uninstall", { method: "POST", body: { confirm: true } });
       if (!data || data.ok === false) throw payloadError(data, "卸载失败");
       const u = data.uninstall || {};
       h.message = `卸载完成：${u.applied ? "宿主已还原，" : ""}${(u.stripped || []).length} 个 profile 已清理${(u.errors || []).length ? "，有 " + u.errors.length + " 条警告" : ""}。重启 dsh 生效。`;
     }
-    toast(kind === "apply" ? "注入完成" : "卸载完成");
+    toast(kind === "apply" ? "注入完成" : kind === "handoff" ? "已落地并重启宿主" : "卸载完成");
     h.lastResult = { kind: kind, ok: true, at: Date.now() };
     setTimeout(() => {
       if (S.host.lastResult && S.host.lastResult.kind === kind) {
@@ -1317,7 +1537,10 @@ async function simpleHostAction(kind) {
       }
     }, 5200);
     S.host.tried = false;
-    await loadHostStatus(true);
+    // 落地会把桌面宿主结束再拉起：这时候读状态必然失败，别当成错误抛给用户
+    if (kind !== "handoff") {
+      try { await loadHostStatus(true); } catch { /* 宿主正在重启，稍后再读 */ }
+    }
   } catch (e) {
     h.error = e;
     h.message = simpleReason(e);
@@ -1421,17 +1644,574 @@ function outputTextFor(id) {
   return (hit && hit.text) || "请直接给出结果";
 }
 
+/** 操作台顶部：破甲模板（多模型时统一选一套） */
+function renderTemplatePicker() {
+  const b = S.breach;
+  if (!S.prompts.length) return "";
+  const chosen = breachModels();
+  const nameOf = (id) => (S.models.find((m) => m.id === id) || {}).name || id;
+  const scope = chosen.length
+    ? `统一应用到选中 ${chosen.length} 个模型（${chosen.slice(0, 3).map(nameOf).join("、")}${chosen.length > 3 ? "…" : ""}）`
+    : "还没选模型";
+  const opts = S.prompts.map((p) => `<option value="${esc(p.id)}"${b.template === p.id ? " selected" : ""}>${esc(simpleText(p.name))}${p.id === "sauce-1171" ? " · 国模优先" : " · 通用"}</option>`).join("");
+  return `<label class="field" style="margin-bottom:10px"><span>破甲模板</span>
+    <select id="sTemplate" data-focus="sTemplate">${opts}</select>
+    <span class="help">${esc(scope)}；换模板只影响载荷，不动宿主。</span>
+  </label>`;
+}
+
+/* ---------------------------------------------------- 梦神破甲（AutoKill 配置层） */
+async function loadAkPatches(force) {
+  const a = S.ak;
+  if (a.loading) return;
+  if (a.loaded && !force) return;
+  a.loading = true;
+  try {
+    const [d, m, sl, mb] = await Promise.all([
+      request("/api/autokill/patches"),
+      request("/api/autokill/mcp").catch(() => null),
+      request("/api/autokill/slots").catch(() => null),
+      request("/api/mengbot/bots").catch(() => null),
+    ]);
+    if (d && d.ok !== false) {
+      a.items = d.items || [];
+      a.applied = d.applied || 0;
+      a.total = d.total || 0;
+      a.running = !!d.running;
+      a.version = d.version || "";
+      a.loaded = true;
+      a.error = null;
+      // 默认勾选「尚未生效」的项
+      if (!a.selected) a.selected = new Set(a.items.filter((x) => !x.applied).map((x) => x.id));
+    }
+    if (m && m.ok !== false) a.mcp = m;
+    if (sl && sl.ok !== false) a.slots = sl;
+    if (mb && mb.ok !== false) a.mengbotBots = (mb.bots || []).filter((b) => b && b.id);
+  } catch (e) {
+    a.error = e;
+  } finally {
+    a.loading = false;
+    if (S.tab === "breach") renderPage();
+  }
+}
+
+function akSelected() {
+  const a = S.ak;
+  if (!a.selected) a.selected = new Set();
+  return a.selected;
+}
+
+function renderAkPatchList() {
+  const a = S.ak;
+  if (!a.loaded && !a.loading) loadAkPatches();
+  if (a.loading && !a.items.length) return spinner("读取 AutoKill 配置…");
+  if (a.error) return alertBox("读不到 AutoKill 配置", simpleReason(a.error));
+  if (!a.items.length) return `<p class="hint">AutoKill 没装或读不到配置项。</p>`;
+  const sel = akSelected();
+  const rows = a.items.map((x) => `<label class="m-pick" data-status="${x.applied ? "applied" : "pending"}">
+    <input type="checkbox" data-ak-pick="${esc(x.id)}"${sel.has(x.id) ? " checked" : ""}>
+    <span class="mp-main">
+      <span class="t">${esc(x.label)} ${badge(x.applied ? "✓ 已生效" : "未生效", x.applied ? "good" : "warn")}</span>
+      <span class="s">${esc(x.key || "ai · " + x.name)} · 当前 ${esc(String(x.current))} → 目标 ${esc(String(x.target))}${x.risk ? " — " + esc(x.risk) : ""}</span>
+    </span>
+  </label>`).join("");
+  const warn = a.running
+    ? `<div class="alert warn" role="alert"><strong>AutoKill 正在运行</strong><span class="hint">它持有内存里的旧配置，改文件后可能被覆盖。建议先退出 AutoKill 再应用，改完再启动。</span></div>`
+    : "";
+  const mcp = a.mcp || {};
+  // MCP 插件与 UI 插槽都由「应用梦神破甲」一键控制，这里只显示状态
+  const mcpBar = `<div class="s-hostsupport" style="margin:8px 0">
+    <span class="mini">MCP 插件</span>
+    <b>autokill-purge</b>
+    ${badge(mcp.mounted ? "已挂载" : "未挂载", mcp.mounted ? "good" : "")}
+    <span class="mini">随「应用梦神破甲」一并挂载 / 卸载</span>
+  </div>`;
+  const sl = a.slots || {};
+  const slotBar = `<div class="s-hostsupport" style="margin:8px 0">
+    <span class="mini">UI 插槽</span>
+    <b>装备模式下拉</b>
+    ${badge(sl.injected ? "已注入" : "未注入", sl.injected ? "good" : "")}
+    <span class="mini">随「应用梦神破甲」一并注入 / 移除（构建助手旁，写 build.gear）</span>
+  </div>`;
+  // MengBot：挑一个 bot，应用时把勾选的装备写进它的 BotRecord.gear
+  const mbBots = ((S.mb && Array.isArray(S.mb.bots) && S.mb.bots.length) ? S.mb.bots : (a.mengbotBots || []));
+  if (!mbBots.length && S.mb && !S.mb.tried && !S.mb.loading && typeof loadMengbot === "function") loadMengbot(false);
+  const mbSel = a.mengbotId || "";
+  const mbCurrent = mbBots.find((x) => x.id === mbSel);
+  const mengbotBar = mbBots.length
+    ? `<div class="s-hostsupport" style="margin:8px 0">
+    <span class="mini">MengBot</span>
+    <select id="akMengbot" class="small" style="max-width:220px">
+      <option value="">不写 MengBot</option>
+      ${mbBots.map((b) => `<option value="${esc(b.id)}"${b.id === mbSel ? " selected" : ""}>${esc(b.name || b.id.slice(0, 8))}${b.gear ? "（现 " + esc(b.gear) + "）" : ""}</option>`).join("")}
+    </select>
+    <span class="mini">${mbCurrent ? (mbCurrent.gear ? "当前 " + esc(mbCurrent.gear) : "当前未装备") + "；应用后写入第一套勾选的装备，重启 MengBot 生效" : "选一个 bot，应用时把勾选的装备写进它的 gear"}</span>
+  </div>`
+    : `<div class="s-hostsupport" style="margin:8px 0"><span class="mini">MengBot</span><span class="mini">没读到 bot（~/.mengbot/bots.json）</span><button type="button" class="small" data-bot-reload="1">重新读取</button></div>`;
+  return `<details class="ops-sub"${S.simple.akOpen ? " open" : ""}><summary>梦神破甲 · ${a.applied}/${a.total} 已生效（可自选）</summary>
+    ${mcpBar}
+    ${slotBar}
+    ${mengbotBar}
+    ${warn}
+    <div class="actions" style="margin:8px 0">
+      <button type="button" class="small" data-ak-all="1">全选</button>
+      <button type="button" class="small" data-ak-all="0">取消全选</button>
+      <button type="button" class="small" data-ak-revert="1">卸载（恢复原值）</button>
+      <span class="hint">走 autokill-cli settings_set / ai on|off；改前自动备份 config.toml。</span>
+    </div>
+    ${`<div class="s-multi-list static">${rows}</div>`}
+  </details>`;
+}
+
+/** 提示词层卸载：只摘 autokill-purge 的标记块，宿主原文不动 */
+async function uninjectPrompt() {
+  try {
+    const d = await request("/api/breach/uninject-host", { method: "POST", body: { host: S.hostTarget } });
+    if (!d || d.ok === false) throw payloadError(d, "撤销失败");
+    toast(d.removed ? `已摘掉注入块（文件 ${d.bytes} B，重启宿主生效）` : "没找到注入块，目标文件没被改过");
+  } catch (e) { toast(simpleReason(e)); }
+}
+
+/** 补丁层卸载：回到最近一次快照（应用前状态），当前状态也会先存一份 */
+async function revertHostPatches() {
+  if (typeof window !== "undefined" && !window.confirm("撤回宿主补丁：恢复到最近一次快照（应用前的状态）。当前状态会先另存一份，可再回滚。继续？")) return;
+  try {
+    const d = await request("/api/host/restore", { method: "POST", body: { confirm: true } });
+    if (!d || d.ok === false) throw payloadError(d, "撤回失败");
+    toast("已撤回宿主补丁（重启 dsh 生效；本次操作同样存了快照）");
+    loadHostStatus();
+  } catch (e) { toast(simpleReason(e)); }
+}
+
+/** 当前破甲方式的「一键卸载」动作；不改宿主的方式（载荷/入库）返回 null */
+function uninstallAction(mode) {
+  const m = DELIVERY_MODES.find((x) => x.id === mode) || {};
+  const label = "一键卸载" + (m.short || "注入");
+  if (mode === "ak-patch") return { label, run: revertDreamBreak };
+  if (mode === "host-patch") return { label, run: revertHostPatches };
+  if (mode === "host-prompt") return { label, run: uninjectPrompt };
+  return null;
+}
+
+/** 一键卸载梦神破甲：按 AUTOKILL_PATCHES.was 把每项恢复原值（服务端逐项写回 + 读回核对） */
+async function revertDreamBreak() {
+  if (typeof window !== "undefined" && !window.confirm("把梦神破甲改过的项恢复成原值？会先备份 config.toml。")) return;
+  if (S.ak.running && typeof window !== "undefined" && !window.confirm("AutoKill 正在运行，它可能用内存里的旧配置再覆盖一次。仍要卸载吗？（建议先退出 AutoKill）")) return;
+  try {
+    const d = await request("/api/autokill/revert", { method: "POST", body: { confirm: true } });
+    if (!d || d.ok === false) throw payloadError(d, "卸载失败");
+    const killed = (d.side && d.side.killed) || [];
+    const msg = `已卸载梦神破甲：恢复 ${d.restored}/${d.total} 项，MCP 插件与装备下拉一并移除${killed.length ? "，清掉残留进程 " + killed.length + " 个" : ""}${d.running ? "（AutoKill 在运行，建议退出后重跑）" : ""}；重启 AutoKill 生效`;
+    toast(msg);
+    S.breach.deliveryResult = { message: msg };
+    S.ak.items = []; S.ak.loaded = false; S.ak.selected = null; S.ak.error = null;
+    loadAkPatches(true);
+  } catch (e) {
+    S.breach.deliveryResult = { error: "卸载失败：" + simpleReason(e) };
+    toast(simpleReason(e));
+  }
+}
+
+/** 操作台：内容随「破甲方式」变化，默认展开；模板置顶，装备垫底 */
+function renderOpsFold() {
+  const b = S.breach;
+  const mode = b.delivery || "host-patch";
+  const meta = deliveryMetaFor(mode);
+  let body = "";
+  if (mode === "host-patch") {
+    // 补丁层不展示载荷卡，但仍然要给出「上一次生成」的反馈，否则点了没感觉
+    const note = b.deliveryResult
+      ? (b.deliveryResult.error ? alertBox("破甲方式没成功", b.deliveryResult.error) : okBox(b.deliveryResult.message))
+      : "";
+    const vsum = Array.isArray(b.variants) && b.variants.length
+      ? `<p class="hint">最近一次已生成 ${b.variants.length} 条载荷；想查看载荷把破甲方式切到「载荷破甲」。</p>`
+      : "";
+    body = note + vsum + renderSimplePatchPicker();
+  } else if (mode === "ak-patch") {
+    const note = b.deliveryResult
+      ? (b.deliveryResult.error ? alertBox("梦神破甲没成功", b.deliveryResult.error) : okBox(b.deliveryResult.message))
+      : "";
+    body = note + `<p class="hint">梦神破甲 = 改 AutoKill 的 <code>config.toml</code>（审批 / 深度 / 运行时 / 预算 / 构建参数）+ 后端开关；改前自动备份，重启 AutoKill 生效。</p>` + renderAkPatchList();
+  } else if (mode === "host-prompt") {
+    const unBtn = `<div class="actions" style="margin:0 0 10px"><button type="button" class="small" data-uninject="1">撤掉注入块</button>
+      <span class="hint">只删 autokill-purge 的标记块，宿主原有内容不动。</span></div>`;
+    body = S.hostTarget === "mengbot"
+      ? `<p class="hint">生成后把首张载荷写进<b>选中 bot 的 SOUL.md</b>（前缀），重启 MengBot 生效；会先备份可还原。</p>${renderSimpleResults()}`
+      : (S.hostTarget === "autokill"
+        ? `${unBtn}<p class="hint">生成后把首张载荷写进 <code>%APPDATA%\\autokill\\prompt-inject.md</code>（带标记块、幂等；重启 AutoKill 生效）。</p>${renderSimpleResults()}`
+        : `${unBtn}<p class="hint">生成后把第一张载荷写进宿主 <code>prompt-inject.md</code>（带标记块、幂等；重启 dsh 生效）。</p>${renderSimpleResults()}`);
+  } else if (mode === "memory") {
+    body = `<p class="hint">生成后写入隔离库 <b>mem-purge</b>（待审，审核通过才进检索）。</p>${renderSimpleResults()}`;
+  } else {
+    body = renderSimpleResults();
+  }
+  return `<details class="adv-fold ops"${S.simple.opsOpen ? " open" : ""}><summary>操作台 · ${esc(meta.name)}</summary>
+    ${S.simple.opsOpen ? renderEquipDetail() + body : ""}
+  </details>`;
+}
+
+/** 操作台里的补丁勾选（破甲方式=补丁层时按这些应用；不勾 = 只补还没应用的） */
+function renderSimplePatchPicker() {
+  const d = S.host.data;
+  if (!d || d.available === false) {
+    return `<p class="hint">宿主补丁不可用：${esc((d && d.reason) || "本机未安装 dsh-purge")}</p>`;
+  }
+  const list = Array.isArray(d.patches) ? d.patches : [];
+  const applied = list.filter((p) => p.status === "applied").length;
+  const unapplied = list.length - applied;
+  // 状态：颜色 + 一句原因/建议（用户不用去猜 na / missing_file 是什么）
+  const STATUS = {
+    applied: { text: "✓ 已补", tone: "good", advice: "无需处理" },
+    pending: { text: "待补", tone: "warn", advice: "可以直接应用" },
+    na: { text: "不适用", tone: "", advice: "此宿主/版本没有对应位置，忽略即可" },
+    missing_file: { text: "缺文件", tone: "warn", advice: "目标文件缺失（版本差异）；升级 dsh-purge 或忽略" },
+    skipped: { text: "跳过", tone: "", advice: "被保护跳过，属于正常" },
+  };
+  const metaOf = (s) => STATUS[s] || { text: String(s || "未知"), tone: "", advice: "" };
+  // 排序：待补(0) > 未补的其他(1) > 已补(2)
+  const ordered = list.slice().sort((a, b) => {
+    const rank = (x) => (x.status === "pending" ? 0 : (x.status === "applied" ? 2 : 1));
+    return rank(a) - rank(b) || Number(a.id) - Number(b.id);
+  });
+  const shown = S.simple.patchAll ? ordered : ordered.slice(0, 8);
+  const rows = shown.map((p) => {
+    const zh = p.nameZh || p.name || "";
+    const m = metaOf(p.status);
+    return `<label class="m-pick" data-status="${esc(p.status)}" title="${esc(p.name || "")}">
+      <input type="checkbox" data-patch-pick="${esc(String(p.id))}"${p.status === "applied" ? "" : " checked"}>
+      <span class="mp-main">
+        <span class="t">#${esc(String(p.id))} ${esc(zh)} ${badge(m.text, m.tone)}</span>
+        <span class="s">${esc(p.layer || "")} · ${esc(p.name || "")}${m.advice ? " — " + esc(m.advice) : ""}</span>
+      </span>
+    </label>`;
+  }).join("");
+  const more = !S.simple.patchAll && ordered.length > 8
+    ? `<button type="button" class="small" data-patch-more="1">显示全部 ${ordered.length} 条</button>`
+    : "";
+  return `<details class="ops-sub"${S.simple.patchOpen ? " open" : ""}><summary>本轮补丁 · 已补 ${applied}/${list.length}，未补 <b>${unapplied}</b>（未补的默认全选）</summary>
+    <div class="actions" style="margin:8px 0">
+      <button type="button" class="small" data-patch-all="1">全选</button>
+      <button type="button" class="small" data-patch-all="0">取消全选</button>
+      ${more}
+      <span class="hint">已补的不会重复改文件（报 already）；一个都不勾 = 只补未补的。</span>
+    </div>
+    ${S.simple.patchOpen ? `<div class="s-multi-list static">${rows}</div>` : ""}
+  </details>`;
+}
+
+/** 生成按钮文案：跟着破甲方式 + 宿主走 */
+function buildButtonLabel(mode) {
+  if (mode === "payload") return "一键生成";
+  if (mode === "memory") return "生成并入库";
+  if (mode === "ak-patch") return "应用梦神破甲";
+  if (mode === "host-prompt") {
+    if (S.hostTarget === "mengbot") return "生成并注入 bot soul";
+    if (S.hostTarget === "autokill") return "生成并注入 AutoKill";
+    return "生成并注入宿主";
+  }
+  return "应用补丁";
+}
+
+/** 破甲方式与宿主对齐：宿主不支持当前方式时回退到载荷（补丁层只属于 DSH，梦神破甲只属于 AutoKill） */
+function normalizeDelivery() {
+  const d = S.breach.delivery || "host-patch";
+  const ok = (d === "host-patch" && S.hostTarget === "dsh")
+    || (d === "ak-patch" && S.hostTarget === "autokill")
+    || d === "payload" || d === "host-prompt" || d === "memory";
+  if (!ok) S.breach.delivery = "payload";
+}
+
+/** 当前宿主的版本与「已支持版本」信息（来自 /api/hosts） */
+function currentHostMeta() {
+  const hit = (S.hostInfo.hosts || []).find((h) => h.id === S.hostTarget);
+  return hit || { id: S.hostTarget, name: hostTargetName(S.hostTarget), version: "", support: null };
+}
+function supportBadge(support) {
+  if (!support) return "";
+  const map = {
+    exact: ["已验证", "good"],
+    compatible: ["同小版本", "warn"],
+    unknown: ["未验证", "warn"],
+    unversioned: ["不绑版本", ""],
+  };
+  const hit = map[support.status] || ["未验证", "warn"];
+  return badge(hit[0], hit[1]);
+}
+/** 破甲台顶部：宿主 + 已支持版本 + 版本是否对得上 */
+function renderHostSupportBar() {
+  const m = currentHostMeta();
+  const sup = m.support || {};
+  const ver = m.version || "";
+  const verified = sup.verified || "";
+  const line = `<div class="s-hostsupport">
+    <span class="mini">宿主</span>
+    <b>${esc(hostTargetName(S.hostTarget))}${ver ? " " + esc(ver) : ""}</b>
+    <span class="sep">·</span>
+    <span class="mini">已支持版本</span>
+    <b>${esc(verified || "不绑版本")}</b>
+    ${supportBadge(sup)}
+    ${sup.label ? `<span class="mini">${esc(sup.label)}</span>` : ""}
+  </div>`;
+  if (sup.status === "unknown" && ver) {
+    return line + `<div class="alert warn" role="alert" style="margin:6px 0 10px"><strong>版本对不上</strong>
+      <span class="hint">检测到 ${esc(hostTargetName(S.hostTarget))} ${esc(ver)}，而${esc(sup.label || "这套能力")}是按 ${esc(verified)} 验证的。未验证的项可能无效或缺失，建议先在一台测试机上跑一遍。</span></div>`;
+  }
+  return line;
+}
+
+/** 简单模式的装备选择（破甲台「一并装备」多选） */
+function simpleEquipSelection() {
+  const b = S.breach;
+  const presets = Array.isArray(b.equipPresets) ? b.equipPresets : [];
+  const map = b.equipItemsMap || {};
+  const items = [];
+  for (const id of presets) {
+    const p = PRESETS.find((x) => x.id === id);
+    if (!p) continue;
+    const chosen = Array.isArray(map[id]) ? map[id] : p.items.map((i) => i.id);
+    for (const it of chosen) items.push(id + ":" + it);
+  }
+  return { presets, items };
+}
+
+/** 「一并装备」下拉的摘要文案（勾选时局部更新，不重绘整页） */
+function equipSummaryText() {
+  const picked = Array.isArray(S.breach.equipPresets) ? S.breach.equipPresets : [];
+  const nameOf = (id) => (PRESETS.find((p) => p.id === id) || {}).name || id;
+  return picked.length ? `已选 ${picked.length}：${picked.map(nameOf).join("、")}` : "不装备（只破甲）";
+}
+
+/** 勾/取消预设、逐项、全选清空的绑定；局部刷新后会重新调用 */
+function bindEquipControls() {
+  $$("#page [data-eq-preset]").forEach((el) => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = "1";
+    el.addEventListener("change", () => {
+      const id = el.dataset.eqPreset;
+      let list = Array.isArray(S.breach.equipPresets) ? S.breach.equipPresets.slice() : [];
+      if (el.checked) {
+        if (!list.includes(id)) list.push(id);
+        if (!Array.isArray(S.breach.equipItemsMap[id])) {
+          const p = PRESETS.find((x) => x.id === id);
+          S.breach.equipItemsMap[id] = p ? p.items.map((i) => i.id) : [];
+        }
+      } else {
+        list = list.filter((x) => x !== id);
+      }
+      S.breach.equipPresets = list;
+      S.breach.withEquip = list.length > 0;
+      // 不重绘整页：下拉保持展开，可以连续勾多个预设
+      refreshEquipUI();
+    });
+  });
+  $$("#page [data-eq-item]").forEach((el) => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = "1";
+    el.addEventListener("change", () => {
+      const [pid, iid] = String(el.dataset.eqItem || "").split(":");
+      const p = PRESETS.find((x) => x.id === pid);
+      if (!p) return;
+      const cur = Array.isArray(S.breach.equipItemsMap[pid]) ? S.breach.equipItemsMap[pid].slice() : p.items.map((i) => i.id);
+      const next = el.checked ? Array.from(new Set([...cur, iid])) : cur.filter((x) => x !== iid);
+      S.breach.equipItemsMap[pid] = next;
+      const preset = el.closest(".eq-preset");
+      const head = preset && preset.querySelector(".eq-head .mini");
+      if (head) head.textContent = next.length + "/" + p.items.length + " 项";
+    });
+  });
+  $$("#page [data-eq-all]").forEach((el) => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = "1";
+    el.addEventListener("click", () => {
+      const [pid, on] = String(el.dataset.eqAll || "").split("|");
+      const p = PRESETS.find((x) => x.id === pid);
+      if (!p) return;
+      S.breach.equipItemsMap[pid] = on === "1" ? p.items.map((i) => i.id) : [];
+      refreshEquipUI();
+    });
+  });
+}
+
+/** 局部刷新：下拉摘要 + 操作台里的「装备明细」 */
+function refreshEquipUI() {
+  const sum = document.querySelector("#sEquipWrap .cnt");
+  if (sum) sum.textContent = equipSummaryText();
+  const ops = document.querySelector("#page details.ops");
+  const cur = document.querySelector("#page #eqDetail");
+  const html = renderEquipDetail();
+  if (!ops) return;
+  if (html) {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    const node = tmp.firstElementChild;
+    if (cur) cur.replaceWith(node);
+    else {
+      const s = ops.querySelector("summary");
+      ops.insertBefore(node, s ? s.nextSibling : ops.firstChild);
+    }
+  } else if (cur) {
+    cur.remove();
+  }
+  bindEquipControls();
+}
+
+/** 破甲台「一并装备」：只选预设（紧凑）；明细到操作台里逐项配置 */
+function renderEquipPicker() {
+  const b = S.breach;
+  const picked = Array.isArray(b.equipPresets) ? b.equipPresets : [];
+  const nameOf = (id) => (PRESETS.find((p) => p.id === id) || {}).name || id;
+  const sum = equipSummaryText();
+  const rows = PRESETS.map((p) => {
+    const on = picked.includes(p.id);
+    return `<label class="m-pick" data-status="${on ? "pending" : ""}">
+      <input type="checkbox" data-eq-preset="${esc(p.id)}"${on ? " checked" : ""}>
+      <span class="mp-main">
+        <span class="t">${esc(p.name)} ${badge((p.agents || []).join(" / ") || "任意", "")}</span>
+        <span class="s">${esc(p.desc || "")} · ${p.items.length} 项</span>
+      </span>
+    </label>`;
+  }).join("");
+  return `<details class="s-multi" id="sEquipWrap">
+    <summary><span class="cnt">${esc(sum)}</span></summary>
+    <div class="s-multi-list eq-list">
+      ${rows}
+      <p class="hint">选好预设后，逐项明细在「操作台 → 装备明细」里配。</p>
+    </div>
+  </details>`;
+}
+
+/** 操作台：装备明细（对每个已选预设逐项多选） */
+function renderEquipDetail() {
+  const b = S.breach;
+  const picked = Array.isArray(b.equipPresets) ? b.equipPresets : [];
+  if (!picked.length) return "";
+  const map = b.equipItemsMap || {};
+  const itemsOf = (p) => (Array.isArray(map[p.id]) ? map[p.id] : p.items.map((i) => i.id));
+  let total = 0;
+  const blocks = picked.map((id) => {
+    const p = PRESETS.find((x) => x.id === id);
+    if (!p) return "";
+    const chosen = itemsOf(p);
+    total += chosen.length;
+    const rows = p.items.map((it) => `<label class="m-pick" data-status="${chosen.includes(it.id) ? "pending" : ""}">
+      <input type="checkbox" data-eq-item="${esc(p.id + ":" + it.id)}"${chosen.includes(it.id) ? " checked" : ""}>
+      <span class="mp-main">
+        <span class="t">${esc(it.name)}</span>
+        <span class="s">${esc(it.desc || "")}${it.skills && it.skills.length ? " · " + esc(it.skills.join(", ")) : ""}</span>
+      </span>
+    </label>`).join("");
+    return `<div class="eq-preset">
+      <div class="eq-head">
+        <b>${esc(p.name)}</b>
+        <span class="mini">${chosen.length}/${p.items.length} 项</span>
+        <button type="button" class="small" data-eq-all="${esc(p.id)}|1">全选</button>
+        <button type="button" class="small" data-eq-all="${esc(p.id)}|0">清空</button>
+      </div>
+      <div class="eq-items">${rows}</div>
+    </div>`;
+  }).join("");
+  return `<details class="ops-sub" open id="eqDetail"><summary>装备明细 · ${picked.length} 包 / ${total} 项（逐项可配）</summary>
+    <div class="eq-wrap">${blocks}</div>
+    <p class="hint" style="padding:0 10px 8px">未勾的项不会写进装备记录；生成时按这里的勾选发放。</p>
+  </details>`;
+}
+
 function renderSimpleOperation() {
   const b = S.breach;
   const err = S.simple.buildError;
+  // 补丁层 / 梦神破甲都不生成载荷：模型、方案、模板、任务句全用不上
+  const mode = b.delivery || "host-patch";
+  const needsPayload = mode !== "host-patch" && mode !== "ak-patch";
+  const rec = recommendedModels();
+  const chosen = breachModels();
+  if (!chosen.length && rec.length) { b.models = [rec[0].id]; b.model = rec[0].id; }
+  const chosen2 = breachModels();
+  const shown = rec.slice(0, 8);
+  const modelRows = shown.map((m) => `<label class="m-pick"><input type="checkbox" data-smodel="${esc(m.id)}"${chosen2.includes(m.id) ? " checked" : ""}><span>${esc(simpleText(m.name || m.id))}</span></label>`).join("");
+  const nameOf = (id) => (S.models.find((m) => m.id === id) || {}).name || id;
+  const modelSum = chosen2.length
+    ? `已选 ${chosen2.length}：${chosen2.slice(0, 2).map(nameOf).join("、")}${chosen2.length > 2 ? "…" : ""}`
+    : "未选";
+  let planHtml;
+  if (S.hostTarget === "mengbot") {
+    // 进到破甲台就把 MengBot 的 bot 拉一次：不再依赖「先切到宿主切换器」
+    const mb = S.mb || {};
+    if (!mb.tried && !mb.loading && typeof loadMengbot === "function") loadMengbot(false);
+    const bots = mb.bots || [];
+    const picked = currentBotIds();
+    const nameOfBot = (id) => {
+      const hit = bots.find((x) => x.id === id) || {};
+      return hit.name || id;
+    };
+    const sum = picked.length ? `已选 ${picked.length}：${picked.slice(0, 2).map(nameOfBot).join("、")}${picked.length > 2 ? "…" : ""}` : "未选 bot";
+    // 空列表要说清为什么空：正在读 / 读失败（带原因）/ 读到 0 个
+    const why = mb.loading
+      ? "正在读取 ~/.mengbot/bots.json…"
+      : (mb.error
+        ? "读不到 MengBot 数据：" + simpleReason(mb.error)
+        : (mb.tried ? "读到 0 个 bot（~/.mengbot/bots.json 里没有 bot 记录）" : "还没读取"));
+    const rows = bots.length
+      ? bots.map((x) => `<label class="m-pick"><input type="checkbox" data-sbot="${esc(x.id)}"${picked.includes(x.id) ? " checked" : ""}><span class="mp-main"><span class="t">${esc(x.name || x.id)}</span><span class="s">${x.soulBytes ? fmtNum(x.soulBytes) + " B" : "—"}${x.title ? " · " + esc(String(x.title).slice(0, 24)) : ""}${x.gear ? " · 装备 " + esc(x.gear) : ""}</span></span></label>`).join("")
+      : `<p class="hint">${esc(why)}　<button type="button" class="small" data-bot-reload="1">重新读取</button></p>`;
+    planHtml = `<label class="field"><span>方案 · 目标 bot</span>
+      <details class="s-multi" id="sBotsWrap">
+        <summary><span class="cnt">${esc(sum)}</span></summary>
+        <div class="s-multi-list">
+          ${bots.length ? `<div class="actions" style="margin-bottom:4px"><button type="button" class="small" data-bot-all="1">全选</button><button type="button" class="small" data-bot-all="0">清空</button><button type="button" class="small" data-bot-reload="1">重新读取</button></div>` : ""}
+          ${rows}
+        </div>
+      </details>
+      <span class="help">多选；注入会对每个选中的 bot 各写一次 soul。${bots.length ? `（当前读到 ${bots.length} 个 bot）` : ""}</span>
+    </label>`;
+  } else {
+    const plans = planPresetsFor(S.hostTarget, S.techniques);
+    const cur = b.planId || currentPlanId(plans);
+    planHtml = `<label class="field"><span>方案</span><select id="sPlan" data-focus="sPlan">${plans.map((p) => `<option value="${p.id}"${cur === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
+      <span class="help">影响：突破层 + 技术组合（模板在操作台顶部选）。</span></label>`;
+  }
+
+  const tplName = simpleText((S.prompts.find((p) => p.id === b.template) || {}).name || "破甲模板");
+  const titleTag = needsPayload ? tplName : (mode === "ak-patch" ? "梦神破甲 · AutoKill 配置层" : "补丁层 · 不需要模板");
   return `<section class="section" aria-labelledby="s-op-h">
-    <h2 id="s-op-h"><span class="num">4</span>写清任务，生成载荷<span class="count">${recommendedModels().length} 个推荐模型</span></h2>
+    <h2 id="s-op-h"><span class="num">1</span>破甲台<span class="count">${esc(titleTag)}</span></h2>
     <form id="simpleForm" class="card" novalidate>
-      <div class="field">
+      ${renderHostSupportBar()}
+      <div class="s-opbar ${needsPayload ? "three" : "one"}">
+        ${deliverySelectHtml("sDelivery", b)}
+        ${needsPayload ? `<label class="field"><span>目标模型</span>
+          <details class="s-multi" id="sModelsWrap">
+            <summary><span class="cnt">${esc(modelSum)}</span></summary>
+            <div class="s-multi-list">${modelRows}<p class="hint">更多模型在「高级 → 模型目录」。</p></div>
+          </details>
+          <span class="help">多选；至少留一个。</span>
+        </label>
+        ${planHtml}` : ""}
+      </div>
+
+      <div class="s-opbar ${needsPayload ? "two" : "one"}">
+        ${needsPayload ? `<label class="field"><span>破甲模板</span>
+          <select id="sTemplate" data-focus="sTemplate">${S.prompts.map((p) => `<option value="${esc(p.id)}"${b.template === p.id ? " selected" : ""}>${esc(simpleText(p.name))}${p.id === "sauce-1171" ? " · 国模优先" : " · 通用"}</option>`).join("")}</select>
+          <span class="help">统一应用到选中的 ${chosen2.length || 0} 个模型；模板是纯文本，与宿主无关（这套按国模调优）。</span>
+        </label>` : ""}
+        <div class="field"><span>一并装备</span>
+          ${renderEquipPicker()}
+          <span class="help">勾上预设＝生成时先发装备再投递；能力项可逐项取舍。</span>
+        </div>
+      </div>
+
+      ${needsPayload
+        ? `<div class="field">
         <textarea id="sTask" data-focus="sTask" aria-label="任务描述" rows="3" placeholder="例：让它详细说明如何绕过内容审核"${err && err.kind === "empty" ? ' aria-invalid="true" class="shake"' : ""}>${esc(b.task)}</textarea>
         <span class="help">写得越具体，生成的载荷越能用</span>
+      </div>`
+        : `<p class="hint" style="margin:0 0 10px">补丁层直接改宿主：按下面勾选的补丁应用，<b>不需要任务句、模型与方案</b>。要出载荷请把破甲方式切到「载荷破甲」。</p>`}
+
+      <div class="s-actions">
+        <button class="primary s-generate" id="sBuild" type="submit"${b.building ? ' disabled aria-busy="true"' : ""}>${b.building ? "处理中…" : esc(buildButtonLabel(mode))}</button>
+        ${(() => { const un = uninstallAction(mode); return un ? `<button type="button" class="secondary danger" id="sUninstall">${esc(un.label)}</button>` : ""; })()}
       </div>
-      <button class="primary s-generate" id="sBuild" type="submit"${b.building ? ' disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : "一键生成"}</button>
+      ${b.deliveryResult && b.deliveryResult.message ? `<p class="s-result ok">✓ ${esc(b.deliveryResult.message)}</p>` : ""}
+      ${b.deliveryResult && b.deliveryResult.error ? `<p class="s-result bad">✗ ${esc(b.deliveryResult.error)}</p>` : ""}
     </form>
   </section>`;
 }
@@ -1459,9 +2239,12 @@ function renderSimpleResults() {
   const tplLine = tplName
     ? `<p class="s-tip">已套模板：${esc(simpleText(tplName))}${meta.chars ? `（${fmtNum(meta.chars)} 字）` : ""}；编码变体只带任务句，复制过去按需拼接。</p>`
     : `<p class="s-tip">这次没套模板，载荷只有技术模板 + 任务句。</p>`;
+  const dv = b.deliveryResult;
+  const dvBox = dv ? (dv.error ? alertBox("破甲方式没成功", dv.error) : okBox(dv.message)) : "";
   const cards = list.map((v, i) => {
     const key = String(v.id || v.technique || i);
     const recorded = S.simple.attempted[key];
+    const absorbed = S.simple.absorbed[key];
     return `<article class="payload">
       <div class="payload-head">
         <div><h3>${i + 1}. ${esc(simpleText(v.name || "载荷"))}</h3>
@@ -1471,14 +2254,18 @@ function renderSimpleResults() {
       <details class="s-fold"><summary>展开看全文</summary><pre tabindex="0">${esc(v.text || "")}</pre></details>
       <div class="s-record">
         ${recorded ? `<span class="s-record-done">已记录：${esc(recorded === "pass" ? "这次成功了" : "被拒绝了")}</span>` : ""}
+        ${absorbed ? `<span class="s-record-done">已入库待审</span>` : ""}
         <button type="button" class="small" data-simple-attempt="pass" data-simple-key="${esc(key)}"${recorded ? " disabled" : ""}>这次成功了</button>
         <button type="button" class="small" data-simple-attempt="refused" data-simple-key="${esc(key)}"${recorded ? " disabled" : ""}>被拒绝了</button>
+        <button type="button" class="small" data-inject-host="${esc(key)}">${S.breach.injectArm === key ? "确认注入宿主？" : "注入宿主"}</button>
+        <button type="button" class="small" data-absorb="${esc(key)}"${absorbed ? " disabled" : ""}>${absorbed ? "已入库" : "入库"}</button>
       </div>
     </article>`;
   }).join("");
   return `<section class="section">
     <div class="s-results-head">${head}<span class="count">${list.length} 条</span></h2>${copyBtn(all, "复制全部")}</div>
     ${tplLine}
+    ${dvBox}
     <div class="payload-list">${cards}</div>
     <p class="s-tip">想调层、技术、采样？切到技术模式。</p>
   </section>`;
@@ -1487,26 +2274,26 @@ function renderSimpleResults() {
 function renderSimpleBreach() {
   if (!S.readiness.tried && !S.readiness.loading) loadReadiness();
   if (!S.host.tried && !S.host.loading) loadHostStatus();
+  if (!S.hostInfo.loaded && !S.hostInfo.loading) loadHostInfo();
+  // 不再加大标题块：破甲台自带标题，重复的「破甲 / 破甲」只会占地方
   $("#page").innerHTML = `
-    <div class="page-head"><div>
-      <p class="eyebrow">破甲</p>
-      <h1>破甲</h1>
-      <p class="lead">选模型、选方案，一键注入后拿到可复制的载荷。技术模式是同一套流程，只是参数更多。</p>
-    </div></div>
-    ${renderHostSwitch()}
-    ${renderSimpleStatusCard()}
-    ${simpleSteps()}
-    ${renderFlowModelStep("simple")}
-    ${renderFlowPlanStep("simple")}
-    ${renderFlowApplyStep()}
-    ${renderFlowPatchList()}
-    ${renderFlowExtraPanels()}
     ${renderSimpleOperation()}
-    ${renderSimpleResults()}
+    ${renderOpsFold()}
+    <details class="adv-fold"${S.simple.advOpen ? " open" : ""}><summary>高级：模型目录 / 任务类型与输出 / 就绪与二进制</summary>
+      ${S.simple.advOpen
+        ? renderFlowModelStep("simple") + renderSimpleChoices() + renderSimpleStatusCard() + renderFlowExtraPanels()
+        : ""}
+    </details>
   `;
   bindSimpleBreach();
   bindFlowControls();
-  bindHostSwitch();
+  // 三个折叠都懒渲染（不展开不建 DOM），toggle 时才重绘
+  const ops = $("#page details.ops");
+  if (ops) ops.addEventListener("toggle", () => { if (S.simple.opsOpen !== ops.open) { S.simple.opsOpen = ops.open; renderPage(); } });
+  const sub = $("#page details.ops-sub");
+  if (sub) sub.addEventListener("toggle", () => { if (S.simple.patchOpen !== sub.open) { S.simple.patchOpen = sub.open; renderPage(); } });
+  const adv = $("#page details.adv-fold:not(.ops)");
+  if (adv) adv.addEventListener("toggle", () => { if (S.simple.advOpen !== adv.open) { S.simple.advOpen = adv.open; renderPage(); } });
 }
 
 /* 原版另外三栏的动作：规则集 / 白名单 / 技能 */
@@ -1699,6 +2486,9 @@ function bindFlowControls() {
   $$("#page [data-simple-host]").forEach((el) => {
     el.addEventListener("click", () => simpleHostAction(el.dataset.simpleHost));
   });
+  $$("#page [data-host-plugin-toggle]").forEach((el) => {
+    el.addEventListener("change", () => { S.host.withPlugin = el.checked; });
+  });
   $$("#page [data-live-refresh]").forEach((el) => {
     el.addEventListener("click", () => refreshLiveModels());
   });
@@ -1782,6 +2572,149 @@ function bindSimpleBreach() {
   });
   const outSel = $("#sOutput");
   if (outSel) outSel.addEventListener("change", () => { S.breach.outputChoice = outSel.value; });
+  const dvSel = $("#sDelivery");
+  if (dvSel) dvSel.addEventListener("change", () => {
+    S.breach.delivery = dvSel.value;
+    S.breach.deliveryResult = null;
+    renderPage();
+  });
+  const sWithEquip = $("#sWithEquip");
+  if (sWithEquip) sWithEquip.addEventListener("change", () => { S.breach.withEquip = sWithEquip.checked; });
+  // 破甲台的宿主选择：与顶部切换器同一份状态
+  const sHost = null; // 宿主只由顶部导航栏控制（破甲台的 #sHost 已移除）
+  if (sHost) sHost.addEventListener("change", () => {
+    S.hostTarget = sHost.value;
+    S.hostInfo.touched = true;
+    try { localStorage.setItem(HOST_KEY, S.hostTarget); } catch { /* 隐私模式 */ }
+    const mb = mbState();
+    mb.tab = S.hostTarget === "mengbot" ? "mengbot" : "dsh";
+    if (mb.tab === "mengbot") {
+      if (String(S.breach.delivery || "").startsWith("host-")) S.breach.delivery = "payload";
+      loadMengbot(false);
+    }
+    renderPage();
+  });
+  // 目标模型：多选（勾选即生效，不整页重绘，避免下拉被收起）
+  $$("#page [data-smodel]").forEach((el) => el.addEventListener("change", () => {
+    const id = el.dataset.smodel;
+    let list = breachModels();
+    if (el.checked) {
+      if (!list.includes(id)) list.push(id);
+    } else {
+      if (list.length <= 1) { el.checked = true; toast("至少留一个目标模型"); return; }
+      list = list.filter((x) => x !== id);
+    }
+    S.breach.models = list;
+    S.breach.model = list[0] || "";
+    S.attempt.model = S.breach.model;
+    const sum = document.querySelector("#sModelsWrap .cnt");
+    if (sum) sum.textContent = "已选 " + list.length;
+  }));
+  // 模型多选弹层：常驻 DOM、纯 CSS 展开，勾选/展开都不重绘页面
+  const sPlan = $("#sPlan");
+  if (sPlan) sPlan.addEventListener("change", () => applyPlanPreset(sPlan.value));
+  const sBot = $("#sBot");
+  if (sBot) sBot.addEventListener("change", () => { S.breach.botId = sBot.value; });
+  // MengBot 目标 bot：多选 + 全选/清空（不重绘，只同步摘要）
+  $$("#page [data-sbot]").forEach((el) => el.addEventListener("change", () => {
+    const id = el.dataset.sbot;
+    const all = ((S.mb && S.mb.bots) || []).map((x) => x.id);
+    let list = currentBotIds();
+    if (el.checked) {
+      if (!list.includes(id)) list.push(id);
+    } else {
+      if (list.length <= 1) { el.checked = true; toast("至少留一个 bot"); return; }
+      list = list.filter((x) => x !== id);
+    }
+    S.breach.botIds = list.filter((x) => all.includes(x));
+    const sum = document.querySelector("#sBotsWrap .cnt");
+    if (sum) sum.textContent = "已选 " + S.breach.botIds.length;
+  }));
+  $$("#page [data-bot-all]").forEach((el) => el.addEventListener("click", () => {
+    const on = el.dataset.botAll === "1";
+    const all = ((S.mb && S.mb.bots) || []).map((x) => x.id);
+    S.breach.botIds = on ? all.slice() : (all.length ? [all[0]] : []);
+    $$("#page [data-sbot]").forEach((cb) => { cb.checked = on ? true : cb.dataset.sbot === (all[0] || ""); });
+    const sum = document.querySelector("#sBotsWrap .cnt");
+    if (sum) sum.textContent = "已选 " + S.breach.botIds.length;
+  }));
+  // 读不到 bot 时的「重新读取」：强制重拉 /api/mengbot/{status,bots,payload}
+  $$("#page [data-bot-reload]").forEach((el) => el.addEventListener("click", () => {
+    if (typeof loadMengbot === "function") loadMengbot(true);
+    else { S.mb = null; renderPage(); }
+  }));
+  $$("#page [data-ak-pick]").forEach((el) => el.addEventListener("change", () => {
+    const sel = akSelected();
+    const id = el.dataset.akPick;
+    if (el.checked) sel.add(id); else sel.delete(id);
+  }));
+  $$("#page [data-ak-all]").forEach((el) => el.addEventListener("click", () => {
+    const on = el.dataset.akAll === "1";
+    const sel = akSelected();
+    sel.clear();
+    if (on) (S.ak.items || []).forEach((x) => sel.add(x.id));
+    $$("#page [data-ak-pick]").forEach((cb) => { cb.checked = on; });
+  }));
+  // MengBot bot 选择：应用时把勾选的装备写进它的 BotRecord.gear
+  const mbSelEl = $("#akMengbot");
+  if (mbSelEl) {
+    mbSelEl.addEventListener("change", () => {
+      S.ak.mengbotId = mbSelEl.value || "";
+      S.ak.mengbotBots = S.ak.mengbotBots || [];
+      S.ak.mengbotPick = true; // 记住用户选过，重渲染时保留
+      renderPage();
+    });
+  }
+  // UI 插槽注入 / 移除
+  $$("#page [data-ak-slot]").forEach((el) => el.addEventListener("click", async () => {
+    const action = el.dataset.akSlot === "unmount" ? "unmount" : "mount";
+    try {
+      const d = await request("/api/autokill/slots", { method: "POST", body: { confirm: true, action } });
+      if (!d || d.ok === false) throw payloadError(d, "UI 插槽设置失败");
+      S.ak.slots = d.state || {};
+      const res = d.residue || {};
+      toast(action === "unmount"
+        ? (res.traces && res.traces.any ? "插槽已移除，但配置里还有残留：重启 AutoKill 后核对" : "插槽已从配置移除（重启 AutoKill 控件消失）")
+        : (d.state && d.state.supported ? "已注入：重启 AutoKill 后构建助手旁与标题栏各有一个装备下拉" : "已写入配置（当前 AutoKill 版本不渲染，需新版）"));
+      renderPage();
+    } catch (e) { toast(simpleReason(e)); }
+  }));
+  // MCP 插件挂载 / 卸下（装备在 AutoKill GUI 的可见面）
+  $$("#page [data-ak-mcp]").forEach((el) => el.addEventListener("click", async () => {
+    const action = el.dataset.akMcp === "unmount" ? "unmount" : "mount";
+    if (typeof window !== "undefined" && S.ak.running && !window.confirm("AutoKill 正在运行，它可能用内存里的配置覆盖插件列表。仍要" + (action === "unmount" ? "卸下" : "挂载") + "吗？")) return;
+    try {
+      const d = await request("/api/autokill/mcp", { method: "POST", body: { confirm: true, action } });
+      if (!d || d.ok === false) throw payloadError(d, "MCP 设置失败");
+      S.ak.mcp = d.state || {};
+      const res = d.residue || {};
+      toast(action === "unmount"
+        ? (res.clean ? "已卸干净（配置无残留、无 mcp-server 进程）" : `已卸载，但仍有残留：${res.traces && res.traces.any ? "配置" : ""}${res.processes && res.processes.length ? " 进程 " + res.processes.length + " 个" : ""} —— 重启 AutoKill 才真正断开`)
+        : "已挂载 autokill-purge：重启 AutoKill 后在「设置 → 插件」能看到");
+      renderPage();
+    } catch (e) { toast(simpleReason(e)); }
+  }));
+  // 卸载入口：主按钮旁边一个（按破甲方式动态）+ 清单里各一个
+  $$("#page [data-ak-revert]").forEach((el) => el.addEventListener("click", () => revertDreamBreak()));
+  const sUninstall = $("#sUninstall");
+  if (sUninstall) {
+    const mode = S.breach.delivery || "host-patch";
+    const un = uninstallAction(mode);
+    if (un) sUninstall.addEventListener("click", () => un.run());
+  }
+  // 提示词层 · 撤掉注入块（与主按钮旁的「一键卸载提示词注入」同一动作）
+  $$("#page [data-uninject]").forEach((el) => el.addEventListener("click", () => uninjectPrompt()));
+  // 一并装备：多选预设 → 展开逐项配置（勾选不重绘整页，下拉保持展开可连续多选）
+  bindEquipControls();
+  // 补丁清单：全选 / 取消全选 / 显示全部
+  $$("#page [data-patch-all]").forEach((el) => el.addEventListener("click", () => {
+    const on = el.dataset.patchAll === "1";
+    $$("#page [data-patch-pick]").forEach((cb) => { cb.checked = on; });
+  }));
+  $$("#page [data-patch-more]").forEach((el) => el.addEventListener("click", () => {
+    S.simple.patchAll = true;
+    renderPage();
+  }));
   $$("#page [data-simple-retry]").forEach((el) => el.addEventListener("click", () => simpleBuild()));
   $$("#page [data-simple-attempt]").forEach((el) => el.addEventListener("click", () => simpleAttempt(el.dataset.simpleKey, el.dataset.simpleAttempt)));
   $$("#page [data-readiness-action]").forEach((el) => el.addEventListener("click", () => {
@@ -1797,8 +2730,10 @@ async function simpleBuild() {
   const b = S.breach;
   if (b.building) return;
   S.simple.buildError = null;
+  const mode = b.delivery || "host-patch";
+  const needsPayload = mode !== "host-patch" && mode !== "ak-patch";
   const task = String(b.task || "").trim();
-  if (!task) {
+  if (needsPayload && !task) {
     // 不弹文案：直接把光标放回输入框并给一次轻微抖动（1 秒后自动消失），点了就知道要写东西。
     S.simple.buildError = { kind: "empty", message: "" };
     renderPage();
@@ -1816,7 +2751,7 @@ async function simpleBuild() {
     return;
   }
   const model = b.model || (S.models[0] && S.models[0].id) || "";
-  if (!model) {
+  if (needsPayload && !model) {
     S.simple.buildError = { kind: "failed", message: "还没读到可用的模型。等几秒再点『重试』。" };
     renderPage();
     return;
@@ -1825,6 +2760,13 @@ async function simpleBuild() {
   b.building = true;
   renderPage();
   try {
+    // 补丁层不生成载荷：直接应用补丁（可顺带发装备），不调 /api/breach/build、不需要任务与模型
+    if (!needsPayload) {
+      b.variants = [];
+      b.built = false;
+      b.deliveryResult = await runPostBuildActions([]);
+      return;
+    }
     const data = await request("/api/breach/build", {
       method: "POST",
       body: {
@@ -1847,6 +2789,9 @@ async function simpleBuild() {
     const first = b.variants[0] ? String(b.variants[0].technique || b.variants[0].id || "").replace(/-(rot13|base64)$/i, "") : "";
     if (first && S.techniques.some((t) => t.id === first)) S.attempt.technique = first;
     if (!b.variants.length) S.simple.buildError = { kind: "failed", message: "服务端这次没给出内容。点『重试』再生成一次。" };
+    // 按「破甲方式」投递：payload 什么都不做；其余在这里补一次动作（可选先发装备）
+    b.deliveryResult = null;
+    if (b.variants.length) b.deliveryResult = await runPostBuildActions(b.variants);
   } catch (e) {
     if (isAgreementError(e)) return;
     S.simple.buildError = { kind: "failed", message: simpleReason(e) };
@@ -1856,8 +2801,240 @@ async function simpleBuild() {
   }
 }
 
-async function simpleAttempt(key, result) {
-  if (!key || !result || S.simple.attemptBusy) return;
+/** 破甲载荷 → 宿主提示词层（prompt-inject.md）。两次点击确认，第一次只进入确认态。 */
+async function injectHostPayload(key) {
+  const b = S.breach;
+  const list = Array.isArray(b.variants) ? b.variants : [];
+  const variant = list.find((v, i) => String(v.id || v.technique || i) === String(key)) || list[0] || null;
+  if (!variant) { toast("先点一次「一键生成」再注入宿主。"); return; }
+  if (b.injectArm !== key) {
+    b.injectArm = key;
+    renderPage();
+    toast("再点一次确认：这段载荷会写进宿主 prompt-inject.md（重启 dsh 生效）");
+    return;
+  }
+  b.injectArm = null;
+  if (b.injectBusy) return;
+  b.injectBusy = true;
+  try {
+    const data = await request("/api/breach/inject-host", {
+      method: "POST",
+      body: { confirm: true, mode: "append", text: String(variant.text || "") },
+    });
+    if (!data || data.ok === false) throw payloadError(data, "注入失败");
+    b.injectResult = data;
+    toast("已写入宿主提示词层（重启 dsh 生效）");
+  } catch (e) {
+    if (isAgreementError(e)) return;
+    toast(simpleReason(e));
+  } finally {
+    b.injectBusy = false;
+    renderPage();
+  }
+}
+
+/** 破甲页「一并装备」用：按当前界面模式读同一份装备选择（简单 / 技术各有一套状态） */
+function currentEquipItems() {
+  return modeIsTechnical() ? equipChosenItems() : simpleChosenItems();
+}
+function currentEquipPresets() {
+  const ids = modeIsTechnical() ? equipPresets() : simpleEquipPresetObjs().map((p) => p.id);
+  return ids.length ? ids : ["redteam"];
+}
+function currentEquipModels() {
+  const tech = equipModels();
+  if (tech.length) return tech;
+  return Array.isArray(S.simple.equipModels) ? S.simple.equipModels : [];
+}
+function equipInlineSummary() {
+  return `${currentEquipPresets().length} 包 / ${currentEquipItems().length} 项 / 模型 ${currentEquipModels().length}`;
+}
+function equipInlineBlock(idPrefix) {
+  const b = S.breach;
+  return `<details class="s-fold"><summary>一并装备（当前 ${esc(equipInlineSummary())} → ${esc(hostTargetName(S.hostTarget))}）</summary>
+    <label class="pick-row" style="padding:6px 0">
+      <input type="checkbox" id="${esc(idPrefix)}WithEquip"${b.withEquip ? " checked" : ""} aria-label="生成时一并发放装备">
+      <span class="grow"><span class="t">生成时一并发放这份装备</span>
+        <span class="s">往「装备」记录追加一条，并把装备卡入库（待审）；装备包 / 能力项 / 模型在「装备」页勾选，这里跟着变。</span></span>
+    </label>
+  </details>`;
+}
+
+/** 生成之后：先发装备（可选），再按「破甲方式」投递载荷 */
+async function runPostBuildActions(variants) {
+  const b = S.breach;
+  const parts = [];
+  // 简单模式：装备选择就在破甲台（多选预设），勾了才发；技术模式仍看 withEquip
+  const wantEquip = modeIsTechnical() ? b.withEquip : (Array.isArray(b.equipPresets) && b.equipPresets.length > 0);
+  if (wantEquip) {
+    try {
+      const note = await sendEquipmentIfNeeded();
+      parts.push("装备已发放" + (note || ""));
+    } catch (e) {
+      if (isAgreementError(e)) return null;
+      parts.push("装备发放失败：" + simpleReason(e));
+    }
+  }
+  if (b.delivery && b.delivery !== "payload") {
+    try {
+      const r = await applyDelivery(variants);
+      if (r && r.message) parts.push(r.message);
+      else if (r && r.error) parts.push("投递：" + r.error);
+    } catch (e) {
+      if (isAgreementError(e)) return null;
+      parts.push("投递失败：" + simpleReason(e));
+    }
+  }
+  return parts.length ? { message: parts.join(" ｜ ") } : null;
+}
+
+async function sendEquipmentIfNeeded() {
+  const b = S.breach;
+  const sel = modeIsTechnical()
+    ? { presets: currentEquipPresets(), items: currentEquipItems() }
+    : simpleEquipSelection();
+  if (!sel.presets.length) return "";
+  const models = currentEquipModels().length ? currentEquipModels() : (b.model ? [b.model] : []);
+  const body = {
+    preset: sel.presets[0] || "redteam",
+    presets: sel.presets,
+    agents: [S.hostTarget],
+    permissions: S.equip.permissions || "read-only",
+    items: sel.items,
+    models,
+    notes: "破甲页一并发放" + (b.task ? "：" + String(b.task).slice(0, 60) : ""),
+  };
+  const d = await request("/api/equipment", { method: "POST", body });
+  if (!d || d.ok === false) throw payloadError(d, "装备发放失败");
+  if (Array.isArray(d.equipment)) S.equipment = d.equipment;
+  else if (d.equipment && typeof d.equipment === "object") S.equipment = [...S.equipment, d.equipment];
+  return absorbNote(d.absorbed);
+}
+
+/** 生成之后的投递动作：按「破甲方式」把载荷送出去（payload = 什么都不做） */
+async function applyDelivery(variants) {
+  const b = S.breach;
+  const mode = b.delivery || "payload";
+  if (mode === "payload") return null;
+  const list = Array.isArray(variants) ? variants : [];
+  const first = list.find((v) => (v.kind || "text") === "text") || list[0] || null;
+  const model = b.model || (S.models[0] && S.models[0].id) || "";
+  const rawTech = first ? String(first.technique || first.id || "").replace(/-(rot13|base64)$/i, "") : "";
+  const technique = S.techniques.some((t) => t.id === rawTech) ? rawTech : ((S.techniques[0] && S.techniques[0].id) || "");
+
+  if (mode === "ak-patch") {
+    const ids = Array.from(akSelected());
+    if (!ids.length) return { error: "梦神破甲一项都没勾" };
+    if (S.ak.running && typeof window !== "undefined" && !window.confirm("AutoKill 正在运行，它可能用内存里的旧配置覆盖这次改动。仍要应用吗？（建议先退出 AutoKill）")) {
+      return { error: "已取消（AutoKill 在运行）" };
+    }
+    const d = await request("/api/autokill/apply", { method: "POST", body: { confirm: true, ids, mengbotId: S.ak.mengbotId || "" } });
+    if (!d || d.ok === false) throw payloadError(d, "应用梦神破甲失败");
+    const after = S.ak;
+    after.items = []; after.loaded = false; after.selected = null; // 下次进来自动重读当前值
+    const bad = (d.results || []).filter((x) => !x.ok);
+    const s = d.side || {};
+    const parts = [];
+    parts.push(s.mcp && s.mcp.ok !== false ? "MCP 插件" : "MCP 失败");
+    parts.push(s.slots && s.slots.ok !== false ? "装备下拉" : "插槽失败");
+    if (s.memory) parts.push(s.memory.ok ? "[memory]" : "memory 未写");
+    if (s.dsh) parts.push(s.dsh.ok ? "DSH 预设(" + (s.dsh.presets || []).length + " 套)" : "DSH 失败");
+    if (s.mengbot) parts.push(s.mengbot.ok ? "MengBot·" + (s.mengbot.name || "bot") + "→" + s.mengbot.gear + (s.mengbot.restartRequired ? "(待重启)" : "") : "MengBot 失败");
+    const msg = `梦神破甲：应用 ${d.applied}/${d.total} 项${bad.length ? "，失败 " + bad.length + " 项" : ""}；已同步 ${parts.join(" + ")}；重启 AutoKill 生效`;
+    toast(msg);
+    return { message: msg };
+  }
+  if (mode === "memory") {
+    if (!first) return { error: "没有可入库的载荷" };
+    const d = await request("/api/breach/absorb", {
+      method: "POST",
+      body: { model, technique, task: String(b.task || ""), variant: first.kind || "text", text: String(first.text || ""), result: "pass", template: b.template || "none" },
+    });
+    if (!d || d.ok === false) throw payloadError(d, "入库失败");
+    return { message: "已入库待审：" + ((d.card && d.card.path) || "") };
+  }
+  if (mode === "host-prompt") {
+    if (!first) return { error: "没有可注入的载荷" };
+    const text = String(first.text || "");
+    // MengBot 的「提示词层」= 写 bot 的 SOUL.md；多选就逐个写
+    if (S.hostTarget === "mengbot") {
+      const ids = currentBotIds();
+      if (!ids.length) return { error: "先到「方案 · 目标 bot」勾选要注入的 bot" };
+      if (ids.length > 1 && typeof window !== "undefined" && !window.confirm(`要把这段载荷写进 ${ids.length} 个 bot 的 soul？会先备份，可还原。`)) {
+        return { error: "已取消（多选注入需要确认）" };
+      }
+      const done = [];
+      const failed = [];
+      for (const id of ids) {
+        try {
+          const d = await request("/api/mengbot/inject", { method: "POST", body: { confirm: true, id, text, mode: "prefix" } });
+          if (d && d.ok !== false) done.push(id); else failed.push(id);
+        } catch { failed.push(id); }
+      }
+      return { message: `已写入 ${done.length}/${ids.length} 个 bot 的 soul（重启 MengBot 生效）${failed.length ? "，失败 " + failed.length + " 个" : ""}` };
+    }
+    const d = await request("/api/breach/inject-host", { method: "POST", body: { confirm: true, mode: "append", text, host: S.hostTarget } });
+    if (!d || d.ok === false) throw payloadError(d, "注入失败");
+    return { message: S.hostTarget === "autokill"
+      ? "已写入 AutoKill 的 prompt-inject.md，重启 AutoKill 生效（原文已备份）"
+      : "已写入宿主提示词层（prompt-inject.md），重启 dsh 生效" };
+  }
+  if (mode === "host-patch") {
+    const picked = $$("#page [data-patch-pick]").filter((el) => el.checked).map((el) => el.dataset.patchPick);
+    // 默认方式：没勾选就只补「还没应用」的那些（已应用的自动跳过，不会重写文件）
+    let patches = picked;
+    if (!patches.length) {
+      const st = await request("/api/host/status").catch(() => null);
+      const pending = ((st && st.patches) || []).filter((p) => p.status === "pending").map((p) => p.id);
+      if (!pending.length) {
+        return { message: "宿主补丁已是最新（没有待应用项），这次只生成载荷；要重打可在「注入」页勾选后应用" };
+      }
+      patches = pending;
+    }
+    const d = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply", patches } });
+    if (!d || d.ok === false) throw payloadError(d, "应用补丁失败");
+    const r = d.result || {};
+    return { message: `已应用宿主补丁 ${r.selected || 0}/${r.total || 0} 条（新增 ${r.applied || 0}，已是新版 ${r.already || 0}），重启 dsh 生效` };
+  }
+  return null;
+}
+
+async function absorbVariant(key) {
+  if (!key || S.simple.absorbBusy) return;
+  const b = S.breach;
+  const list = Array.isArray(b.variants) ? b.variants : [];
+  const variant = list.find((v, i) => String(v.id || v.technique || i) === String(key)) || list[0] || null;
+  if (!variant) { toast("先点一次『一键生成』再入库。"); return; }
+  const model = b.model || (S.models[0] && S.models[0].id) || "";
+  const rawTech = String(variant.technique || variant.id || "").replace(/-(rot13|base64)$/i, "");
+  const technique = S.techniques.some((t) => t.id === rawTech) ? rawTech : ((S.techniques[0] && S.techniques[0].id) || "");
+  if (!model || !technique) { toast("缺少模型或技术，先重新生成一次。"); return; }
+  S.simple.absorbBusy = true;
+  try {
+    const data = await request("/api/breach/absorb", {
+      method: "POST",
+      body: {
+        model, technique,
+        task: String(b.task || ""),
+        variant: variant.kind || "text",
+        text: String(variant.text || ""),
+        result: S.simple.attempted[key] === "refused" ? "refused" : "pass",
+        template: b.template || "none",
+      },
+    });
+    if (!data || data.ok === false) throw payloadError(data, "入库失败");
+    S.simple.absorbed[key] = (data.card && (data.card.path || data.card.key)) || "pending";
+    toast("已入库待审：" + ((data.card && data.card.path) || ""));
+  } catch (e) {
+    if (isAgreementError(e)) return;
+    toast(simpleReason(e));
+  } finally {
+    S.simple.absorbBusy = false;
+    renderPage();
+  }
+}
+
+async function simpleAttempt(key, result) {  if (!key || !result || S.simple.attemptBusy) return;
   const b = S.breach;
   const list = Array.isArray(b.variants) ? b.variants : [];
   const variant = list.find((v, i) => String(v.id || v.technique || i) === String(key)) || list[0] || null;
@@ -2161,7 +3338,7 @@ async function simpleEquipPreset() {
     S.simple.removed = [];
     const items = simpleEquippedItems();
     const chosen = simpleChosenItems();
-    S.simple.equipResult = chosen.length
+    S.simple.equipResult = (chosen.length
       ? `已装 ${chosen.length} 项能力：${chosen.map((k) => {
         const cut = k.indexOf(":");
         const pid = cut > 0 ? k.slice(0, cut) : "";
@@ -2170,7 +3347,7 @@ async function simpleEquipPreset() {
         const it = ((p && p.items) || []).find((x) => x.id === iid);
         return it ? it.name : k;
       }).join("、")}`
-      : "这次一项都没勾，没有装任何能力。";
+      : "这次一项都没勾，没有装任何能力。") + absorbNote(data.absorbed);
   } catch (e) {
     if (isAgreementError(e)) return;
     S.simple.equipError = simpleReason(e);
@@ -2564,10 +3741,12 @@ function renderFlowApplyStep() {
     if (r && r.kind === kind && Date.now() - r.at < 5000) return r.ok ? "success" : "fail";
     return "";
   };
+  const busyText = { apply: "注入中…", uninstall: "卸载中…", handoff: "落地中（宿主会重启）…" };
+  const warnText = { apply: "再点一次确认注入", uninstall: "再点一次确认卸载", handoff: "再点一次确认落地重启" };
   const toneText = (kind, idle) => {
     const t = btnTone(kind);
-    if (t === "busy") return kind === "apply" ? "注入中…" : "卸载中…";
-    if (t === "warn") return kind === "apply" ? "再点一次确认注入" : "再点一次确认卸载";
+    if (t === "busy") return busyText[kind] || "处理中…";
+    if (t === "warn") return warnText[kind] || "再点一次确认";
     if (t === "success") return "✓ 已完成";
     if (t === "fail") return "✗ 失败，看下面";
     return idle;
@@ -2578,13 +3757,216 @@ function renderFlowApplyStep() {
     <div class="actions">
       <button type="button" class="primary ${btnTone("apply")}" data-simple-host="apply"${busy || !authorized ? " disabled" : ""}>${toneText("apply", "一键注入")}</button>
       <button type="button" class="ghost ${btnTone("uninstall")}" data-simple-host="uninstall"${busy || !authorized ? " disabled" : ""}>${toneText("uninstall", "一键卸载")}</button>
-      <span class="hint">点一次先确认（橙）、再点一次执行（灰）；注入前自动备份，卸载会先还原宿主再清插件文件。</span>
+      <button type="button" class="ghost ${btnTone("handoff")}" data-simple-host="handoff"${busy || !authorized || !d.desktopSealed ? " disabled" : ""}>${toneText("handoff", d.desktopSealed ? "落地并重启宿主" : "已落地")}</button>
+      <label class="mini" style="display:inline-flex;align-items:center;gap:6px;margin-left:4px">
+        <input type="checkbox" data-host-plugin-toggle${h.withPlugin ? " checked" : ""}>
+        <span>同时注入 autokill-purge 插件</span>
+      </label>
+      <span class="hint">点一次先确认（橙）、再点一次执行（灰）；注入前自动备份，卸载会先还原宿主再清插件文件。勾选后走同一事务：先 pnpm add + 登记 bundles + 校验，失败不继续打补丁。</span>
     </div>
-    ${pend("apply") || pend("uninstall") ? `<div class="alert warn" role="alert"><strong>再点一次同一个按钮才会执行</strong><span class="hint">${pend("apply") ? "注入会改本机 dsh 安装，重启后生效。" : "卸载会还原宿主并删掉三处插件文件，之后要重装才能再用。"}</span></div>` : ""}
+    ${d.desktopSealed ? `<div class="alert warn" role="alert"><strong>补丁写进去了，但桌面壳还在读 app.asar</strong><span class="hint">桌面壳用 <code>app.getAppPath() + "/dsh"</code> 定位运行时，官方密封包把它指到 <code>resources/app.asar</code>；所以 <code>resources/app</code> 里那 83 条字节替换不会被加载，重启多少次都一样。点「落地并重启宿主」＝结束宿主 → 把 <code>app.asar</code> 改名让位 → 重新拉起，之后才真的生效（当前会话会断，属正常）。</span></div>` : ""}
+    ${pend("apply") || pend("uninstall") || pend("handoff") ? `<div class="alert warn" role="alert"><strong>再点一次同一个按钮才会执行</strong><span class="hint">${pend("apply") ? "注入会改本机 dsh 安装。" : pend("handoff") ? "落地会结束并重启桌面宿主，当前会话会断。" : "卸载会还原宿主并删掉三处插件文件，之后要重装才能再用。"}</span></div>` : ""}
     ${gate}
     ${msg}
     ${promptBox}
   </section>`;
+}
+
+
+/* ============================================================ 能力补齐（ops）
+   补齐 dsh-purge 的 reapply / rewind / identity / redteam-pack / restart。
+   后端走 /api/ops（注册表）+ /api/ops/:id/{status,plan,run}，模块缺失时后端自动降级成一行不可用。 */
+function opsState() {
+  if (!S.ops) S.ops = { loading: false, loaded: false, error: null, data: null, busy: "", message: {}, lastRun: {} };
+  return S.ops;
+}
+
+async function loadOps(force = false) {
+  const o = opsState();
+  if (o.loading) return;
+  if (o.loaded && !force) return;
+  o.loading = true;
+  try {
+    const data = await request("/api/ops");
+    if (!data || data.ok === false) throw new Error((data && data.error) || "ops 不可用");
+    o.data = data;
+    o.error = null;
+    o.loaded = true;
+  } catch (e) {
+    o.error = e;
+    o.data = null;
+  } finally {
+    o.loading = false;
+    if (S.tab === "breach") renderPage();
+  }
+}
+
+async function opsAction(id, action) {
+  const o = opsState();
+  if (o.busy) return;
+  const op = ((o.data && o.data.ops) || []).find((x) => x.id === id) || { zh: id };
+  if ((action === "run" || action === "run-auto") && typeof window !== "undefined") {
+    const label = op.zh || id;
+    const heavy = action === "run-auto";
+    const text = heavy
+      ? "执行「" + label + "」的 auto 步骤？会解包 resources/app 并落地（挪走 app.asar + 重启宿主），当前会话会断。写前自动快照。"
+      : "执行「" + label + "」？会按该能力的纪律改盘（写前自动备份/快照），可能重启宿主。";
+    if (!window.confirm(text)) return;
+  }
+  o.busy = id + ":" + action;
+  o.message[id] = "";
+  renderPage();
+  try {
+    const body = action === "plan" ? {} : { confirm: true };
+    if (action === "run") {
+      if (id === "rewind") {
+        const pick = (o.pick && o.pick.rewind) || "auto";
+        body.sessionId = pick;
+        if (pick !== "auto" && o.pickProject && o.pickProject.rewind) body.project = o.pickProject.rewind;
+      }
+      if (id === "redteam-pack") body.action = (o.pick && o.pick["redteam-pack"]) || "install";
+      if (id === "identity") body.apply = true;
+      if (id === "reapply") body.auto = action === "run-auto";
+    }
+    const r = await request("/api/ops/" + id + (action === "plan" ? "/plan" : "/run"), { method: "POST", body });
+    if (!r || r.ok === false) throw new Error((r && (r.error || r.summary)) || "调用失败");
+    if (action === "plan") {
+      const plan = (r.plan && planText(r.plan)) || JSON.stringify(r.plan);
+      o.message[id] = "预览：" + plan;
+    } else {
+      o.message[id] = (r.summary || "完成") + (r.changed ? "（已改动）" : "（无改动）");
+      o.lastRun[id] = { at: Date.now(), ok: r.ok !== false };
+    }
+    toast(action === "plan" ? "预览已生成" : "已执行");
+  } catch (e) {
+    o.message[id] = simpleReason(e);
+    toast("失败：" + simpleReason(e));
+  } finally {
+    o.busy = "";
+    try { await loadOps(true); } catch { /* 状态刷新失败不影响结果展示 */ }
+    renderPage();
+  }
+}
+
+function planText(plan) {
+  if (!plan) return "";
+  if (Array.isArray(plan.steps)) return plan.steps.join(" → ");
+  if (typeof plan === "string") return plan;
+  // 各能力的 plan 结构不同：抓最能说明问题的那几项，别把 JSON 糊到界面上
+  const bits = [];
+  if (plan.mode) bits.push("模式 " + plan.mode);
+  if (plan.sessionId) bits.push("会话 " + String(plan.sessionId).slice(0, 18));
+  if (plan.text) bits.push("目标轮：" + (plan.dropTurns ? "退 " + plan.dropTurns + " 轮" : "") + (plan.text ? "「" + String(plan.text).slice(0, 28) + "」" : ""));
+  if (plan.dropCount) bits.push("截 " + fmtNum(plan.dropCount) + " 事件");
+  if (plan.linesBefore && plan.linesAfter) bits.push(plan.linesBefore + " → " + plan.linesAfter + " 行");
+  if (plan.compiled) bits.push("编译 " + fmtNum(plan.compiled.lines) + " 行 / " + fmtNum(plan.compiled.bytes) + "B / sha " + String(plan.compiled.sha256 || "").slice(0, 8));
+  if (plan.diff) bits.push("diff +" + fmtNum(plan.diff.added || 0) + " -" + fmtNum(plan.diff.removed || 0));
+  if (plan.wouldChange !== undefined) bits.push(plan.wouldChange ? "会变化" : "与当前一致");
+  if (plan.pendingWrites !== undefined) bits.push("待写 " + fmtNum(plan.pendingWrites) + " 项");
+  if (Array.isArray(plan.todo) && plan.todo.length) bits.push("步骤：" + plan.todo.map((s) => (typeof s === "string" ? s : s.id || s.step || "")).filter(Boolean).join(" → "));
+  if (Array.isArray(plan.steps)) bits.push(plan.steps.map((s) => (typeof s === "string" ? s : s.id || "")).filter(Boolean).join(" → "));
+  if (bits.filter(Boolean).length) return bits.filter(Boolean).join(" · ");
+  try { return JSON.stringify(plan).slice(0, 240); } catch { return ""; }
+}
+
+function renderOpsPanel() {
+  const o = opsState();
+  if (!o.loaded && !o.loading) loadOps();
+  const rows = (o.data && o.data.ops) || [];
+  const ready = rows.filter((r) => r.available).length;
+  // 宿主漂移提示：官方升级 / asar 又回来了 / 补丁被还原（reapply 的判定，别在前端重算）
+  const reap = rows.find((r) => r.id === "reapply");
+  const rd = (reap && reap.detail) || {};
+  const drift = !!(rd.needsReapply || rd.needsRepack || rd.needsHandoff);
+  const driftText = drift
+    ? [rd.needsHandoff ? "asar 又回来了（补丁不会生效）" : "", rd.needsRepack ? "官方升级过：需要重新解包" : "", rd.needsReapply ? "有补丁待重放" : ""].filter(Boolean).join(" · ")
+    : "";
+  const total = rows.length || 5;
+  const pickSel = (id, value) => ((o.pick && o.pick[id]) || value);
+  const body = rows.length
+    ? rows.map((r) => {
+        const busy = o.busy && o.busy.indexOf(r.id + ":") === 0;
+        const msg = o.message[r.id] || "";
+        const state = r.available
+          ? '<span class="badge ok">可用</span>'
+          : '<span class="badge">未就绪</span>';
+        // 需要入参的能力：在行内给选择器，避免"点了执行却因为缺参数失败"
+        let picker = "";
+        const d = r.detail || {};
+        if (r.id === "rewind" && Array.isArray(d.sessions) && d.sessions.length) {
+          const cur = pickSel("rewind", "auto");
+          const opts = d.sessions.filter((s) => s && s.id && (s.rewindable > 0 || s.active))
+            .slice(0, 8)
+            .map((s) => `<option value="${esc(s.id)}"${s.id === cur ? " selected" : ""}>${esc((s.project || s.id).slice(0, 22))} · ${esc(String(s.title || "").slice(0, 18))}（${s.rewindable || 0} 轮${s.active ? " · 活跃" : ""}）</option>`).join("");
+          picker = `<div class="mini" style="margin-top:4px"><select data-ops-pick="rewind" aria-label="选择要回退的会话">
+            <option value="auto"${cur === "auto" ? " selected" : ""}>自动（最近可回退）</option>${opts}
+          </select></div>`;
+        }
+        if (r.id === "redteam-pack") {
+          const cur = pickSel("redteamPack", "install");
+          picker = `<div class="mini" style="margin-top:4px"><select data-ops-pick="redteam-pack" aria-label="选择安装动作">
+            <option value="install"${cur === "install" ? " selected" : ""}>安装 / 修复</option>
+            <option value="verify"${cur === "verify" ? " selected" : ""}>只校验不写</option>
+            <option value="uninstall"${cur === "uninstall" ? " selected" : ""}>卸载</option>
+          </select></div>`;
+        }
+        return `<tr>
+          <td><strong>${esc(r.zh || r.id)}</strong><div class="mono small muted">${esc(r.id)}</div></td>
+          <td>${state}${r.kind === "read" ? ' <span class="mini">只读</span>' : ""}</td>
+          <td class="small">${esc(r.reason || r.summary || "")}${picker}${msg ? `<div class="hint">${esc(msg)}</div>` : ""}</td>
+          <td class="actions">
+            <button type="button" class="ghost" data-ops-act="plan" data-ops-id="${esc(r.id)}"${busy || !r.available ? " disabled" : ""}>预览</button>
+            <button type="button" class="ghost" data-ops-act="run" data-ops-id="${esc(r.id)}"${busy || !r.available || r.kind === "read" ? " disabled" : ""}>${busy ? "执行中…" : "执行"}</button>
+            ${r.id === "reapply" ? `<button type="button" class="ghost" data-ops-act="run-auto" data-ops-id="reapply"${busy || !r.available || !(d.needsRepack || d.needsHandoff || d.needsReapply) ? " disabled" : ""} title="解包 + 重放 + 落地（会重启宿主）">解包+落地</button>` : ""}
+          </td>
+        </tr>`;
+      }).join("")
+    : `<tr><td colspan="4" class="muted">${o.loading ? "探测中…" : (o.error ? esc(simpleReason(o.error)) : "暂无能力模块")}</td></tr>`;
+  return `<section class="section" aria-labelledby="f-ops-h">
+    <h2 id="f-ops-h"><span class="num">4</span>能力补齐
+      <span class="count">${ready}/${total} 就绪 · 对齐 dsh-purge</span></h2>
+    <div class="actions">
+      <button type="button" class="ghost" data-ops-reload${o.loading ? " disabled" : ""}>${o.loading ? "探测中…" : "重新探测"}</button>
+      <span class="hint">reapply 启动重放 · restart 优雅重启 · identity 提示词片段管线 · rewind 会话回溯 · redteam-pack 技能/角色。执行前都有预览，写盘前自动快照。</span>
+    </div>
+    ${drift ? `<div class="alert warn" role="alert"><strong>宿主需要重放</strong><span class="hint">${esc(driftText)}。安全步骤点「执行」；要解包+落地并重启宿主点「解包+落地」。</span></div>` : ""}
+    <div class="table-wrap" tabindex="0" role="region" aria-label="能力补齐清单">
+      <table class="min"><thead><tr><th>能力</th><th>状态</th><th>说明</th><th>操作</th></tr></thead><tbody>${body}</tbody></table>
+    </div>
+  </section>`;
+}
+
+function appendOpsPanel(page) {
+  if (!page) return;
+  if (page.querySelector("#f-ops-h")) return;
+  const holder = document.createElement("div");
+  holder.innerHTML = renderOpsPanel();
+  const section = holder.firstElementChild;
+  if (!section) return;
+  page.appendChild(section);
+  bindOpsPanel(section);
+}
+
+function bindOpsPanel(root) {
+  if (!root) return;
+  const reload = root.querySelector("[data-ops-reload]");
+  if (reload) reload.addEventListener("click", () => { S.ops && (S.ops.loaded = false); renderPage(); });
+  root.querySelectorAll("[data-ops-act]").forEach((el) => {
+    el.addEventListener("click", () => opsAction(el.dataset.opsId, el.dataset.opsAct));
+  });
+  root.querySelectorAll("[data-ops-pick]").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const o = opsState();
+      o.pick = o.pick || {};
+      o.pick[sel.dataset.opsPick] = sel.value;
+      if (sel.dataset.opsPick === "rewind") {
+        const row = ((o.data && o.data.ops) || []).find((x) => x.id === "rewind");
+        const s = ((row && row.detail && row.detail.sessions) || []).find((x) => x.id === sel.value);
+        o.pickProject = o.pickProject || {};
+        o.pickProject.rewind = (s && s.project) || "";
+      }
+    });
+  });
 }
 
 function renderFlowPatchList() {
@@ -3022,16 +4404,17 @@ async function loadMengbot(force) {
 
 function renderHostSwitch() {
   const mb = mbState();
-  const onMb = mb.tab === "mengbot";
+  // 宿主唯一入口是顶部切换器（dsh / mengbot / autokill）；这里不再出第二套 tab。
+  // autokill 与 dsh 共用同一套宿主机制（同源 DSH 系），只有 mengbot 走 bots.json。
+  const target = S.hostTarget === "mengbot" ? "mengbot" : "dsh";
+  if (mb.tab !== target) mb.tab = target;
+  const onMb = target === "mengbot";
   if (onMb && !mb.tried && !mb.loading) loadMengbot(false);
-  const tabs = `<div class="host-tabs" role="tablist" aria-label="目标宿主">
-      <button type="button" class="host-tab${onMb ? "" : " on"}" role="tab" aria-selected="${!onMb}" data-host="dsh">DSH 宿主 ${badge("83 补丁", "")}</button>
-      <button type="button" class="host-tab${onMb ? " on" : ""}" role="tab" aria-selected="${onMb}" data-host="mengbot">MengBot ${mb.bots.length ? badge(String(mb.bots.length) + " 个 bot", "accent") : badge("读配置", "")}</button>
-    </div>`;
+  const tabs = "";
 
   if (!onMb) {
     return `<section class="section host-switch" aria-labelledby="h-hostswitch"><h2 id="h-hostswitch" class="sr-only">目标宿主</h2>${tabs}
-      <p class="hint">当前：DSH 宿主（注入 prompt-inject.md + 83 条补丁）。切到 MengBot 可按 bot 改 soul。</p></section>`;
+      <p class="hint">当前宿主：<b>${esc(hostTargetName(S.hostTarget))}</b>（注入 prompt-inject.md + 83 条补丁）。要改 MengBot 的 soul，把顶部宿主切到 MengBot。</p></section>`;
   }
 
   const st = mb.status || {};
@@ -3176,6 +4559,19 @@ function bindHostSwitch() {
   });
 }
 
+/* 第一步骨架：注入区 = 现有的宿主区块（补丁自选 + 提示词层 + 快照/还原/恢复出厂）。
+   内容一行没搬，只是从「设置」页单独提出来成一区；旧 #/settings 里那块仍然在。 */
+function renderInject() {
+  const h = S.host;
+  if (!h.tried && !h.loading) loadHostStatus();
+  const isMb = S.hostTarget === "mengbot";
+  const head = `<div class="page-head"><div><p class="eyebrow">INJECT · ${esc(hostTargetName(S.hostTarget))}</p><h1>注入</h1>
+    <p class="lead">${isMb
+      ? "改 MengBot 的 soul：写 bots.json + SOUL.md 镜像，重启 MengBot 才生效；运行中会先拦你停服务。"
+      : "改宿主本身：补丁层（可勾选）+ 提示词层。改完都要重启 dsh 才生效；写入前自动备份，可整份还原。"}</p></div></div>`;
+  return head + (isMb ? renderHostSwitch() : renderHostSection());
+}
+
 function renderHostSection() {
   const h = S.host;
   if (!h.tried && !h.loading) loadHostStatus();
@@ -3183,12 +4579,40 @@ function renderHostSection() {
   if (h.loading && !h.data) return `<section class="section">${head}</h2>${spinner("检查宿主状态…")}</section>`;
   const d = h.data;
   if (h.error && !d) return `<section class="section">${head}</h2>${alertBox("读不到宿主状态", simpleReason(h.error))}</section>`;
-  if (!d || d.available === false) {
-    return `<section class="section">${head}</h2>${alertBox("宿主破甲不可用", (d && d.reason) || "本机没装 dsh-purge，宿主侧补丁引擎用不了；破甲内容仍可正常生成。")}</section>`;
+  if (!d || (d.available === false && !(d.inventoryAvailable && Array.isArray(d.patches) && d.patches.length))) {
+    return `<section class="section">${head}</h2>${alertBox("宿主破甲不可用", (d && d.reason) || "既没有补丁引擎目录，也没有独立补丁清单 catalog.json")}</section>`;
+  }
+  // 引擎缺席、清单在：只读展示（清单已脱离引擎，这是「不装 dsh-purge 也能看清单」这条）
+  if (d.available === false) {
+    const cat = d.catalog || {};
+    const onlyRows = d.patches.map((p) => `<tr>
+        <td class="mono">#${esc(String(p.id))}</td>
+        <td>${esc(p.name)}${p.nameZh ? ` <span class="muted">${esc(p.nameZh)}</span>` : ""}</td>
+        <td class="muted">${esc(p.layer || "")}</td>
+        <td class="muted mono small">${esc(p.files || "")}</td>
+        <td class="muted">${esc(p.desc || "")}</td>
+        <td>${esc(String(p.replacements || 0))}</td>
+      </tr>`).join("");
+    return `<section class="section">${head}<span class="count">清单 ${d.patches.length} 条 · 只读</span></h2>
+      <div class="card">${alertBox("补丁引擎不在，只能看清单（落盘注入需要引擎目录）", d.reason || "")}</div>
+      <div class="card">
+        <div class="s-row"><div class="s-row-main"><strong>清单来源</strong><span class="mono">${esc(cat.path || "")}</span></div></div>
+        <div class="s-row"><div class="s-row-main"><strong>版本 / 摘要</strong><span>${esc((cat.upstream && cat.upstream.package) || "dsh-purge")} ${esc((cat.upstream && cat.upstream.version) || "")} · ${esc(String(cat.count || d.patches.length))} 条 · <span class="mono">${esc(String(cat.digest || "").slice(0, 16))}…</span></span></div></div>
+        <div class="s-row"><div class="s-row-main"><strong>怎么恢复注入</strong><span>引擎缺失时跑 <span class="mono">node scripts/vendor-dsh-engine.mjs</span> 重新 vendor 到 <span class="mono">web/patch-engine/vendor</span>（本仓库自带，不依赖外部 dsh-purge）</span></div></div>
+      </div>
+      <details open class="s-fold" style="margin-top:10px"><summary>补丁清单 ${d.patches.length} 条（状态未知：没有引擎读不到已注入状态）</summary>
+        <div class="table-wrap" tabindex="0" role="region" aria-label="宿主补丁清单（只读）">
+          <table class="min"><thead><tr><th>#</th><th>补丁</th><th>层</th><th>目标文件</th><th>说明</th><th>替换对</th></tr></thead><tbody>${onlyRows}</tbody></table>
+        </div>
+      </details>
+    </section>`;
   }
   const b = d.baseline || {};
   const snaps = Array.isArray(d.snapshots) ? d.snapshots : [];
-  const rows = (d.patches || []).map((p) => `<tr>
+  const patchList = Array.isArray(d.patches) ? d.patches : [];
+  const appliedCount = patchList.filter((p) => p.status === "applied").length;
+  const rows = patchList.map((p) => `<tr>
+      <td><input type="checkbox" data-patch-pick="${esc(String(p.id))}" ${p.status === "applied" ? "" : "checked"} aria-label="选择补丁 #${esc(String(p.id))} ${esc(p.name)}"></td>
       <td class="mono">#${esc(String(p.id))}</td>
       <td>${esc(p.name)}</td>
       <td class="muted">${esc(p.layer || "")}</td>
@@ -3226,21 +4650,30 @@ function renderHostSection() {
       <div class="s-row"><div class="s-row-main"><strong>宿主</strong><span>${esc(d.surface || "?")} · ${esc(d.dshHome || "")}</span></div></div>
       <div class="s-row"><div class="s-row-main"><strong>备份基线</strong><span>官方 app.asar ${b.readable ? "可读" : "读不到"} · 已备份快照 ${snaps.length} 份</span></div></div>
       <div class="s-row"><div class="s-row-main"><strong>注入文件</strong><span class="mono">${esc(d.overridePath || "")}（${esc(d.overrideStatus || "")}）</span></div></div>
+      ${(() => {
+        const cat = d.catalog || {};
+        const dr = d.catalogDrift || {};
+        const head2 = cat.ok ? `独立 catalog.json · ${fmtNum(cat.count)} 条 · ${String(cat.digest || "").slice(0, 12)}…` : ("清单不可用：" + (cat.reason || "未找到"));
+        const tail = dr.comparable ? (dr.same ? "与引擎逐条一致" : `⚠ 与引擎不同源（引擎 ${dr.engineCount} 条 / 清单 ${dr.catalogCount} 条，重跑 patches/extract-catalog.mjs）`) : "";
+        return `<div class="s-row"><div class="s-row-main"><strong>补丁清单</strong><span>${esc(head2)}${tail ? " · " + esc(tail) : ""}</span></div></div>`;
+      })()}
     </div>
     ${promptBlock}
     <div class="actions" style="margin-top:10px">
       <button type="button" class="primary" data-host-action="snapshot">备份现在</button>
       <button type="button" class="ghost" data-host-action="restore"${snaps.length ? "" : " disabled"}>撤销上一次</button>
       <button type="button" class="ghost" data-host-action="factory">恢复出厂</button>
-      <button type="button" class="ghost" data-host-action="apply">应用补丁</button>
+      <button type="button" class="ghost" data-host-action="apply">应用选中补丁</button>
       <span class="hint">改宿主都要重启 dsh 才生效；每次写入前会先自动备份一份。</span>
     </div>
     ${msg}
     ${invRows ? `<div class="card" style="margin-top:10px">${invRows}</div>` : ""}
     <p class="small muted" style="margin-top:8px">「恢复出厂」用官方 app.asar 原件覆盖被改文件（不依赖 .bak，本机实测 .bak 为 0）；「撤销上一次」用最近一份快照覆盖。</p>
-    <div class="table-wrap" tabindex="0" role="region" aria-label="宿主补丁清单">
-      <table class="min"><thead><tr><th>#</th><th>补丁</th><th>层</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>
-    </div>
+    <details class="s-fold" style="margin-top:10px"><summary>补丁清单 ${patchList.length} 条（已应用 ${appliedCount}）· 勾选后可只应用选中的</summary>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="宿主补丁清单">
+        <table class="min"><thead><tr><th>选</th><th>#</th><th>补丁</th><th>层</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>
+      </div>
+    </details>
     ${snaps.length ? `<h3 style="margin-top:14px">快照</h3><div class="table-wrap" tabindex="0"><table class="min"><thead><tr><th>快照</th><th>时间</th><th>文件</th><th>字节</th></tr></thead><tbody>${snaps.map((s) => `<tr><td class="mono">${esc(s.id)}</td><td>${esc(fmtTime(s.at))}</td><td>${fmtNum(s.files)}</td><td>${fmtNum(s.bytes)}</td></tr>`).join("")}</tbody></table></div>` : ""}
   </section>`;
 }
@@ -3332,11 +4765,17 @@ async function loadHostStatus(force = false) {
 async function hostAction(kind) {
   if (S.host.busy) return;
   const h = S.host;
+  // 补丁自选：勾了哪些就只应用哪些；一条没勾 = 全部（确认文案里写明，避免误操作）
+  const pickedPatches = kind === "apply"
+    ? $$("#page [data-patch-pick]").filter((el) => el.checked).map((el) => el.dataset.patchPick)
+    : [];
   const confirmText = {
     snapshot: "",
     restore: "用最近一份快照覆盖宿主文件？覆盖前会自动再备份一份。改完要重启 dsh 才生效。",
     factory: "用官方 app.asar 原件覆盖被改的宿主文件？覆盖前会自动备份现在。改完要重启 dsh 才生效。",
-    apply: "按 dsh-purge 1.1.71 的补丁表应用全部清洗？会改宿主文件，需要重启 dsh 才生效。",
+    apply: pickedPatches.length
+      ? `只应用勾选的 ${pickedPatches.length} 条补丁？会改宿主文件，需要重启 dsh 才生效。还原只能整份还原（补丁共用 .bak）。`
+      : "一条都没勾 → 会应用全部 83 条补丁？会改宿主文件，需要重启 dsh 才生效。",
   }[kind];
   if (confirmText && !window.confirm(confirmText)) return;
   h.busy = true;
@@ -3358,9 +4797,10 @@ async function hostAction(kind) {
       if (!data || data.ok === false) throw payloadError(data, "恢复出厂失败");
       h.message = `已用 asar 原件覆盖 ${fmtNum(data.factory.restored)} 个文件（跳过 ${fmtNum(data.factory.skipped)}）；覆盖前状态另存为 ${data.guardSnapshot}。${data.factory.note ? " " + data.factory.note : ""}`;
     } else if (kind === "apply") {
-      data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply" } });
+      data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply", patches: pickedPatches } });
       if (!data || data.ok === false) throw payloadError(data, "应用失败");
-      h.message = `已应用：新增 ${fmtNum(data.result.applied)} 个补丁（${fmtNum(data.result.already)} 个本来就是最新）。${data.result.restartRequired ? "重启 dsh 生效。" : ""}`;
+      const r = data.result || {};
+      h.message = `已应用选中 ${fmtNum(r.selected || 0)}/${fmtNum(r.total || 0)} 条：新增 ${fmtNum(r.applied)} 个（${fmtNum(r.already)} 个本来就是最新）。${r.restartRequired ? "重启 dsh 生效。" : ""}`;
     }
     toast("完成");
     await loadHostStatus(true);
@@ -3463,6 +4903,8 @@ function renderBreach() {
     ? `<div class="inline-note"><strong>当前模型：${esc(model.name)}</strong> —— ${esc(model.notes || model.refusal || model.desc || "服务端没有给拒绝风格说明")}</div>`
     : "";
 
+  const dv = b.deliveryResult;
+  const dvBox = dv ? (dv.error ? alertBox("破甲方式没成功", dv.error) : okBox(dv.message)) : "";
   const variantsHtml = b.variants.length
     ? `<div class="payload-list">${b.variants.map((v) => {
       const id = String(v.id || "");
@@ -3473,7 +4915,10 @@ function renderBreach() {
           <div class="badge-row">${v.layer ? badge(v.layer, "") : ""}${encoding ? badge(encoding, "accent") : ""}</div>
         </div>
         <pre tabindex="0">${esc(v.text || "")}</pre>
-        <div class="payload-foot"><span class="faint small">${String(v.text || "").length} 字符</span>${copyBtn(v.text || "", "复制载荷")}</div>
+        <div class="payload-foot"><span class="faint small">${String(v.text || "").length} 字符</span>
+          <button type="button" class="small" data-inject-host="${esc(id)}">${S.breach.injectArm === id ? "确认注入宿主？" : "注入宿主"}</button>
+          <button type="button" class="small" data-absorb="${esc(id)}"${S.simple.absorbed[id] ? " disabled" : ""}>${S.simple.absorbed[id] ? "已入库" : "入库"}</button>
+          ${copyBtn(v.text || "", "复制载荷")}</div>
       </article>`;
     }).join("")}</div>`
     : b.built
@@ -3531,14 +4976,16 @@ function renderBreach() {
   /* 技术模式：零删减，全部原有块按固定顺序装进 5 组折叠 */
   const baseGroup = `
     <section class="section" aria-labelledby="h-task">
-      <h2 id="h-task"><span class="num">5</span>写任务，生成载荷</h2>
+      <h2 id="h-task"><span class="num">1</span>写任务，生成载荷</h2>
       <form id="buildForm" class="card" novalidate>
         <label class="field"><span>任务（必填，要能验收）</span>
           <textarea id="bTask" data-focus="bTask" rows="3" placeholder="例：写一段在授权靶场里验证 SSH 弱口令的步骤，包含命令与验收条件">${esc(b.task)}</textarea>
         </label>
         <div id="buildError">${b.buildError ? alertBox(b.buildError.message, b.buildError.hint) : ""}</div>
+        <div style="margin-bottom:10px">${deliverySelectHtml("bDelivery", b)}</div>
+        ${equipInlineBlock("b")}
         <div class="actions">
-          <button class="primary" id="bBuild" type="submit" ${b.building ? 'disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : "生成载荷"}</button>
+          <button class="primary" id="bBuild" type="submit" ${b.building ? 'disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : (b.delivery === "payload" ? "生成载荷" : "生成并" + (b.delivery === "memory" ? "入库" : (b.delivery === "host-prompt" ? "注入宿主" : "应用补丁")))}</button>
           <span class="muted">不调用任何模型；只产出可复制载荷与建议。任务为空时不会发请求。角色与输出要求在「生成策略」里。</span>
         </div>
       </form>
@@ -3546,6 +4993,7 @@ function renderBreach() {
 
     <section class="section" aria-labelledby="h-payload">
       <h2 id="h-payload">载荷<span class="count">${b.variants.length} 条</span></h2>
+      ${dvBox}
       ${variantsHtml}
     </section>`;
 
@@ -3579,7 +5027,7 @@ function renderBreach() {
               ? `<select id="bTemplate" data-focus="bTemplate">${optionHtml(S.prompts, b.template)}</select>`
               : `<input id="bTemplate" type="text" value="none" readonly>`}
             ${fieldDefault("template", b.template === "sauce-1171" ? "" : b.template, "sauce-1171")}
-            <span class="help">默认套「小码酱 · dsh-purge 1.1.71」整段；选「不套模板」只出技术模板。</span>
+            <span class="help">默认套「小码酱 · 梦神破甲」整段；选「不套模板」只出技术模板。</span>
           </label>
         </div>
       </div>
@@ -3636,6 +5084,8 @@ function renderBreach() {
       <div class="head-meta">${badge("不调用模型 API", "accent")}${badge("只改副本", "")}${badge("expect 前置校验", "good")}${hostBadge()}</div>
     </div>
 
+    ${baseGroup}
+
     ${renderHostSwitch()}
 
     ${renderFlowModelStep("technical")}
@@ -3645,7 +5095,6 @@ function renderBreach() {
     ${renderFlowExtraPanels()}
 
     ${groupsHtml("breach", [
-      { key: "base", html: baseGroup },
       { key: "strategy", html: strategyGroup },
       { key: "sampling", html: samplingGroup },
       { key: "paths", html: renderBinarySection() },
@@ -3679,12 +5128,20 @@ function bindBreach() {
     });
   });
 
+  const bdv = $("#bDelivery");
+  if (bdv) bdv.addEventListener("change", () => {
+    S.breach.delivery = bdv.value;
+    S.breach.deliveryResult = null;
+    renderPage();
+  });
+  const bWithEquip = $("#bWithEquip");
+  if (bWithEquip) bWithEquip.addEventListener("change", () => { S.breach.withEquip = bWithEquip.checked; });
+
   const task = $("#bTask");
   if (task) {
     task.addEventListener("input", () => { S.breach.task = task.value; });
     task.addEventListener("keydown", (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); $("#buildForm").requestSubmit(); }
-    });
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); $("#buildForm").requestSubmit(); }    });
   }
   const role = $("#bRole");
   if (role) role.addEventListener("input", () => { S.breach.role = role.value; });
@@ -3764,6 +5221,9 @@ async function buildPayload() {
       const first = String(b.variants[0].technique || b.variants[0].id || "").replace(/-(rot13|base64)$/i, "");
       if (first && S.techniques.some((t) => t.id === first)) S.attempt.technique = first;
     }
+    // 按「破甲方式」投递（可选先发装备）
+    b.deliveryResult = null;
+    if (b.variants.length) b.deliveryResult = await runPostBuildActions(b.variants);
   } catch (e) {
     b.buildError = { message: e.message, hint: e.hint };
     if (isAgreementError(e)) return;
@@ -4839,7 +6299,9 @@ function renderEquip() {
     </label>`;
   }).join("");
 
-  const history = S.equipment.slice().reverse().slice(0, 20);
+  // 按当前宿主过滤发放历史（装备记录里 agents[] 标明给谁）
+  const hostEquip = S.equipment.filter((x) => Array.isArray(x.agents) && x.agents.includes(S.hostTarget));
+  const history = hostEquip.slice().reverse().slice(0, 20);
   const historyHtml = history.length
     ? `<div class="table-wrap" tabindex="0" role="region" aria-label="发放历史"><table class="min"><caption class="sr-only">装备发放历史</caption><thead><tr><th>时间</th><th>装备包</th><th>智能体</th><th>权限</th><th>备注</th><th>操作</th></tr></thead><tbody>
       ${history.map((it) => `<tr>
@@ -4945,7 +6407,7 @@ function renderEquip() {
 
   const diagGroup = `
     <section class="section" aria-labelledby="h-history">
-      <h2 id="h-history"><span class="num">6</span>发放历史<span class="count">${S.equipment.length} 条</span></h2>
+      <h2 id="h-history"><span class="num">6</span>发放历史<span class="count">${hostEquip.length} 条（当前宿主 ${esc(hostTargetName(S.hostTarget))} · 全部 ${S.equipment.length}）</span></h2>
       ${historyHtml}
     </section>`;
 
@@ -5069,7 +6531,7 @@ async function issueEquipment() {
     else if (data.equipment && typeof data.equipment === "object") S.equipment = [...S.equipment, data.equipment];
     else if (data.item) S.equipment = [...S.equipment, data.item];
     else S.equipment = [...S.equipment, { preset: e.preset, agents, permissions: e.permissions, notes: e.notes.trim(), at: new Date().toISOString() }];
-    e.ok = "装备已发放；历史新增一条。";
+    e.ok = "装备已发放；历史新增一条。" + absorbNote(data.absorbed);
   } catch (err) {
     e.error = { message: err.message, hint: err.hint };
     if (isAgreementError(err)) return;
@@ -5268,6 +6730,15 @@ function renderAssign() {
       ${cardsHtml}
     </section>
 
+    <section class="section" aria-labelledby="h-a-host">
+      <h2 id="h-a-host"><span class="num">3</span>让宿主自己查<span class="count">运行时检索</span></h2>
+      <p class="hint">上面这份是静态快照。装一个检索技能后，宿主每次干活前会自己查本库，命中就引用 title + path。只写 <code>~/.dsh/skills/mem-purge-recall/SKILL.md</code>，不动宿主其它配置。</p>
+      <div class="actions">
+        <button type="button" class="ghost" id="aInstallSkill">装检索技能</button>
+        <span class="hint" id="aInstallHint"></span>
+      </div>
+    </section>
+
     <section class="section" aria-labelledby="h-a-save">
       <h2 id="h-a-save"><span class="num">4</span>保存分配</h2>
       <form id="assignForm" class="card" novalidate>
@@ -5416,6 +6887,24 @@ function bindAssign() {
     renderPage();
   });
   $$("#page [data-a-retry]").forEach((el) => el.addEventListener("click", () => { S.assign.cards = null; S.assign.error = null; renderPage(); }));
+  const install = $("#aInstallSkill");
+  if (install) install.addEventListener("click", async () => {
+    const hint = $("#aInstallHint");
+    install.disabled = true;
+    if (hint) hint.textContent = "写入中…";
+    try {
+      const data = await request("/api/memory/install-skill", { method: "POST" });
+      if (!data || data.ok === false) throw payloadError(data, "写入失败");
+      S.assign.ok = "已写入宿主技能：" + (data.path || "mem-purge-recall/SKILL.md") + "（宿主下次会话生效）";
+      if (hint) hint.textContent = data.path || "";
+    } catch (e) {
+      if (isAgreementError(e)) return;
+      S.assign.saveError = { message: e.message, hint: e.hint };
+    } finally {
+      install.disabled = false;
+      renderPage();
+    }
+  });
 }
 
 async function saveAssignment() {
@@ -6178,6 +7667,9 @@ function resetField(what) {
 
 /* ------------------------------------------------------------------ init */
 function init() {
+  // 右侧「注入状态」栏：首屏拉一次，之后每 30 秒刷新（页面隐藏时跳过）
+  loadInjectSummary(true);
+  setInterval(() => { if (!document.hidden) loadInjectSummary(true); }, 30000);
   const start = tabFromHash();
   S.tab = start;
   // 地址栏本来就没 hash 时先别写死：私有部署的默认页要等 /api/state 回来，
@@ -6217,6 +7709,18 @@ function init() {
       if (text != null) copyText(text, copy.dataset.copyMsg || "已复制");
       return;
     }
+    // 破甲载荷「入库」：简单/技术两种模式共用同一个委托，避免两套绑定重复触发
+    const absorb = event.target.closest("[data-absorb]");
+    if (absorb) {
+      absorbVariant(absorb.dataset.absorb);
+      return;
+    }
+    // 破甲载荷「注入宿主」：第一次点变成确认态，第二次点才真写 prompt-inject.md
+    const injectHost = event.target.closest("[data-inject-host]");
+    if (injectHost) {
+      injectHostPayload(injectHost.dataset.injectHost);
+      return;
+    }
     const retry = event.target.closest("[data-retry-boot]");
     if (retry) {
       boot();
@@ -6244,8 +7748,119 @@ function init() {
   boot();
 }
 
+/* 启动入口在文件末尾：init() 会立刻调用 loadInjectSummary()，它依赖下面的 railState，
+   所以必须等整个文件执行完再起。见文件底部「启动」。 */
+
+
+
+
+
+/* ============================================================ 右侧「注入状态」栏
+   为什么要它：破甲页的动作散在「补丁 / 插件 / 能力」三处，用户点完不知道到底注入了什么。
+   这一栏常驻右侧，一屏给：本机与宿主、83 条补丁的分层账、插件与 bundles、6 个能力的开关。
+   数据只打一个 /api/inject/summary（后端聚合），30 秒刷新一次，失败不影响主页面。 */
+const railState = { data: null, at: 0, loading: false, error: null };
+
+async function loadInjectSummary(force = false) {
+  if (railState.loading) return;
+  if (!force && railState.data && Date.now() - railState.at < 15000) return;
+  railState.loading = true;
+  try {
+    const d = await request("/api/inject/summary");
+    if (!d || d.ok === false && !d.host) throw new Error((d && (d.error || d.detail)) || "summary 不可用");
+    railState.data = d;
+    railState.at = Date.now();
+    railState.error = null;
+  } catch (e) {
+    railState.error = e;
+  } finally {
+    railState.loading = false;
+    renderInjectRail();
+  }
+}
+
+function railPct(n, total) {
+  return total ? Math.max(0, Math.min(100, Math.round((n || 0) / total * 100))) : 0;
+}
+
+function railShortPath(p, keep = 2) {
+  const parts = String(p || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.length <= keep ? parts.join("/") : "…/" + parts.slice(-keep).join("/");
+}
+
+function renderInjectRail() {
+  const el = document.getElementById("injectRail");
+  if (!el) return;
+  const d = railState.data;
+  if (!d) {
+    el.innerHTML = '<div class="rail-card"><h3>注入状态</h3><p class="mini">' +
+      (railState.error ? esc(simpleReason(railState.error)) : "读取中…") + "</p></div>";
+    return;
+  }
+  const dev = d.device || {};
+  const host = d.host || {};
+  const p = d.patches || {};
+  const pl = d.plugins || {};
+  const cap = d.capabilities || {};
+  const total = p.total || 0;
+  const applied = p.applied || 0;
+  const pending = p.pending || 0;
+  const failed = p.failed || 0;
+  const na = p.na || 0;
+  const sealed = !!host.desktopSealed;
+  const effective = !!host.effective;
+  const layers = Object.keys(p.byLayer || {});
+  const layerRows = layers.map((l) => {
+    const all = p.byLayer[l] || 0;
+    const ok = (p.byLayerApplied || {})[l] || 0;
+    return '<li><span>' + esc(l) + '</span><b class="rail-num">' + fmtNum(ok) + '/' + fmtNum(all) + '</b></li>';
+  }).join("");
+  const notable = (p.notable || []).map((x) =>
+    '<li><span>' + esc(x.nameZh || x.name || ("#" + x.id)) + '</span><em class="mini">' + esc(x.status || "") + '</em></li>').join("");
+  const plugRows = (pl.installed || []).map((x) =>
+    '<div class="rail-plug"><span class="mono">' + esc(String(x.name).replace("autokill-purge-plugin", "autokill 插件")) + '</span><em>' +
+    esc(x.version || "未装") + (x.inBundles ? " · 已登记" : " · 未登记") + '</em></div>').join("");
+  const capDots = ((cap.items) || []).map((x) =>
+    '<span class="rail-dot ' + (x.available ? "on" : "off") + '" title="' + esc(x.summary || "") + '">' + esc(x.zh || x.id) + '</span>').join("");
+  const rt = (pl.redteam && pl.redteam.summary) ? pl.redteam.summary : "";
+  const idn = (pl.identity && pl.identity.summary) ? pl.identity.summary : "";
+
+  el.innerHTML = ''
+    + '<div class="rail-card">'
+    + '  <h3>本机 · 宿主 <span class="badge ' + (effective ? "ok" : "") + '">' + (effective ? "补丁生效中" : (sealed ? "未落地" : "待确认")) + '</span></h3>'
+    + '  <div class="rail-kv"><span>主机</span><span class="mono">' + esc(dev.hostname || "-") + '</span></div>'
+    + '  <div class="rail-kv"><span>IP</span><span class="mono">' + esc(dev.ip || "无外网卡") + '</span></div>'
+    + '  <div class="rail-kv"><span>DSH</span><span class="mono">' + esc(host.dshVersion || "-") + '</span></div>'
+    + '  <div class="rail-kv"><span>载入自</span><span class="mono">' + (sealed ? "app.asar（未生效）" : "resources/app（生效）") + '</span></div>'
+    + '  <div class="rail-kv"><span>宿主根</span><span class="mono" title="' + esc((host.primaryHost && host.primaryHost.aiBase) || "") + '">' + esc(railShortPath((host.primaryHost && host.primaryHost.aiBase) || "", 2)) + '</span></div>'
+    + '</div>'
+    + '<div class="rail-card">'
+    + '  <h3>宿主补丁 <span class="mini">' + fmtNum(applied) + '/' + fmtNum(total) + '</span></h3>'
+    + '  <div class="rail-bar"><i class="ok" style="width:' + railPct(applied, total) + '%"></i><i class="wait" style="width:' + railPct(pending, total) + '%"></i><i class="fail" style="width:' + railPct(failed, total) + '%"></i><i class="na" style="width:' + railPct(na, total) + '%"></i></div>'
+    + '  <div class="rail-kv"><span>已注入 / 待注入</span><span class="rail-num">' + fmtNum(applied) + ' / ' + fmtNum(pending) + '</span></div>'
+    + '  <div class="rail-kv"><span>失败 / 跳过</span><span class="rail-num">' + fmtNum(failed) + ' / ' + fmtNum(na) + '</span></div>'
+    + (layerRows ? '  <ul class="rail-list">' + layerRows + '</ul>' : "")
+    + (notable ? '  <ul class="rail-list">' + notable + '</ul>' : "")
+    + '</div>'
+    + '<div class="rail-card">'
+    + '  <h3>插件 <span class="mini">bundles ' + fmtNum(pl.bundleCount || 0) + '</span></h3>'
+    + plugRows
+    + (rt ? '  <div class="rail-kv"><span>红队面</span><span class="mini">' + esc(rt) + '</span></div>' : "")
+    + (idn ? '  <div class="rail-kv"><span>身份</span><span class="mini">' + esc(idn) + '</span></div>' : "")
+    + '</div>'
+    + '<div class="rail-card">'
+    + '  <h3>能力 <span class="mini">' + fmtNum(cap.available || 0) + '/' + fmtNum(cap.total || 0) + '</span></h3>'
+    + '  <div class="rail-dots">' + capDots + '</div>'
+    + '</div>'
+    + '<div class="rail-foot">更新于 ' + esc(new Date(railState.at || Date.now()).toLocaleTimeString("zh-CN", { hour12: false }))
+    + ' · <a href="#" data-rail-refresh>刷新</a>' + (railState.error ? " · " + esc(simpleReason(railState.error)) : "") + '</div>';
+
+  const btn = el.querySelector("[data-rail-refresh]");
+  if (btn) btn.addEventListener("click", (ev) => { ev.preventDefault(); loadInjectSummary(true); });
+}
+
+/* ------------------------------------------------------------------ 启动
+   放在文件最末：init() 第一步就 loadInjectSummary(true)，它用到 railState；
+   若在 railState 之前调用会撞 TDZ（Cannot access 'railState' before initialization）。 */
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
 else init();
-
-
-

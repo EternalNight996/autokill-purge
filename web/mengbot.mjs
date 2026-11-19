@@ -19,6 +19,14 @@ import { execFileSync, spawn } from 'node:child_process';
 
 const MAX_SOUL_BYTES = 24000;
 
+/** 装备 id：与 MengBot 的 shared/gear.ts、AutoKill 的 build.gear 同一套。空字符串 = 不装备。 */
+export const GEAR_IDS = ['redteam', 'recon', 'lateral', 'radio', 're', 'custom'];
+
+/** 只做格式校验，认不出的值一律落成空——和 MengBot 的 parseGear() 一字不差。 */
+function normalizeGear(value) {
+  return GEAR_IDS.includes(String(value == null ? '' : value).trim()) ? String(value).trim() : '';
+}
+
 function home() {
   return process.env.USERPROFILE || process.env.HOME || '';
 }
@@ -184,6 +192,7 @@ export function mbListBots() {
     modelSelection: b.modelSelection || null,
     approvalMode: b.approvalMode || b.autoApprove || '',
     autoApprove: !!b.autoApprove,
+    gear: normalizeGear(b.gear),
     snapshotCount: listSnapshots(b.id).length,
   }));
   bots.sort((a, b) => b.soulBytes - a.soulBytes);
@@ -202,7 +211,39 @@ export function mbReadBot(id) {
       soul: b.soul || '', soulHash: b.soulHash || '', soulBytes: bytes(b.soul),
       hashOk: b.soulHash === sha256(b.soul || ''),
       modelSelection: b.modelSelection || null, approvalMode: b.approvalMode || '', autoApprove: !!b.autoApprove,
+      gear: normalizeGear(b.gear),
     },
+  };
+}
+
+/** 装备模式：写 BotRecord.gear。MengBot 读它来决定系统提示词里那一段「本次装配」；改完要重启 MengBot 才生效
+ * （它把 bots.json 缓存在内存里）。value 认不出就当不装备，与 MengBot 的 parseGear 一致。 */
+export function mbSetGear(id, gear) {
+  if (!existsSync(botsFile())) return { ok: false, error: 'no_bots_file' };
+  const { raw, list } = readBotsRaw();
+  const b = list.find((x) => x.id === id);
+  if (!b) return { ok: false, error: 'not_found', id: id };
+  const next = normalizeGear(gear);
+  const key = Object.keys(raw).find((k) => raw[k] && raw[k].id === id);
+  const before = normalizeGear(b.gear);
+  if (before === next) {
+    // 没变化就不动文件：写一次反而要重启 MengBot，且会多一份快照。
+    return { ok: true, botId: id, name: b.name || '', gear: next, changed: false, restartRequired: false, ...serviceWarning() };
+  }
+  const snap = snapshot('pre-gear', id);
+  raw[key] = Object.assign({}, raw[key], { gear: next });
+  writeBotsRaw(raw);
+  return {
+    ok: true,
+    botId: id,
+    name: b.name || '',
+    gear: next,
+    before: before,
+    changed: true,
+    snapshot: snap,
+    restartRequired: true,
+    hint: next ? 'MengBot 重启后，系统提示词会多出「本次装配」那一段（阶段表走 autokill-purge 的 /api/gear/' + next + '）' : 'MengBot 重启后，系统提示词里那段装备说明消失',
+    ...serviceWarning(),
   };
 }
 
@@ -274,7 +315,7 @@ export function mbRestoreSoul(id) {
 }
 
 /** 装备：给 bot 落模型 / 权限（approvalMode→autoApprove 由它的 UI 口径决定，这里只改明确字段） */
-export function mbEquipBot(id, { modelSelection, approvalMode, autoApprove } = {}) {
+export function mbEquipBot(id, { modelSelection, approvalMode, autoApprove, gear } = {}) {
   if (!existsSync(botsFile())) return { ok: false, error: 'no_bots_file' };
   const patch = {};
   if (modelSelection && modelSelection.model) {
@@ -284,6 +325,7 @@ export function mbEquipBot(id, { modelSelection, approvalMode, autoApprove } = {
   }
   if (approvalMode) patch.approvalMode = String(approvalMode);
   if (typeof autoApprove === 'boolean') patch.autoApprove = autoApprove;
+  if (gear !== undefined) patch.gear = normalizeGear(gear);
   if (!Object.keys(patch).length) return { ok: false, error: 'nothing_to_equip' };
   const { raw, list } = readBotsRaw();
   const b = list.find((x) => x.id === id);
@@ -298,8 +340,8 @@ export function mbEquipBot(id, { modelSelection, approvalMode, autoApprove } = {
     botId: id,
     name: b.name || '',
     snapshot: snap,
-    before: { modelSelection: b.modelSelection || null, approvalMode: b.approvalMode || '', autoApprove: !!b.autoApprove },
-    after: now ? { modelSelection: now.modelSelection || null, approvalMode: now.approvalMode || '', autoApprove: !!now.autoApprove } : null,
+    before: { modelSelection: b.modelSelection || null, approvalMode: b.approvalMode || '', autoApprove: !!b.autoApprove, gear: normalizeGear(b.gear) },
+    after: now ? { modelSelection: now.modelSelection || null, approvalMode: now.approvalMode || '', autoApprove: !!now.autoApprove, gear: normalizeGear(now.gear) } : null,
     restartRequired: true,
     ...serviceWarning(),
   };

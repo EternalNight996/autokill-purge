@@ -10,6 +10,8 @@
 import { spawn, execFile } from 'node:child_process';
 import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { ensureMemHome, memEnv } from '../scripts/mem-home.mjs';
+import { resolveMemRoot } from '../lib/mem-runtime.mjs';
 
 const DEFAULTS = { port: 7989, dbName: 'mem-purge', entryHash: '#/memory' };
 const NAME_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
@@ -83,18 +85,26 @@ async function waitHealth(port, ms = 25000) {
 function spawnWeb(port, vault) {
   mkdirSync(vault, { recursive: true });
   mkdirSync(logDir(), { recursive: true });
-  const memRoot = join(home(), '.dsh', 'profiles', 'desktop', 'node_modules', 'memory-eternal');
-  const web = join(memRoot, 'lib', 'web.js');
-  if (!existsSync(web)) throw new Error('找不到 memory-eternal 的 web.js：' + web);
+  // 运行时优先用 autokill-purge 自己维护的副本（~/.dsh/autokill-purge/runtime/…），
+  // profile 里那份只作回退 —— 这样 DSH 插件升级/重装不会把控制台的记忆服务带崩。
+  const { root: memRoot, source: memSource } = resolveMemRoot();
+  const web = memRoot ? join(memRoot, 'lib', 'web.js') : '';
+  if (!web || !existsSync(web)) {
+    throw new Error('找不到 memory-eternal 运行时：先跑 node scripts/ensure-mem-runtime.mjs（当前 source=' + memSource + '）');
+  }
   const out = join(logDir(), 'memory-' + port + '.log');
+  // 独立家目录 + 显式 vault：否则 memory-eternal 的看门狗会按公共偏好把实例拽回运营库
+  const dbName = String(vault).split(/[\\/]/).pop().replace(/^memory-vault-/, '');
+  const MEM = ensureMemHome({ port, dbName });
+  const env = memEnv(vault, { MEMORY_VAULT_DIR: vault });
   const child = spawn(process.execPath, [web, '--port', String(port), '--vault', vault], {
     detached: true,
     stdio: ['ignore', 'ignore', 'ignore'],
     windowsHide: true,
-    env: Object.assign({}, process.env, { MEMORY_VAULT_DIR: vault }),
+    env,
   });
   child.unref();
-  return { pid: child.pid, log: out };
+  return { pid: child.pid, log: out, home: MEM.home };
 }
 
 /** 把旧库的 sqlite 拷进新 vault（新 vault 里没有 db 时才拷，避免覆盖） */

@@ -1,0 +1,31 @@
+{
+  "name": "autokill-purge-plugin",
+  "version": "0.2.0",
+  "description": "autokill-purge 的宿主内薄插件：把控制台补不了的宿主内能力（工具注册 / 组装期改写 / 会话改写 / 优雅重启）接进来",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dshTarget": "0.2.2-rc.1"
+}

@@ -663,9 +663,9 @@ async function readMode() {
   } else if (s.navCount === 8) {
     mode = 'technical';
     how = '导航 8 项';
-  } else if (s.navCount === 6) {
+  } else if (s.navCount === 5) {
     mode = 'simple';
-    how = '导航 6 项';
+    how = '导航 5 项';
   } else if (s.ariaChecked === 'true') {
     mode = 'technical';
     how = '#modeSwitch[aria-checked=true]';
@@ -673,7 +673,7 @@ async function readMode() {
     mode = 'simple';
     how = '#modeSwitch[aria-checked=false]';
   }
-  if (mode && s.ariaChecked && (s.navCount === 6 || s.navCount === 8)) {
+  if (mode && s.ariaChecked && (s.navCount === 5 || s.navCount === 8)) {
     const fromAria = s.ariaChecked === 'true' ? 'technical' : 'simple';
     if (fromAria !== mode) log(`  [note] #modeSwitch aria-checked=${s.ariaChecked} 与导航项数 ${s.navCount} 不一致，按导航项数判为 ${mode}`);
   }
@@ -684,7 +684,7 @@ async function readMode() {
 async function ensureMode(mode) {
   const before = await readMode();
   if (before.mode === mode) return { clicks: 0, before: before.mode };
-  const wantNav = mode === 'technical' ? 9 : 6;
+  const wantNav = mode === 'technical' ? 8 : 5;
   await page.click('#modeSwitch');
   await page.waitFor(inPage(`return __nav().length === ${wantNav};`), {
     timeout: 8000,
@@ -706,22 +706,27 @@ async function assert1() {
   const s = await readMode();
   const snap = s.snapshot;
   const text = snap.text;
-  const hasOneClick = text.includes('一键生成');
-  const hasModel = text.includes('选一个模型') || stateModels.some((m) => {
-    const name = typeof m === 'string' ? m : m && (m.name || m.id);
-    return name && text.includes(String(name));
-  });
+  // 破甲方式下拉会换按钮文案（默认 host-patch → 「生成并应用补丁」），且页面文本只取前 800 字符，
+  // 所以直接读按钮本身，别靠文本窗口碰运气。
+  const btnText = await page.evalJS(inPage("const b=document.querySelector('#sBuild'); return b ? b.textContent.trim() : '';"), 3000).catch(() => '');
+  // 破甲方式会换按钮文案（默认补丁层＝「应用补丁」，载荷＝「一键生成」），只要生成按钮在且是可执行动作即可
+  const hasOneClick = /生成|应用|入库/.test(String(btnText || "")) || text.includes('一键生成') || text.includes('生成并');
+  // 破甲台按方式条件渲染：补丁层不需要模型/任务，所以「模型入口」只在需要载荷的方式下要求存在
+  const deliveryMode = await page.evalJS(inPage("const s=document.querySelector('#sDelivery'); return s ? s.value : '';"), 3000).catch(() => '');
+  const needsPayload = deliveryMode !== 'host-patch';
+  const hasModelField = await page.evalJS(inPage("return !!document.querySelector('#sModelsWrap') || !!document.querySelector('#sTask');"), 3000).catch(() => false);
+  const hasModel = needsPayload ? hasModelField : true;
   const wizard = /设置向导|上一步|下一步/.test(text);
-  const navOk = snap.navCount === 6;
+  const navOk = snap.navCount === 5;
   const simOk = s.mode === 'simple';
   if (hasOneClick && hasModel && navOk && simOk && !wizard) {
-    return ok(`根地址落地 ${landedHash}${landedEmbed ? '（记忆库 iframe 已挂）' : ''} → 破甲页 ${snap.hash || ''}；模式 ${s.mode}（${s.how}）；导航 ${snap.navCount} 项 [${snap.nav.join(' · ')}]；含「一键生成」+ 模型入口；无设置向导`);
+    return ok(`根地址落地 ${landedHash}${landedEmbed ? '（记忆库 iframe 已挂）' : ''} → 破甲页 ${snap.hash || ''}；模式 ${s.mode}（${s.how}）；导航 ${snap.navCount} 项 [${snap.nav.join(' · ')}]；破甲方式=${deliveryMode || '未知'}${needsPayload ? ' + 模型入口' : '（补丁层，无需模型）'}；无设置向导`);
   }
   return bad(
     [
       `含一键生成=${hasOneClick}`,
-      `含模型入口=${hasModel}`,
-      `导航项=${snap.navCount}(期望6)[${snap.nav.join('·')}]`,
+      `含模型入口=${hasModel}(方式=${deliveryMode || '未知'})`,
+      `导航项=${snap.navCount}(期望5)[${snap.nav.join('·')}]`,
       `模式=${s.mode}(${s.how})`,
       `含设置向导=${wizard}`,
       `根地址落地=${landedHash}(iframe=${landedEmbed})`,
@@ -733,10 +738,10 @@ async function assert1() {
 async function assert2() {
   const snap = await page.snapshot();
   const hit = ['记忆分发', '关于'].filter((w) => snap.nav.some((t) => t.includes(w)));
-  if (snap.navCount === 6 && hit.length === 0) {
+  if (snap.navCount === 5 && hit.length === 0) {
     return ok(`导航 ${snap.navCount} 项 [${snap.nav.join(' · ')}]，无「记忆分发」「关于」`);
   }
-  return bad(`导航 ${snap.navCount} 项(期望6) [${snap.nav.join('·')}]；命中禁用导航词：${hit.join('、') || '无'}`);
+  return bad(`导航 ${snap.navCount} 项(期望5) [${snap.nav.join('·')}]；命中禁用导航词：${hit.join('、') || '无'}`);
 }
 
 async function assert3() {
@@ -771,6 +776,10 @@ async function assert4() {
 }
 
 async function assert5() {
+  // 默认破甲方式是「宿主注入 · 补丁层」，操作台此时显示补丁清单、不出载荷卡；
+  // 本条要测的是载荷产出，先把方式切到「载荷破甲」再点生成。
+  await page.evalJS(inPage("const s=document.querySelector('#sDelivery'); if (s) { s.value='payload'; s.dispatchEvent(new Event('change')); } return true;")).catch(() => null);
+  await page.waitFor(inPage("return document.querySelector('#sBuild') ? true : null;"), { timeout: 6000, interval: 120 }).catch(() => null);
   const filled = await page.evalJS(
     inPage(String.raw`
     const tas = [document.querySelector('#sTask')].filter(Boolean).concat(Array.from(document.querySelectorAll('#main textarea, textarea')).filter(__vis).filter((el) => el.id !== 'sTask'));
@@ -784,7 +793,7 @@ async function assert5() {
   // 等宿主状态加载完再点，避免点击瞬间页面被宿主状态回填重绘
   await page.waitFor(inPage('return (!S.host.loading && S.host.tried) ? true : null;'), { timeout: 12000, interval: 150 }).catch(() => null);
   const mark = page.netMark();
-  await page.click('一键生成');
+  await page.click('#sBuild');
   let last = null;
   try {
     last = await page.waitFor(inPage('const r = __payloads(); return r.copyCount >= 1 && r.cards.some((c) => c.cardLen > 20) ? r : null;'), {
@@ -822,7 +831,7 @@ async function assert6() {
   if (cleared.value !== '') return bad(`清空后 textarea 仍有内容：「${clip(cleared.value, 60)}」`);
 
   const mark = page.netMark();
-  await page.click('一键生成');
+  await page.click('#sBuild');
 
   let feedback = null;
   try {
@@ -1172,7 +1181,7 @@ async function assert12() {
   const mark = page.netMark();
   const clicked = await page.click('#modeSwitch');
   try {
-    await page.waitFor(inPage('return __nav().length === 9 ? true : null;'), {
+    await page.waitFor(inPage('return __nav().length === 8 ? true : null;'), {
       timeout: 8000,
       interval: 150,
       label: '点一次 #modeSwitch 后导航变 9 项',
@@ -1192,28 +1201,36 @@ async function assert12() {
     const net = page.netSince(mark);
     const posted = net.requests.filter((q) => /\/api\/settings/.test(q.url || '')).length;
     return bad(
-      `点了一次「${clicked}」但导航没变 9 项：aria-checked=${diag.ariaChecked}、#nav[data-mode]=${diag.navMode}、导航 ${diag.navCount} 项；` +
+      `点了一次「${clicked}」但导航没变 8 项：aria-checked=${diag.ariaChecked}、#nav[data-mode]=${diag.navMode}、导航 ${diag.navCount} 项；` +
         `期间 POST /api/settings ${posted} 次（若为 0 说明点击没有到达切换逻辑）`,
     );
   }
 
   const reach = {};
-  for (const hash of ['#/assign', '#/about', '#/breach']) {
+  // 记忆分发已从导航降级（宿主能运行时自助检索），#/assign 仍要能直达；#/inject 是骨架新增的注入区
+  for (const hash of ['#/inject', '#/assign', '#/about', '#/breach']) {
     await page.gotoHash(hash);
     reach[hash] = await page.evalJS(inPage('return { hash: location.hash, len: __text().length, head: __text().slice(0, 120) };'));
   }
   const assignOk = reach['#/assign'].len > 40 && !/没有这个页面|找不到|404/.test(reach['#/assign'].head);
   const aboutOk = reach['#/about'].len > 40 && !/没有这个页面|找不到|404/.test(reach['#/about'].head);
+  const injectOk = reach['#/inject'].len > 200 && !/没有这个页面|找不到|404/.test(reach['#/inject'].head);
 
   const after = await page.snapshot();
+  // 宿主切换器是唯一的宿主入口：必须存在且正好三项
+  const hostOpts = await page.evalJS(inPage("const s=document.querySelector('#hostSwitch'); return s ? [...s.options].map((o) => o.value) : [];")).catch(() => []);
   const problems = [];
-  if (after.navCount !== 9) problems.push(`导航 ${after.navCount} 项(期望9)[${after.nav.join('·')}]`);
+  if (!(hostOpts.length === 3 && hostOpts.join(',') === 'dsh,mengbot,autokill')) {
+    problems.push(`宿主切换器选项不对（${hostOpts.join(',') || '未找到'}）`);
+  }
+  if (after.navCount !== 8) problems.push(`导航 ${after.navCount} 项(期望8)[${after.nav.join('·')}]`);
+  if (!injectOk) problems.push(`#/inject 内容不足（${reach['#/inject'].len} 字符）：「${clip(reach['#/inject'].head, 80)}」`);
   if (!assignOk) problems.push(`#/assign 内容不足（${reach['#/assign'].len} 字符）：「${clip(reach['#/assign'].head, 80)}」`);
   if (!aboutOk) problems.push(`#/about 内容不足（${reach['#/about'].len} 字符）：「${clip(reach['#/about'].head, 80)}」`);
   if (after.errors.exists && after.errors.len > 0) problems.push(`window.__apErrors 有 ${after.errors.len} 条：${clip(after.errors.sample.join(' | '), 200)}`);
 
   log(`  [info] 技术模式破甲页折叠组 details=${after.details} 个（契约 §2.5 期望 5 组；计数仅供参考，#12 判据是导航/可达/__apErrors）`);
-  const detail = `点一次「${clicked}」；导航 ${after.navCount} 项 [${after.nav.join(' · ')}]；#/assign ${reach['#/assign'].len} 字符、#/about ${reach['#/about'].len} 字符；__apErrors=${after.errors.exists ? after.errors.len : '未定义(=0)'}；折叠组 details=${after.details}`;
+  const detail = `点一次「${clicked}」；导航 ${after.navCount} 项 [${after.nav.join(' · ')}]；宿主切换器 ${hostOpts.join('/')}；#/inject ${reach['#/inject'].len} 字符、#/assign ${reach['#/assign'].len} 字符、#/about ${reach['#/about'].len} 字符；__apErrors=${after.errors.exists ? after.errors.len : '未定义(=0)'}；折叠组 details=${after.details}`;
   return problems.length ? bad(`${problems.join('；')} ｜ ${detail}`) : ok(detail);
 }
 
@@ -1221,7 +1238,7 @@ async function assert13() {
   const before = await readMode();
   if (before.mode !== 'technical') return bad(`切回前不在 technical（当前 ${before.mode || '未知'}，依据 ${before.how || '无'}）`);
   const clicked = await page.click('#modeSwitch');
-  await page.waitFor(inPage('return __nav().length === 6 ? true : null;'), {
+  await page.waitFor(inPage('return __nav().length === 5 ? true : null;'), {
     timeout: 8000,
     interval: 150,
     label: '再点一次 #modeSwitch 后导航回 6 项',
@@ -1230,7 +1247,7 @@ async function assert13() {
   const snap = await page.snapshot();
   const banned = await page.evalJS(inPage(`return __banned(${JSON.stringify(BANNED_TEXT.source)});`));
   const problems = [];
-  if (snap.navCount !== 6) problems.push(`导航 ${snap.navCount} 项(期望6)[${snap.nav.join('·')}]`);
+  if (snap.navCount !== 5) problems.push(`导航 ${snap.navCount} 项(期望5)[${snap.nav.join('·')}]`);
   if (banned.hits.length) problems.push(`残留技术字段 ${banned.hits.length} 处`);
   const detail =
     `点一次「${clicked}」；导航 ${snap.navCount} 项 [${snap.nav.join(' · ')}]；禁用词命中 ${banned.hits.length} 处` +
@@ -1248,8 +1265,8 @@ async function assert14() {
   const simple = await page.snapshot();
 
   const problems = [];
-  if (tech.navCount !== 9) problems.push(`technical 刷新后导航 ${tech.navCount} 项(期望9)[${tech.nav.join('·')}]`);
-  if (simple.navCount !== 6) problems.push(`simple 刷新后导航 ${simple.navCount} 项(期望6)[${simple.nav.join('·')}]`);
+  if (tech.navCount !== 8) problems.push(`technical 刷新后导航 ${tech.navCount} 项(期望8)[${tech.nav.join('·')}]`);
+  if (simple.navCount !== 5) problems.push(`simple 刷新后导航 ${simple.navCount} 项(期望5)[${simple.nav.join('·')}]`);
   const detail = `technical reload → ${tech.navCount} 项 [${tech.nav.join(' · ')}]；simple reload → ${simple.navCount} 项 [${simple.nav.join(' · ')}]`;
   return problems.length ? bad(`${problems.join('；')} ｜ ${detail}`) : ok(detail);
 }

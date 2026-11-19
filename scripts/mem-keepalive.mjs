@@ -9,12 +9,15 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureMemHome, memEnv } from './mem-home.mjs';
+import { resolveMemRoot } from '../lib/mem-runtime.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]+$/, '');
 const HOME = process.env.USERPROFILE || process.env.HOME || '';
 const LOG_DIR = join(HOME, '.dsh', 'autokill-purge-logs');
 const PID_FILE = join(HOME, '.dsh', 'autokill-purge-data', 'keepalive.pid');
-const MEM_ROOT = join(HOME, '.dsh', 'profiles', 'desktop', 'node_modules', 'memory-eternal');
+// 运行时走 autokill-purge 自维护副本（profile 那份只作回退），与 DSH 插件版本解耦
+const MEM_ROOT = resolveMemRoot().root || join(HOME, '.dsh', 'profiles', 'desktop', 'node_modules', 'memory-eternal');
 
 const argv = process.argv.slice(2);
 const argOf = (n, d) => { const i = argv.indexOf(n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -49,24 +52,33 @@ async function health(port) {
   }
 }
 
-function spawnWeb(port, vault) {
+function spawnWeb(port, vault, dbName) {
   mkdirSync(vault, { recursive: true });
   mkdirSync(LOG_DIR, { recursive: true });
   const web = join(MEM_ROOT, 'lib', 'web.js');
   if (!existsSync(web)) throw new Error('找不到 web.js：' + web);
   const out = openSync(join(LOG_DIR, 'memory-' + port + '.log'), 'a');
+  // 独立家目录（配置/偏好/看门狗注册表都在里面）+ 显式 vault，避免看门狗把实例拽回运营库
+  ensureMemHome({ port, dbName });
   const child = spawn(process.execPath, [web, '--port', String(port), '--vault', vault], {
     detached: true,
     stdio: ['ignore', out, out],
     windowsHide: true,
-    env: Object.assign({}, process.env, { MEMORY_VAULT_DIR: vault }),
+    env: memEnv(vault),
   });
   child.unref();
   return child.pid;
 }
 
+// DSH / MengBot 的主记忆端口：任何情况下都不许碰（deploy.json 被人改成这两个也要拦住）
+const PROTECTED_PORTS = new Set([7989, 7999]);
+
 async function tick() {
   const d = readDeploy();
+  if (PROTECTED_PORTS.has(Number(d.port))) {
+    log('⚠ deploy.json 的端口 ' + d.port + ' 属于 DSH/MengBot 主记忆，拒绝保活，请把 port 改成独立端口');
+    return;
+  }
   const h = await health(d.port);
   if (h) {
     const okVault = String(h.vault || '').indexOf('memory-vault-' + d.dbName) >= 0;
@@ -79,12 +91,12 @@ async function tick() {
           { windowsHide: true });
       } catch { /* 忽略 */ }
       await new Promise((r) => setTimeout(r, 900));
-      const pid = spawnWeb(d.port, d.vault);
+      const pid = spawnWeb(d.port, d.vault, d.dbName);
       log('按 ' + d.dbName + ' 重新拉起（pid ' + pid + '）');
     }
     return;
   }
-  const pid = spawnWeb(d.port, d.vault);
+  const pid = spawnWeb(d.port, d.vault, d.dbName);
   log('端口 ' + d.port + ' 不通 → 拉起 web.js（pid ' + pid + '，vault ' + d.vault + '）');
   await new Promise((r) => setTimeout(r, 2500));
   const h2 = await health(d.port);

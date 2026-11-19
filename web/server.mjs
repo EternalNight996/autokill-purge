@@ -5,12 +5,16 @@
 // - Memory: pure HTTP proxy to memory-eternal; unreachable -> 503 semantics, never 500.
 // - break: runs the break kernel in-process (same code as the CLI) behind a whitelist.
 import { createServer } from 'node:http';
-import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, rm, copyFile } from 'node:fs/promises';
+import { existsSync, statSync, readFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
-import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
+import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
+import { listOps, opStatus, opRun, opPlan } from './ops/index.mjs';
+import { injectSummary } from './summary.mjs';
 import { detectLiveModels } from './models-live.mjs';
 import { kbStats, searchPoc, readPoc, searchNotes, readNote, recentPoc } from './kb.mjs';
 import { listIntelReports, readIntelReport, runIntelSweep } from './intel.mjs';
@@ -19,7 +23,9 @@ import { readMcpConfig, saveMcpServer, deleteMcpServer, testMcpServer, testSaved
 import { peerStatus, peerDiscover, peerStart, peerConnect, peerAccept, peerRevoke, peerUpload, peerDownload, isolatedInfo } from './peer.mjs';
 import { memCliStatus, memCliRestart, memCliStop, memCliLedger, memCliAuditList } from './memcli.mjs';
 import { readDeploy, switchDeploy } from './deploy.mjs';
-import { mbStatus, mbListBots, mbReadBot, mbInjectSoul, mbRestoreSoul, mbEquipBot, mbSnapshots, mbPruneSnapshots, mbServiceStop, mbServiceStart } from './mengbot.mjs';
+import { mbStatus, mbListBots, mbReadBot, mbInjectSoul, mbRestoreSoul, mbEquipBot, mbSetGear, GEAR_IDS, mbSnapshots, mbPruneSnapshots, mbServiceStop, mbServiceStart } from './mengbot.mjs';
+import { EQUIP_PRESETS } from './presets.mjs';
+import { renderGearMarkdown } from './stage-hints.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -27,7 +33,11 @@ const DATA_DIR = join(ROOT, 'data');
 const STATE_FILE = join(DATA_DIR, 'state.json');
 const CATALOG_FILE = join(HERE, 'catalog.json');
 const PORT = Number(process.env.PURGE_WEB_PORT || 8792);
-const VERSION = '1.0.0';
+// 版本单一真源：package.json。以前这里硬编码 '1.0.0'，与包版本脱节（模板名里也印着上游的 1.1.71）。
+const VERSION = (() => {
+  try { return String(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version || '0.0.0'); }
+  catch { return '0.0.0'; }
+})();
 const AGREEMENT_VERSION = '1';
 const AGREEMENT_TEXT = '仅限本人拥有或书面授权的系统与模型进行测试；禁止未授权入侵、破解、窃取、破坏；使用者自负后果；发现非法用途即停止支持、留证移交。';
 
@@ -134,14 +144,15 @@ const MODEL_ADVICE = {
   'custom': { temperature: 0.8, top_p: 1.0, retry: '按模型自行设定' }
 };
 
-// ---- 破甲模板（照搬 dsh-purge v1.1.71） -------------------------------------
+// ---- 破甲模板（本项目内置；正文源头是 dsh-purge v1.1.71 的默认槽，MIT） --------
 // 模板正文在 web/prompts/*.md；这里只登记清单，正文按需读取（不塞进 /api/state）。
+// 显示名跟包版本走：小码酱 · 梦神破甲 <VERSION>；id 保持 sauce-1171 不动（它是内部键，已有数据都按它存）。
 const PROMPT_DIR = join(HERE, 'prompts');
 const PROMPTS = [
   {
     id: 'sauce-1171', file: 'sauce-1171.md',
-    name: '小码酱 · dsh-purge 1.1.71',
-    note: '照搬 dsh-purge v1.1.71 的内置默认提示词（面向国模小码酱）',
+    name: `小码酱 · 梦神破甲 ${VERSION}`,
+    note: `本项目内置的破甲提示词（源头是 dsh-purge v1.1.71 的默认槽，MIT，署名见 web/prompts/sauce-1171.md 头部）；随 autokill-purge ${VERSION}`,
     source: 'https://github.com/YuJunZhiXue/dsh-purge',
     scopes: ['full', 'identity']
   },
@@ -312,7 +323,9 @@ async function memFetch(state, path, opts) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
-    const r = await fetch(memBase(state) + path, Object.assign({ signal: ctrl.signal, headers: memHeaders(state) }, opts));
+    // headers 要合并而不是覆盖：opts.headers 里通常只有 content-type，覆盖会把鉴权头丢掉
+    const merged = Object.assign({}, memHeaders(state), (opts && opts.headers) || {});
+    const r = await fetch(memBase(state) + path, Object.assign({}, opts, { signal: ctrl.signal, headers: merged }));
     const text = await r.text();
     let data; try { data = JSON.parse(text); } catch { data = text; }
     return { status: r.status, ok: r.ok, data };
@@ -326,6 +339,741 @@ async function memFetch(state, path, opts) {
 function sendMemoryError(res, status) {
   send(res, status, { ok: false, error: 'memory_unavailable', hint: '记忆服务不可达：检查地址，或启动 memory-eternal' });
 }
+
+// ---- 记忆入库 / 检索（闭环用） -----------------------------------------------
+// memory-eternal 的 /upsert 契约：{ card: { key, title, body, kind, source } }
+//   · key 必须匹配 ^[a-z0-9][a-z0-9._-]{2,64}$
+//   · 同一 key 再写一次是「替换旧卡」，所以破甲/装备用内容哈希做 key 天然幂等
+//   · 状态固定 pending（审核守卫），必须人工批过才出现在默认检索
+async function upsertMemoryCard(state, { key, kind, title, body, source = 'autokill-purge' }) {
+  const r = await memFetch(state, '/upsert', {
+    method: 'POST',
+    body: JSON.stringify({ card: { key, kind, title, body, source } }),
+  });
+  if (r.unreachable) return { ok: false, error: 'memory_unreachable' };
+  if (!r.ok) return { ok: false, error: 'memory_' + r.status, detail: r.data };
+  const d = (r.data && typeof r.data === 'object') ? r.data : {};
+  return {
+    ok: true,
+    key,
+    state: d.state || 'pending',
+    action: d.action || 'created',
+    path: d.path || null,
+  };
+}
+
+/** 记忆库检索（宿主自助引用走这里）：语义优先，返回裁剪后的引用条目 */
+async function memSearch(state, { q, limit = 8, semantic = true, kind = '' }) {
+  const path = '/search?q=' + encodeURIComponent(q) + '&semantic=' + (semantic ? '1' : '0') + '&limit=' + limit;
+  const r = await memFetch(state, path);
+  if (r.unreachable) return { ok: false, error: 'memory_unreachable' };
+  if (!r.ok) return { ok: false, error: 'memory_' + r.status };
+  const hits = Array.isArray(r.data && r.data.hits) ? r.data.hits : [];
+  const items = hits
+    .filter((h) => h && h.path && (!kind || h.kind === kind))
+    .map((h) => ({
+      title: h.title || h.path,
+      path: h.path,
+      kind: h.kind || '',
+      score: Math.round((Number(h.score) || 0) * 10) / 10,
+      snippet: String((h._match && h._match.snippet) || h.excerpt || (h.summary || '')).slice(0, 160),
+    }));
+  return { ok: true, q, count: items.length, items };
+}
+
+/** 给宿主/智能体看的检索说明（install-skill 会把它写成 SKILL.md） */
+function useGuideMarkdown() {
+  const base = 'http://127.0.0.1:' + deployInfo().webPort;
+  return [
+    '# autokill-purge 记忆库（mem-purge）检索',
+    '',
+    '本技能让你在干活前先查 autokill-purge 的隔离知识库（只含渗透 / 破甲 / 装备类知识），',
+    '命中就引用标题与 path，别凭记忆编。',
+    '',
+    '## 库信息',
+    '- 库名：' + deployInfo().dbName,
+    '- 记忆服务：' + DEPLOY.memoryBase + '（HTTP）',
+    '- 控制台：' + base,
+    '',
+    '## 检索（推荐：语义 + 字面混合）',
+    '```bash',
+    'curl -s "' + base + '/api/memory/search?q=<关键词>&semantic=1&limit=8"',
+    'curl -s "' + base + '/api/memory/search?q=webshell&semantic=0&kind=skill"',
+    '```',
+    '返回：`{ ok, q, count, items: [{ title, path, kind, score, snippet }] }`',
+    '',
+    '## 取卡片全文',
+    '```bash',
+    'curl -s "' + base + '/api/memory/card?path=<items[].path>"',
+    '```',
+    '',
+    '## 引用规范',
+    '1. 命中 `count >= 1` 时，回答里写清卡片标题与 path（例：`suo5-tunnel（10-Skills/suo5-tunnel.md）`）。',
+    '2. 关键步骤直接引卡片正文原话，不要改写成自己的话。',
+    '3. 一条都没命中就说「本库没有」，再靠自己的知识做，别硬凑引用。',
+    '4. `kind=skill` 的卡是可执行流程，`kind=knowledge/project/mistake` 是经验与结论。',
+    '',
+    '## 写入',
+    '- 新卡一律 `pending`，需在控制台「记忆 → 审核中心」批准后才会出现在默认检索里。',
+    '- 破甲载荷与装备记录由控制台自动入库，key 用内容哈希，重复提交会覆盖同一张卡而不是堆垃圾。',
+    '',
+  ].join('\n');
+}
+
+// ---- AutoKill 的提示词层（%APPDATA%\autokill\prompt-inject.md）------------------
+// AutoKill 与 DSH 同构：每次会话把 prompt-inject.md 注入到最前面，所以「提示词层」对它同样成立。
+function autoKillPromptPath() {
+  const appData = process.env.APPDATA || join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+  return join(appData, 'autokill', 'prompt-inject.md');
+}
+function autoKillInstalled() {
+  const local = join(process.env.LOCALAPPDATA || '', 'Programs', 'AutoKill', 'autokill.exe');
+  const pf = join(process.env.ProgramFiles || 'C:\\Program Files', 'AutoKill', 'autokill.exe');
+  const pf86 = join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'AutoKill', 'autokill.exe');
+  return existsSync(local) || existsSync(pf) || existsSync(pf86);
+}
+async function readAutoKillPrompt() {
+  const file = autoKillPromptPath();
+  try {
+    const text = await readFile(file, 'utf8');
+    return { ok: true, path: file, text, exists: true };
+  } catch {
+    return { ok: true, path: file, text: '', exists: false };
+  }
+}
+async function writeAutoKillPrompt(text) {
+  const file = autoKillPromptPath();
+  await mkdir(dirname(file), { recursive: true });
+  // 与 DSH 的提示词备份放同一处，方便一起回滚
+  try {
+    if (existsSync(file)) {
+      const dir = join(DATA_DIR, 'host-snapshots');
+      await mkdir(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      await copyFile(file, join(dir, 'autokill-prompt-' + stamp + '.md'));
+    }
+  } catch { /* 备份失败不阻断写入 */ }
+  await writeFile(file, text, 'utf8');
+  return { ok: true, path: file, bytes: Buffer.byteLength(text, 'utf8') };
+}
+
+// ---- 梦神破甲：AutoKill 配置层补丁 -------------------------------------------
+// AutoKill 是 Rust/Tauri 应用，没有 asar 可打字节补丁；但它自带 `autokill-cli settings_set <点分键> <JSON>`
+// 与 `ai on|off <name>`，等价于「改配置让宿主进入破甲状态」。这套清单就叫梦神破甲。
+const AUTOKILL_PATCHES = [
+  { id: 'ak-no-ask', kind: 'setting', key: 'ask_before_running', target: false, label: '不弹审批直接执行', risk: '误操作没有拦截', was: 'true' },
+  { id: 'ak-deep', kind: 'setting', key: 'deep_mode', target: true, label: '深度模式（读目标代码/文件/页面源码）', risk: '会读更多目标内容', was: 'false' },
+  { id: 'ak-runtime', kind: 'setting', key: 'runtime_study', target: true, label: '运行时研究（跑起来观察）', risk: '会真的执行目标', was: 'false' },
+  { id: 'ak-budget', kind: 'setting', key: 'assets.budget_usd', target: 50, label: '预算上限 5 → 50', risk: '花钱更多', was: '5' },
+  { id: 'ak-good', kind: 'setting', key: 'build.good_enough', target: 75, label: '收敛门槛 90 → 75（更快出结果）', risk: '质量可能下降', was: '90' },
+  { id: 'ak-rounds', kind: 'setting', key: 'build.max_rounds', target: 12, label: '迭代轮数 6 → 12', risk: '更久', was: '6' },
+  { id: 'ak-parallel', kind: 'setting', key: 'build.parallel', target: 4, label: '并行 2 → 4', risk: '吃资源', was: '2' },
+  { id: 'ak-ai-codex', kind: 'ai', name: 'Codex', target: 'on', label: '启用 Codex 后端', risk: '多挂一个后端', was: 'off' },
+  { id: 'ak-ai-claude', kind: 'ai', name: 'Claude Code', target: 'on', label: '启用 Claude Code 后端', risk: '多挂一个后端', was: 'off' },
+];
+function akCliPath() {
+  // 安装位可能在 %LOCALAPPDATA%\Programs\AutoKill，也可能在 Program Files。
+  // 两处都装了时用「最新的那份」：升级后旧目录常残留，按优先级选会一直读到旧版。
+  const cands = [
+    join(process.env.LOCALAPPDATA || '', 'Programs', 'AutoKill', 'autokill-cli.exe'),
+    join(process.env.ProgramFiles || 'C:\\Program Files', 'AutoKill', 'autokill-cli.exe'),
+    join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'AutoKill', 'autokill-cli.exe'),
+  ];
+  const found = cands.filter((p) => p && existsSync(p));
+  if (!found.length) return cands[1];
+  if (found.length === 1) return found[0];
+  return found.sort((a, b) => {
+    try { return statSync(b).mtimeMs - statSync(a).mtimeMs; } catch { return 0; }
+  })[0];
+}
+function akConfigPath() {
+  return join(process.env.APPDATA || join(process.env.USERPROFILE || '', 'AppData', 'Roaming'), 'autokill', 'config.toml');
+}
+/** AutoKill 桌面端在跑的时候会持有内存配置，CLI 改完文件可能被它覆盖 —— 探测出来提示用户 */
+function akAppRunning() {
+  return new Promise((resolve) => {
+    execFile('tasklist', ['/FI', 'IMAGENAME eq autokill.exe', '/NH'], { windowsHide: true, timeout: 8000 }, (err, stdout) => {
+      if (err) return resolve(false);
+      resolve(/autokill\.exe/i.test(String(stdout || '')));
+    });
+  });
+}
+function runAk(args, timeoutMs = 25000) {
+  return new Promise((resolve) => {
+    execFile(akCliPath(), args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ ok: !err, code: err ? (typeof err.code === 'number' ? err.code : -1) : 0, out: String(stdout || ''), err: String(stderr || '') });
+    });
+  });
+}
+/** 跑本仓库的脚本（cwd 固定到项目根） */
+function runNode(args, timeoutMs = 30000) {
+  return new Promise((resolve) => {
+    execFile(process.execPath, args, { cwd: ROOT, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ ok: !err, code: err ? (typeof err.code === 'number' ? err.code : -1) : 0, out: String(stdout || ''), err: String(stderr || '') });
+    });
+  });
+}
+async function akSettings() {
+  const r = await runAk(['settings_show']);
+  if (!r.ok) throw new Error('settings_show 失败：' + (r.err || r.out).slice(0, 200));
+  const j = JSON.parse(r.out);
+  return j.result.settings;
+}
+async function akBackends() {
+  const r = await runAk(['ai', 'list']);
+  if (!r.ok) return [];
+  try { return JSON.parse(r.out); } catch { return []; }
+}
+function akGet(obj, dotted) {
+  return String(dotted).split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+async function akPatchStatus() {
+  const settings = await akSettings();
+  const backends = await akBackends();
+  return AUTOKILL_PATCHES.map((pp) => {
+    let current = 'missing';
+    if (pp.kind === 'ai') {
+      const b = backends.find((x) => x && x.name === pp.name);
+      current = b ? (b.enabled ? 'on' : 'off') : 'missing';
+    } else {
+      const v = akGet(settings, pp.key);
+      current = v === undefined ? 'missing' : String(v);
+    }
+    return Object.assign({}, pp, { current, applied: current === String(pp.target) });
+  });
+}
+
+// ---- 宿主版本兼容矩阵 ---------------------------------------------------------
+// 破甲能力是绑版本的：83 补丁表按 dsh-purge 1.1.71 验证，梦神破甲按 AutoKill 0.6.1 验证。
+// 版本不一致时不静默照用，而是把状态带回前端（exact / compatible / unknown），由界面提示。
+const HOST_SUPPORT = {
+  dsh: { verified: '1.1.71', label: '83 补丁表 + 提示词层', tester: 'dsh-purge' },
+  autokill: { verified: '0.6.1', label: '梦神破甲 9 项 + 提示词层', tester: 'AutoKill' },
+  mengbot: { verified: '', label: 'bot soul 注入', tester: 'MengBot' },
+};
+function versionStatus(current, verified) {
+  const cur = String(current || '').trim();
+  const ver = String(verified || '').trim();
+  if (!ver) return { status: 'unversioned', detail: '这套能力不绑版本' };
+  if (!cur) return { status: 'unversioned', detail: '没取到宿主版本' };
+  if (cur === ver) return { status: 'exact', detail: '与验证版本一致' };
+  const a = cur.split('.').map((x) => Number(x) || 0);
+  const b = ver.split('.').map((x) => Number(x) || 0);
+  if (a[0] === b[0] && a[1] === b[1]) return { status: 'compatible', detail: '同小版本，可能多/少几项' };
+  return { status: 'unknown', detail: '与验证版本不同，未经验证' };
+}
+async function akVersion() {
+  const r = await runAk(['-V']);
+  if (!r.ok) return '';
+  const m = String(r.out || '').match(/(\d+\.\d+\.\d+)/);
+  return m ? m[1] : '';
+}
+
+// ---- 装备 → AutoKill 的可见面：把 autokill-purge 挂成它的 MCP 插件 -----------------
+// AutoKill 的插件模型是 config.toml 里的 [[plugins.mcp]]（id/name/command/args/enabled/consent），
+// 挂上之后 GUI 的插件列表能看到，AI 会话里也能直接调 purge_search / purge_equipment / purge_breach。
+const PURGE_MCP_ID = 'purge';
+function purgeMcpScript() {
+  return join(HERE, '..', 'scripts', 'mcp-server.mjs').replace(/\\/g, '/');
+}
+function purgeMcpBlock() {
+  // 用内联表数组，和 AutoKill 自己的 `mcp = []` 结构一致；
+  // 千万不要再追加 [[plugins.mcp]] —— 那会和 mcp = [] 构成重复定义，AutoKill 会把 config 判为坏文件。
+  const cmd = JSON.stringify(process.execPath || 'node');
+  const script = JSON.stringify(purgeMcpScript());
+  return '{ id = "purge", name = "autokill-purge", command = ' + cmd + ', args = [' + script + '], enabled = true, consent = false }';
+}
+/** 在 [plugins] 段里把 mcp = [...] 改写成我们要的内容（保留其它键） */
+function withPurgeMcp(toml, pluginLine) {
+  // 先把 AutoKill 序列化出来的 [[plugins.mcp]] / [plugins.mcp.env] 整族删掉：
+  // 留着它们再写内联 mcp = [...] 就是 TOML 重复定义，AutoKill 会把整份配置判坏档。
+  const clean = stripTableFamily(toml, ['plugins.mcp']);
+  const lines = String(clean).split(/\r?\n/);
+  const out = [];
+  let inPlugins = false;
+  let hit = false;
+  for (const ln of lines) {
+    if (/^\s*\[plugins\]\s*$/.test(ln)) { inPlugins = true; out.push(ln); continue; }
+    if (/^\s*\[/.test(ln)) { inPlugins = false; out.push(ln); continue; }
+    if (inPlugins && /^\s*mcp\s*=/.test(ln)) {
+      out.push(pluginLine === null ? 'mcp = []' : 'mcp = [' + pluginLine + ']');
+      hit = true;
+      continue;
+    }
+    out.push(ln);
+  }
+  if (!hit) {
+    out.push('', '[plugins]', pluginLine === null ? 'mcp = []' : 'mcp = [' + pluginLine + ']');
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+}
+/** 按顶层逗号切分 `[a, b, c]` 里的项（忽略字符串与嵌套括号内的逗号） */
+function splitTopLevel(body) {
+  const items = [];
+  let depth = 0, quote = false, cur = '';
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (quote) {
+      cur += c;
+      if (c === '"' && body[i - 1] !== '\\') quote = false;
+      continue;
+    }
+    if (c === '"') { quote = true; cur += c; continue; }
+    if (c === '{' || c === '[') { depth++; cur += c; continue; }
+    if (c === '}' || c === ']') { depth--; cur += c; continue; }
+    if (c === ',' && depth === 0) { if (cur.trim()) items.push(cur.trim()); cur = ''; continue; }
+    cur += c;
+  }
+  if (cur.trim()) items.push(cur.trim());
+  return items;
+}
+/** 从 mcp 数组值里摘掉 id="purge" 的项；空则返回 [] */
+function removePurgeEntries(value) {
+  const m = String(value).match(/^\s*\[([\s\S]*)\]\s*$/);
+  if (!m) return '[]';
+  const items = splitTopLevel(m[1]);
+  const kept = items.filter((it) => !/id\s*=\s*"purge"/.test(it));
+  return '[' + kept.join(', ') + ']';
+}
+/** 删掉某一「表家族」的全部段（含子表），例如 plugins.mcp 会连 [[plugins.mcp]] 与 [plugins.mcp.env] 一起删 */
+function stripTableFamily(toml, prefixes) {
+  const lines = String(toml).split(/\r?\n/);
+  const out = [];
+  let skipping = false;
+  for (const ln of lines) {
+    const m = ln.match(/^\s*\[\[?([^\]]+)\]\]?\s*$/);
+    if (m) {
+      const name = m[1].trim();
+      skipping = prefixes.some((p) => name === p || name.startsWith(p + '.'));
+      if (skipping) continue;
+      out.push(ln);
+      continue;
+    }
+    if (skipping) continue;
+    out.push(ln);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+}
+
+/** 把 [plugins] 段里的 mcp 数组改写：去掉我们的插件，保留别人的（支持多行数组） */
+function stripPurgeMcp(toml) {
+  // 先把 AutoKill 自己序列化出来的 [[plugins.mcp]] / [plugins.mcp.env] 整族删掉，
+  // 否则会与下面重写的内联数组构成 TOML 重复定义（实测把整份配置判成坏档）
+  const text = stripTableFamily(toml, ['plugins.mcp']);
+  const lines = String(text).split(/\r?\n/);
+  const out = [];
+  let inPlugins = false;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (/^\s*\[plugins\]\s*$/.test(ln)) { inPlugins = true; out.push(ln); continue; }
+    if (/^\s*\[/.test(ln)) { inPlugins = false; out.push(ln); continue; }
+    if (inPlugins && /^\s*mcp\s*=/.test(ln)) {
+      // 数组可能跨行：一直收到方括号配平为止
+      let buf = ln;
+      let depth = (ln.match(/\[/g) || []).length - (ln.match(/\]/g) || []).length;
+      let j = i;
+      while (depth > 0 && j + 1 < lines.length) {
+        j++;
+        buf += '\n' + lines[j];
+        depth += (lines[j].match(/\[/g) || []).length - (lines[j].match(/\]/g) || []).length;
+      }
+      const value = buf.slice(buf.indexOf('=') + 1).trim();
+      out.push('mcp = ' + removePurgeEntries(value));
+      i = j;
+      continue;
+    }
+    out.push(ln);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+}
+async function readAkConfigText() {
+  try { return await readFile(akConfigPath(), 'utf8'); } catch { return ''; }
+}
+async function akMcpState() {
+  const text = await readAkConfigText();
+  const has = /id\s*=\s*"purge"/.test(text);
+  return { mounted: has, id: PURGE_MCP_ID, script: purgeMcpScript(), command: process.execPath || 'node', config: akConfigPath() };
+}
+async function mountPurgeMcp() {
+  const text = await readAkConfigText();
+  if (!text) throw new Error('读不到 AutoKill 的 config.toml');
+  const next = withPurgeMcp(text, purgeMcpBlock());
+  if (next === text) return { ok: true, changed: false };
+  // 备份
+  try {
+    const dir = join(DATA_DIR, 'host-snapshots');
+    await mkdir(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    await copyFile(akConfigPath(), join(dir, 'autokill-config-mcp-' + stamp + '.toml'));
+  } catch { /* 备份失败不阻断 */ }
+  await writeFile(akConfigPath(), next, 'utf8');
+  return { ok: true, changed: true, bytes: Buffer.byteLength(next, 'utf8') };
+}
+async function unmountPurgeMcp() {
+  const text = await readAkConfigText();
+  if (!text) throw new Error('读不到 AutoKill 的 config.toml');
+  const next = stripPurgeMcp(text);
+  if (next === text) return { ok: true, changed: false };
+  try {
+    const dir = join(DATA_DIR, 'host-snapshots');
+    await mkdir(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    await copyFile(akConfigPath(), join(dir, 'autokill-config-mcp-off-' + stamp + '.toml'));
+  } catch { /* ignore */ }
+  await writeFile(akConfigPath(), next, 'utf8');
+  return { ok: true, changed: true, bytes: Buffer.byteLength(next, 'utf8') };
+}
+
+// ---- UI 插槽注入（[[ui.slots]]）：把破甲/装备控件画进 AutoKill 的界面 ---------------
+// AutoKill 0.6.1+ 的 ui.slots 机制：外部程序写 config.toml，AutoKill 负责画。
+// 归属标记：块内出现 "autokill-purge"（在 hint 里），删的时候只删自己的块。
+const PURGE_SLOT_PLACES = ['titlebar.side', 'builder.side'];
+/** TOML 双引号字符串转义 */
+function tomlStr(s) {
+  return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, ' ') + '"';
+}
+/**
+ * 装备下拉的插槽定义。
+ * presets 为空时列全部预设；否则只列破甲台本次勾选的那几个 —— 下拉里看到的应与勾选一致。
+ */
+function purgeSlotBlocks(presets) {
+  const wanted = Array.isArray(presets) ? presets.filter((id) => EQUIP_PRESETS.some((p) => p.id === id)) : [];
+  const ids = wanted.length ? wanted : EQUIP_PRESETS.map((p) => p.id);
+  const opts = ['  { value = "", label = "不装备" },'];
+  for (const id of ids) {
+    const p = EQUIP_PRESETS.find((x) => x.id === id);
+    if (!p) continue;
+    opts.push(`  { value = ${tomlStr(id)}, label = ${tomlStr(p.name)}, detail = ${tomlStr(p.desc || p.name)} },`);
+  }
+  return [{
+    place: 'builder.side',
+    toml: [
+      '[[ui.slots]]',
+      'id = "builder.side"',
+      'kind = "select"',
+      'label = "装备模式"',
+      `hint = ${tomlStr('autokill-purge：本次带了 ' + ids.map((i) => (EQUIP_PRESETS.find((p) => p.id === i) || {}).name || i).join('、'))}`,
+      'setting = "build.gear"',
+      'mode = "one-of-list"',
+      'options = [',
+      ...opts,
+      ']',
+    ].join('\n'),
+  }];
+}
+
+/** 取破甲台最近一次「一并装备」勾选的预设 id（直接读 state 文件，避开内存态差异） */
+async function currentEquipPresets() {
+  try {
+    const raw = (await readFile(STATE_FILE, 'utf8')).replace(/^\uFEFF/, '');
+    const j = JSON.parse(raw);
+    const eq = Array.isArray(j.equipment) ? j.equipment : [];
+    for (let i = eq.length - 1; i >= 0; i--) {
+      const rec = eq[i];
+      const ps = Array.isArray(rec && rec.presets) ? rec.presets : (rec && rec.preset ? [rec.preset] : []);
+      if (ps.length) return ps.filter((x) => typeof x === 'string');
+    }
+  } catch { /* 读不到就用全部 */ }
+  return [];
+}
+/** 去掉所有归属 autokill-purge 的 [[ui.slots]] 块（块边界 = 下一个 [ 开头的行） */
+function stripPurgeSlots(toml) {
+  // 同样先删整族：[[ui.slots]] 与它的子表 [[ui.slots.options]]
+  const text = stripTableFamily(toml, ['ui.slots']);
+  const lines = String(text).split(/\r?\n/);
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (/^\s*\[\[ui\.slots\]\]\s*$/.test(lines[i])) {
+      let j = i + 1;
+      while (j < lines.length && !/^\s*\[/.test(lines[j])) j++;
+      const block = lines.slice(i, j).join('\n');
+      if (!/autokill-purge/.test(block)) out.push(...lines.slice(i, j));
+      i = j;
+      continue;
+    }
+    out.push(lines[i]);
+    i++;
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+}
+async function akSlotsState() {
+  const text = await readAkConfigText();
+  // 按块扫描（不用正则跨行，避免 m 标志把 $ 当行尾截断块）
+  const lines = text.split(/\r?\n/);
+  const all = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*\[\[ui\.slots\]\]\s*$/.test(lines[i])) continue;
+    let j = i + 1;
+    while (j < lines.length && !/^\s*\[/.test(lines[j])) j++;
+    const body = lines.slice(i, j).join('\n');
+    all.push({ id: (body.match(/id\s*=\s*"([^"]+)"/) || [])[1] || '', ours: /autokill-purge/.test(body) });
+    i = j - 1; // for 循环还会 i++，落在下一块的 [[ui.slots]] 行
+  }
+  const ours = all.filter((b) => b.ours);
+  const support = await akUiSlotsSupported();
+  return {
+    injected: ours.length > 0,
+    places: ours.map((b) => b.id),
+    total: all.length,
+    supported: support.supported,
+    keys: support.keys,
+    config: akConfigPath(),
+  };
+}
+/** 运行时装探测：settings_show 里有 ui 表 = 这个安装的 Settings 结构认识 ui.slots */
+async function akUiSlotsSupported() {
+  try {
+    const r = await runAk(['settings_show']);
+    if (!r.ok) return { supported: false, keys: [] };
+    const j = JSON.parse(r.out);
+    const s = (j && j.result && j.result.settings) || {};
+    const keys = Object.keys(s);
+    return { supported: keys.includes('ui'), keys };
+  } catch {
+    return { supported: false, keys: [] };
+  }
+}
+/** 删掉 [ui] 段里的 slots = ... 行：否则与 [[ui.slots]] 构成 TOML 重复定义，AutoKill 会判坏档 */
+function stripUiSlotsKey(toml) {
+  const lines = String(toml).split(/\r?\n/);
+  const out = [];
+  let inUi = false;
+  for (const ln of lines) {
+    if (/^\s*\[ui\]\s*$/.test(ln)) { inUi = true; out.push(ln); continue; }
+    if (/^\s*\[/.test(ln)) { inUi = false; out.push(ln); continue; }
+    if (inUi && /^\s*slots\s*=/.test(ln)) continue;
+    out.push(ln);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+}
+async function mountPurgeSlots() {
+  const text = await readAkConfigText();
+  if (!text) throw new Error('读不到 AutoKill 的 config.toml');
+  // 先清掉旧块，再删 [ui] 里的 slots 键（避免重复定义），最后追加块。
+  // 选项按破甲台最近一次「一并装备」的勾选来，勾了什么就只列什么。
+  const presets = await currentEquipPresets();
+  const base = stripUiSlotsKey(stripPurgeSlots(text)).trimEnd();
+  const blocks = purgeSlotBlocks(presets).map((b) => b.toml).join('\n\n');
+  const next = base + '\n\n' + blocks + '\n';
+  try {
+    const dir = join(DATA_DIR, 'host-snapshots');
+    await mkdir(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    await copyFile(akConfigPath(), join(dir, 'autokill-config-slots-' + stamp + '.toml'));
+  } catch { /* 备份失败不阻断 */ }
+  await writeFile(akConfigPath(), next, 'utf8');
+  return { ok: true, changed: true, bytes: Buffer.byteLength(next, 'utf8') };
+}
+async function unmountPurgeSlots() {
+  const text = await readAkConfigText();
+  if (!text) throw new Error('读不到 AutoKill 的 config.toml');
+  const next = stripPurgeSlots(text);
+  if (next === text) return { ok: true, changed: false };
+  try {
+    const dir = join(DATA_DIR, 'host-snapshots');
+    await mkdir(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    await copyFile(akConfigPath(), join(dir, 'autokill-config-slots-off-' + stamp + '.toml'));
+  } catch { /* ignore */ }
+  await writeFile(akConfigPath(), next, 'utf8');
+  return { ok: true, changed: true, bytes: Buffer.byteLength(next, 'utf8') };
+}
+
+/** 卸载后的残留自检：配置里还有没有我们的痕迹 + 有没有 AutoKill 拉起的 mcp-server 进程 */
+function akMcpProcesses() {
+  return new Promise((resolve) => {
+    const ps = 'Get-CimInstance Win32_Process -Filter "Name=\'node.exe\'" | Where-Object { $_.CommandLine -match \'mcp-server\' } | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }';
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 8000 }, (err, stdout) => {
+      if (err) return resolve([]);
+      const list = String(stdout || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      resolve(list);
+    });
+  });
+}
+/** 精确杀掉我们自己拉起的 mcp-server 进程（命令行必须同时含 mcp-server 和 autokill-purge 路径） */
+function akKillMcpProcesses() {
+  return new Promise((resolve) => {
+    const ps = "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'mcp-server' -and $_.CommandLine -match 'autokill-purge' } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; \"$($_.ProcessId)\" } catch { \"fail:$($_.ProcessId)\" } }";
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 10000 }, (err, stdout) => {
+      if (err) return resolve([]);
+      resolve(String(stdout || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+    });
+  });
+}
+/** 已审阅记忆库的接线配置（AutoKill 的 [memory] 表，docs/memory.md） */
+function purgeMemoryBlock() {
+  return [
+    '[memory]',
+    'enabled = true',
+    'plugin = "purge"',
+    'context_tool = "purge_context"',
+    'absorb_tool = "purge_absorb"',
+    'budget_tokens = 1500',
+    'absorb = true',
+  ].join('\n');
+}
+/** 写入/替换 [memory] 段（旧版 AutoKill 不认识这张表，会安静忽略） */
+function withPurgeMemory(toml) {
+  const lines = String(toml).split(/\r?\n/);
+  const out = [];
+  let skipping = false;
+  for (const ln of lines) {
+    if (/^\s*\[memory\]\s*$/.test(ln)) { skipping = true; continue; }
+    if (skipping) {
+      if (/^\s*\[/.test(ln)) skipping = false;
+      else continue;
+    }
+    out.push(ln);
+  }
+  const base = out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+  return base + '\n\n' + purgeMemoryBlock() + '\n';
+}
+function stripPurgeMemory(toml) {
+  const lines = String(toml).split(/\r?\n/);
+  const out = [];
+  let skipping = false;
+  for (const ln of lines) {
+    if (/^\s*\[memory\]\s*$/.test(ln)) { skipping = true; continue; }
+    if (skipping) {
+      if (/^\s*\[/.test(ln)) skipping = false;
+      else continue;
+    }
+    out.push(ln);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+}
+
+/** 等到目标值真的出现在配置里（settings_set 是异步落盘，光看文件"稳定"会误判为已完成） */
+async function waitUntilApplied(items, timeoutMs = 12000) {
+  const t0 = Date.now();
+  let last = null;
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      const settings = await akSettings();
+      const pending = items.filter((it) => {
+        if (it.kind === 'ai') return false; // ai on/off 由返回结果判定
+        const cur = String(akGet(settings, it.key));
+        return cur !== String(it.want);
+      });
+      last = pending;
+      if (pending.length === 0) return true;
+    } catch { /* 读失败继续等 */ }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
+
+/** 把 JS 值写成 TOML 标量 */
+function tomlValue(v) {
+  if (typeof v === 'boolean') return String(v);
+  if (typeof v === 'number') return String(v);
+  return JSON.stringify(String(v));
+}
+/** 直接改 TOML 文本里的点号键（段内替换，缺段补段）。绕开 settings_set 的异步落盘竞争。 */
+function setTomlKey(toml, dotted, value) {
+  const parts = String(dotted).split('.');
+  const leaf = parts.pop();
+  const section = parts.join('.');
+  const lines = String(toml).split(/\r?\n/);
+  const out = [];
+  let inSec = section === '';
+  let done = false;
+  const keyRe = new RegExp('^\\s*' + leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*=');
+  for (const ln of lines) {
+    const secMatch = ln.match(/^\s*\[([^\]]+)\]\s*$/);
+    if (secMatch) {
+      if (inSec && !done && section !== '') { out.push(leaf + ' = ' + tomlValue(value)); done = true; }
+      inSec = secMatch[1].trim() === section;
+      out.push(ln);
+      continue;
+    }
+    if (inSec && !done && keyRe.test(ln)) {
+      out.push(leaf + ' = ' + tomlValue(value));
+      done = true;
+      continue;
+    }
+    out.push(ln);
+  }
+  if (!done) {
+    if (inSec && section !== '') out.push(leaf + ' = ' + tomlValue(value));
+    else if (section === '') out.unshift(leaf + ' = ' + tomlValue(value));
+    else out.push('', '[' + section + ']', leaf + ' = ' + tomlValue(value));
+  }
+  return out.join('\n');
+}
+/** ui.slots 的纯文本注入（供一次性写盘复用） */
+function withPurgeSlotsToml(toml, presets) {
+  const base = stripUiSlotsKey(stripPurgeSlots(toml)).trimEnd();
+  const blocks = purgeSlotBlocks(presets).map((b) => b.toml).join('\n\n');
+  return base + '\n\n' + blocks + '\n';
+}
+
+/** 等 config.toml 稳定下来：settings_set 是「先会话、约 0.6s 后落盘」，连续多次调用会排队写盘 */
+async function waitConfigStable(timeoutMs = 12000) {
+  const file = akConfigPath();
+  let last = '';
+  let same = 0;
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 400));
+    let sig = '';
+    try {
+      const st = statSync(file);
+      const text = await readFile(file, 'utf8');
+      sig = st.mtimeMs + ':' + text.length;
+    } catch { sig = ''; }
+    if (sig && sig === last) {
+      if (++same >= 2) return true;
+    } else {
+      same = 0;
+      last = sig;
+    }
+  }
+  return false;
+}
+
+async function akResidueAudit() {
+  // 用 CLI 解析后的配置判断（文本正则会误判残留行），解析失败才退回文本
+  const traces = { mcp: false, slots: false, any: false };
+  try {
+    const r = await runAk(['settings_show']);
+    if (r.ok) {
+      const s = JSON.parse(r.out).result.settings || {};
+      const mcp = (s.plugins && s.plugins.mcp) || [];
+      traces.mcp = mcp.some((x) => x && (x.id === 'purge' || /autokill-purge/i.test(String(x.name || ''))));
+      const slots = (s.ui && s.ui.slots) || [];
+      traces.slots = slots.some((x) => /autokill-purge/i.test(String(x.hint || '')) || /autokill-purge/i.test(String(x.label || '')));
+      traces.any = traces.mcp || traces.slots;
+    }
+  } catch { /* 落到下面的文本兜底 */ }
+  if (!traces.any) {
+    const text = await readAkConfigText();
+    if (/id\s*=\s*"purge"/.test(text)) { traces.mcp = true; traces.any = true; }
+  }
+  const processes = await akMcpProcesses();
+  return { traces, processes, clean: !traces.any && processes.length === 0 };
+}
+
+async function assignSearchBlock(state) {  const base = 'http://127.0.0.1:' + deployInfo().webPort;
+  const hit = await memSearch(state, { q: '渗透', limit: 1 });
+  return [
+    '## 宿主自助检索（运行时，别只靠这份静态文档）',
+    '',
+    '任务开始前先查库，命中就引用 title + path：',
+    '',
+    '```bash',
+    'curl -s "' + base + '/api/memory/search?q=<关键词>&semantic=1&limit=8"',
+    '```',
+    '',
+    '- 库：`' + deployInfo().dbName + '`（隔离库，不是 DSH 主记忆）',
+    '- 全文：`' + base + '/api/memory/card?path=<path>`',
+    '- 说明：`' + base + '/api/memory/useguide`（GET，markdown）',
+    '- 检索服务当前状态：' + (hit.ok ? '可用（' + hit.count + ' 条样例命中）' : '不可达（' + hit.error + '）'),
+    '',
+  ].join('\n');
+}
+
 
 // ---- readiness (UX-2LAYER §1.2) ---------------------------------------------
 // One health snapshot for the simple-mode status card. No cache: the console pulls it on page enter
@@ -478,12 +1226,19 @@ async function assignMarkdown(state, agent) {
     }
     lines.push('## ' + (meta.title || card.data.path), '', '- path: ' + card.data.path, '- status: ' + (card.data.status || ''), '', String(card.data.text || ''), '');
   }
+  // 闭环第 3 环：文档末尾附上「运行时也能自己查」的检索入口，宿主不必只吃这份静态快照
+  lines.push(await assignSearchBlock(state));
   return lines.join('\n');
 }
 
 // ---- http helpers -----------------------------------------------------------
+const CORS_HEADERS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': 'content-type',
+  'access-control-allow-methods': 'GET,POST,OPTIONS',
+};
 function send(res, code, value) {
-  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...CORS_HEADERS });
   res.end(JSON.stringify(value));
 }
 function sendText(res, code, text, type) {
@@ -547,6 +1302,28 @@ function rawBody(req) {
   });
 }
 
+
+/** 记忆服务不可达时给 iframe 看的说明页（纯 HTML/CSS，不依赖任何 JS 也能读）。 */
+function memoryOfflineHtml(target, detail) {
+  const esc2 = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const port = (() => { try { return new URL(target).port || '80'; } catch { return '?'; } })();
+  return '<!doctype html><meta charset="utf-8"><title>记忆服务未连接</title>' +
+    '<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;' +
+    'background:#111418;color:#e5e7eb;font:14px/1.7 system-ui,"Microsoft YaHei",sans-serif;padding:24px}' +
+    '.box{max-width:560px;border:1px solid #2c333c;border-radius:12px;padding:22px 24px;background:#1a1f26}' +
+    'h1{margin:0 0 6px;font-size:17px}p{margin:8px 0;color:#9ca3af}code{background:#22282f;padding:2px 6px;border-radius:5px;color:#93c5fd}' +
+    'ol{margin:10px 0 0 18px;padding:0;color:#cbd5e1}li{margin:6px 0}a{color:#60a5fa}</style>' +
+    '<div class="box"><h1>记忆服务未连接（端口 ' + esc2(port) + '）</h1>' +
+    '<p>这一页是嵌入的 memory-eternal，但它现在没在回话，所以只看到空白。控制台本身是好的。</p>' +
+    '<p>目标：<code>' + esc2(target) + '</code></p>' +
+    '<p>错误：<code>' + esc2(detail) + '</code></p>' +
+    '<p><strong>按顺序试：</strong></p><ol>' +
+    '<li>把服务拉起来：<code>node ~/.dsh/profiles/desktop/node_modules/memory-eternal/lib/web.js --port ' + esc2(port) + ' --vault ~/.dsh/memory-vault-mem-purge</code></li>' +
+    '<li>让控制台指向真实端口：在「设置」里改记忆服务地址，或写 <code>data/deploy.json</code> 的 <code>port</code>/<code>dbName</code></li>' +
+    '<li>常驻保活：<code>node scripts/mem-keepalive.mjs</code>（探活 → 用显式 --vault 拉起 → 核对库名）</li>' +
+    '</ol><p style="margin-top:14px"><a href="">重新加载</a>（服务起来后点这个）</p></div>';
+}
+
 /**
  * prefix='' 表示原样转发（/memory-eternal/... 这类页面内部 API 调用）；
  * prefix='/embed/memory' 把 7999 的整个 web 根挂在同源路径下，供 iframe 使用。
@@ -563,6 +1340,12 @@ async function proxyMemoryUi(req, res, url, prefix) {
   try {
     r = await fetch(target, init);
   } catch (e) {
+    // iframe 场景必须给人话：返回 JSON 时浏览器只显示一片白（或者一段没人看的 JSON），
+    // 用户以为「记忆库坏了」，其实只是服务没起 / 端口漂了。这里按 Accept 分流。
+    if (String(req.headers.accept || '').includes('text/html')) {
+      res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end(memoryOfflineHtml(memUiBase(), publicError(e)));
+    }
     return send(res, 503, { ok: false, error: 'memory_ui_unreachable', detail: publicError(e) });
   }
   const ct = r.headers.get('content-type') || 'application/octet-stream';
@@ -638,6 +1421,12 @@ function mergeLiveModels(statics, live) {
 async function handleApi(req, res, url, state) {
   const p = url.pathname;
   const method = req.method;
+
+  // 预检：MengBot 的 UI 从 file:// / app:// 调本服务时需要（装备抽屉等外挂组件用）
+  if (method === 'OPTIONS') {
+    res.writeHead(204, CORS_HEADERS);
+    return res.end();
+  }
 
   if (p === '/api/ping' && method === 'GET') return send(res, 200, { ok: true, version: VERSION });
 
@@ -761,6 +1550,143 @@ async function handleApi(req, res, url, state) {
     return send(res, 200, { ok: true, status: 'pending', key: key, path: (r.data && r.data.path) || null, action: (r.data && r.data.action) || 'created' });
   }
 
+  // ---- 记忆检索 / 检索说明 / 给宿主装检索技能（闭环第 3 环）------------------
+  if (p === '/api/memory/search' && method === 'GET') {
+    const q = String(url.searchParams.get('q') || '').trim();
+    if (!q) return send(res, 400, { ok: false, error: 'q is required' });
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 8, 1), 30);
+    const semantic = url.searchParams.get('semantic') !== '0';
+    const kind = String(url.searchParams.get('kind') || '').trim();
+    const r = await memSearch(state, { q, limit, semantic, kind });
+    if (!r.ok) {
+      if (r.error === 'memory_unreachable') return sendMemoryError(res, 503);
+      return sendMemoryError(res, 502);
+    }
+    return send(res, 200, { ok: true, q: r.q, count: r.count, lib: DEPLOY.dbName, items: r.items });
+  }
+  // 构建开始：一次性取上下文，按 token 预算裁剪（供 MCP 的 purge_context）
+  if (p === '/api/memory/context' && method === 'POST') {
+    const body = await bodyOf(req);
+    const q = String(body.query || '').trim();
+    if (!q) return send(res, 400, { ok: false, error: 'query is required' });
+    const budget = Math.min(Math.max(Number(body.budget_tokens) || 2000, 200), 8000);
+    const kinds = Array.isArray(body.kinds) ? body.kinds.map(String) : [];
+    const limit = Math.min(Math.max(Number(body.limit) || 12, 1), 30);
+    const r = await memSearch(state, { q, limit, semantic: body.semantic !== false, kind: '' });
+    if (!r.ok) {
+      if (r.error === 'memory_unreachable') return sendMemoryError(res, 503);
+      return sendMemoryError(res, 502);
+    }
+    const cards = [];
+    const skills = [];
+    let used = 0;
+    let dropped = 0;
+    for (const it of r.items || []) {
+      const k = String(it.kind || '');
+      if (kinds.length && !kinds.includes(k)) continue;
+      const id = it.key || it.id || '';
+      if (k === 'skill') skills.push({ id, name: String(it.title || '').replace(/^技能索引[:：]\s*/, '') });
+      const excerpt = String(it.snippet || it.body || '').replace(/\s+/g, ' ').trim().slice(0, 600);
+      // 粗估：中文 1 字 ≈ 1 token，英文按 0.3，取 0.6 折中，再加标题开销
+      const tokens = Math.ceil(excerpt.length * 0.6) + 20;
+      if (used + tokens > budget) { dropped++; continue; }
+      used += tokens;
+      cards.push({ id, title: it.title, kind: k, score: it.score ?? null, excerpt, tokens });
+    }
+    return send(res, 200, { ok: true, query: q, budget_tokens: budget, used_tokens: used, dropped, cards, skills });
+  }
+  // 构建结束：回灌新知识（供 MCP 的 purge_absorb）。落 pending，不自动 approve。
+  if (p === '/api/memory/absorb' && method === 'POST') {
+    const body = await bodyOf(req);
+    const title = String(body.title || '').trim();
+    const text = String(body.body || '').trim();
+    if (!title || !text) return send(res, 400, { ok: false, error: 'title and body are required' });
+    const allowed = ['finding', 'skill', 'check', 'mistake', 'knowledge', 'project'];
+    const kind = allowed.includes(String(body.kind || '')) ? String(body.kind) : 'finding';
+    const tags = Array.isArray(body.tags) ? body.tags.map(String).slice(0, 20) : [];
+    const evidence = Array.isArray(body.evidence) ? body.evidence.map(String).slice(0, 20) : [];
+    const projectId = String(body.project_id || '').trim();
+    const hash = String(body.hash || '').trim()
+      || createHash('sha1').update([kind, title, text, projectId].join('\u0000')).digest('hex').slice(0, 16);
+    const key = 'purge.absorb.' + hash;
+    // 查重：本地索引（memory-eternal 的 /lookup 返回结构跨版本不一致，不能当唯一依据）
+    try {
+      const idxFile = join(DATA_DIR, 'absorb-index.json');
+      let idx = {};
+      try { idx = JSON.parse(await readFile(idxFile, 'utf8')); } catch { idx = {}; }
+      if (idx[hash]) {
+        return send(res, 200, { ok: true, id: idx[hash], key, hash, deduped: true, status: 'pending' });
+      }
+    } catch { /* 索引不可用就继续写 */ }
+    const cardBody = [
+      '# ' + title,
+      '',
+      '- 类型：' + kind,
+      projectId ? '- 项目：' + projectId : '',
+      tags.length ? '- 标签：' + tags.join(', ') : '',
+      evidence.length ? '\n## 证据\n\n' + evidence.map((e) => '- ' + e).join('\n') : '',
+      '',
+      '## 正文',
+      '',
+      text,
+    ].filter((x) => x !== '').join('\n');
+    const w = await upsertMemoryCard(state, { key, kind, title, body: cardBody, source: 'autokill-purge' });
+    if (!w.ok) {
+      if (w.error === 'memory_unreachable') return sendMemoryError(res, 503);
+      return send(res, 502, { ok: false, error: w.error, detail: w.detail || null });
+    }
+    // 记账：这个 hash 已经写过
+    try {
+      const idxFile = join(DATA_DIR, 'absorb-index.json');
+      let idx = {};
+      try { idx = JSON.parse(await readFile(idxFile, 'utf8')); } catch { idx = {}; }
+      idx[hash] = key;
+      await writeFile(idxFile, JSON.stringify(idx, null, 1), 'utf8');
+    } catch { /* 记账失败不影响入库结果 */ }
+    return send(res, 200, { ok: true, id: key, key, hash, deduped: false, status: 'pending' });
+  }
+  // 取一条技能卡：参数表 + 可复跑脚本（供 MCP 的 purge_skill_get）
+  if (p === '/api/memory/skill' && method === 'GET') {
+    const name = String(url.searchParams.get('name') || '').trim();
+    if (!name) return send(res, 400, { ok: false, error: 'name is required' });
+    const r = await memSearch(state, { q: name, limit: 6, semantic: false, kind: 'skill' });
+    if (!r.ok) {
+      if (r.error === 'memory_unreachable') return sendMemoryError(res, 503);
+      return sendMemoryError(res, 502);
+    }
+    const items = r.items || [];
+    const clean = (s) => String(s || '').replace(/^技能索引[:：]\s*/, '').toLowerCase();
+    const hit = items.find((it) => clean(it.title).includes(name.toLowerCase())) || items[0];
+    if (!hit) return send(res, 404, { ok: false, error: 'skill_not_found', name });
+    // search 只给 snippet+path，全文要按 path 再读一次
+    let text = String(hit.body || '');
+    if (!text && hit.path) {
+      try {
+        const c = await memFetch(state, '/card?path=' + encodeURIComponent(hit.path));
+        if (c && c.data && c.data.ok && c.data.text) text = String(c.data.text);
+      } catch { /* 读不到就退回 snippet */ }
+    }
+    if (!text) text = String(hit.snippet || '');
+    const params = [...text.matchAll(/^\s*[-*]\s*(?:参数|param)[:：]\s*(.+)$/gim)].map((m) => m[1].trim());
+    const scripts = [...text.matchAll(/```([a-zA-Z0-9_-]*)\r?\n([\s\S]*?)```/g)].map((m) => ({ lang: m[1] || 'text', code: m[2].trim() }));
+    return send(res, 200, { ok: true, id: hit.key || hit.path || '', name: clean(hit.title), params, scripts, body: text.slice(0, 4000) });
+  }
+
+  if (p === '/api/memory/useguide' && method === 'GET') {
+    return sendText(res, 200, useGuideMarkdown(), 'text/markdown');
+  }
+  if (p === '/api/memory/install-skill' && method === 'POST') {
+    // 把检索说明写进宿主 DSH 的 skills 目录（~/.dsh/skills/mem-purge-recall/SKILL.md），
+    // 宿主下次会话就能自己查这个库。显式触发，不自动装。
+    const name = 'mem-purge-recall';
+    try {
+      const r = await writeSkill(DATA_DIR, name, useGuideMarkdown());
+      return send(res, 200, Object.assign({ ok: true, skill: name, hint: '宿主重启会话后生效' }, r));
+    } catch (e) {
+      return send(res, 500, { ok: false, error: publicError(e) });
+    }
+  }
+
   // catalog (FR-10)
   if (p === '/api/catalog' && method === 'GET') {
     const cat = await catalogState(state);
@@ -843,9 +1769,403 @@ async function handleApi(req, res, url, state) {
     if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '应用会改宿主文件并需要重启 dsh，传 confirm:true' });
     const guard = await createSnapshot(DATA_DIR, 'pre-apply');
     try {
-      const r = await applyHostPatches(body.mode || 'apply');
-      return send(res, 200, { ok: true, result: r, guardSnapshot: guard.id });
+      // ① 插件注入（与内核补丁同一事务）：先装插件、登记 bundles 并校验，失败就不继续
+      const plugins = Array.isArray(body.plugins) ? body.plugins.filter((x) => typeof x === 'string') : [];
+      let pluginResult = null;
+      if (plugins.length) {
+        pluginResult = await opRun(DATA_DIR, 'plugin-install', { confirm: true, plugins });
+        if (!pluginResult || pluginResult.ok === false) {
+          return send(res, 500, { ok: false, error: 'plugin_install_failed', detail: pluginResult, guardSnapshot: guard.id });
+        }
+      }
+      // patches: ['id1','id2'] 只应用这几条；不传（或空数组）= 全部 83 条
+      const r = await applyHostPatches(body.mode || 'apply', { patchIds: Array.isArray(body.patches) ? body.patches : [] });
+      // applyError：引擎收尾抛错但文件可能已被改过 —— 200 里带出来，别让人以为彻底失败
+      return send(res, r && r.applyError ? 409 : 200, {
+        ok: !(r && r.applyError),
+        result: r,
+        pluginResult: pluginResult,
+        guardSnapshot: guard.id,
+        handoffRequired: !!(r && r.pendingHandoff),
+      });
     } catch (e) { return send(res, 500, { ok: false, error: 'apply_failed', detail: publicError(e), guardSnapshot: guard.id }); }
+  }
+  // ---- 「注入了什么」一屏聚合（右侧栏用）----
+  if (p === '/api/inject/summary' && method === 'GET') {
+    try { return send(res, 200, await injectSummary(DATA_DIR)); }
+    catch (e) { return send(res, 500, { ok: false, error: 'summary_failed', detail: publicError(e) }); }
+  }
+
+  // ---- 能力补齐（dsh-purge 的 reapply / rewind / identity / redteam-pack / restart） ----
+  if (p === '/api/ops' && method === 'GET') {
+    return send(res, 200, await listOps(DATA_DIR));
+  }
+  {
+    const m = p.match(/^\/api\/ops\/([a-z][a-z0-9-]*)(?:\/(status|plan|run))?$/);
+    if (m) {
+      const id = m[1];
+      const action = m[2] || 'status';
+      const body = method === 'POST' ? await bodyOf(req) : {};
+      if (action === 'status' && method === 'GET') return send(res, 200, await opStatus(DATA_DIR, id));
+      if (action === 'plan' && method === 'POST') return send(res, 200, await opPlan(DATA_DIR, id, body));
+      if (action === 'run' && method === 'POST') {
+        if (body.confirm !== true) {
+          return send(res, 400, { ok: false, error: 'confirm_required', hint: '这一类会改盘或重启宿主，传 confirm:true' });
+        }
+        const r = await opRun(DATA_DIR, id, body);
+        return send(res, r.ok ? 200 : 500, r);
+      }
+      return send(res, 405, { ok: false, error: 'method_not_allowed' });
+    }
+  }
+
+  // 落地（sealed handoff）：只写文件不挪走 app.asar 的话，桌面壳永远读 asar，补丁一条都不生效
+  if (p === '/api/host/handoff' && method === 'GET') {
+    try { return send(res, 200, await hostHandoffStatus()); }
+    catch (e) { return send(res, 503, { ok: false, error: 'handoff_status_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/host/handoff' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '落地会结束并重启桌面宿主（当前会话会断），传 confirm:true' });
+    const guard = await createSnapshot(DATA_DIR, 'pre-handoff');
+    try {
+      const r = await finishHostHandoff({ restart: body.restart !== false });
+      return send(res, 200, { ok: !!r.ok, handoff: r, guardSnapshot: guard.id, restartRequired: false });
+    } catch (e) { return send(res, 500, { ok: false, error: 'handoff_failed', detail: publicError(e), guardSnapshot: guard.id }); }
+  }
+  if (p === '/api/host/asar' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '把 app.asar 放回去会让补丁失效，传 confirm:true' });
+    try {
+      const r = await restoreHostAsar();
+      return send(res, r.ok ? 200 : 409, { ok: !!r.ok, restore: r });
+    } catch (e) { return send(res, 500, { ok: false, error: 'asar_restore_failed', detail: publicError(e) }); }
+  }
+
+  // ---- 宿主探测（破甲台的宿主选择用）：本地装没装、什么版本、带什么料 ----
+  if (p === '/api/hosts' && method === 'GET') {
+    const home = process.env.USERPROFILE || process.env.HOME || '';
+    const hosts = [];
+    // DSH：看桌面 profile 与 dsh-purge 插件（宿主注入依赖后者）
+    const dshProfile = join(home, '.dsh', 'profiles', 'desktop');
+    const purgePkg = join(dshProfile, 'node_modules', 'dsh-purge', 'package.json');
+    let dshVer = '';
+    try { dshVer = String(JSON.parse(await readFile(purgePkg, 'utf8')).version || ''); } catch { dshVer = ''; }
+    const dshInstalled = existsSync(dshProfile);
+    hosts.push({
+      id: 'dsh',
+      name: 'DSH',
+      installed: dshInstalled,
+      detail: dshInstalled ? (dshVer ? 'dsh-purge ' + dshVer : '已安装') : '未检测到 ~/.dsh/profiles/desktop',
+      version: dshVer,
+      support: Object.assign({ tester: HOST_SUPPORT.dsh.tester, label: HOST_SUPPORT.dsh.label, verified: HOST_SUPPORT.dsh.verified }, versionStatus(dshVer, HOST_SUPPORT.dsh.verified)),
+      capabilities: { inject: dshInstalled && !!dshVer, patches: dshInstalled && !!dshVer, soul: false },
+    });
+    // MengBot：看 bots.json
+    const botsFile = join(home, '.mengbot', 'bots.json');
+    let botCount = 0;
+    try { const j = JSON.parse(await readFile(botsFile, 'utf8')); botCount = j && typeof j === 'object' ? Object.keys(j).length : 0; } catch { botCount = 0; }
+    hosts.push({
+      id: 'mengbot',
+      name: 'MengBot',
+      installed: existsSync(botsFile),
+      detail: existsSync(botsFile) ? (botCount ? botCount + ' 个 bot' : '已安装') : '未检测到 ~/.mengbot/bots.json',
+      version: '',
+      support: Object.assign({ tester: HOST_SUPPORT.mengbot.tester, label: HOST_SUPPORT.mengbot.label, verified: '' }, versionStatus('', '')),
+      capabilities: { inject: existsSync(botsFile), patches: false, soul: existsSync(botsFile) },
+    });
+    // AutoKill：Rust 桌面应用，配置在 %APPDATA%\autokill（同样有 prompt-inject.md 提示词层）
+    const akInstalled = autoKillInstalled();
+    const akPrompt = autoKillPromptPath();
+    const akHasPrompt = existsSync(akPrompt);
+    const akVer = akInstalled ? await akVersion() : '';
+    hosts.push({
+      id: 'autokill',
+      name: 'AutoKill',
+      installed: akInstalled,
+      detail: akInstalled
+        ? (akVer ? 'AutoKill ' + akVer : '已安装') + ' · 可注入提示词层' + (akHasPrompt ? '（prompt-inject.md 已存在）' : '（待创建）')
+        : '未识别本机安装',
+      version: akVer,
+      support: Object.assign({ tester: HOST_SUPPORT.autokill.tester, label: HOST_SUPPORT.autokill.label, verified: HOST_SUPPORT.autokill.verified }, versionStatus(akVer, HOST_SUPPORT.autokill.verified)),
+      capabilities: { inject: akInstalled, patches: false, soul: false },
+      promptFile: akPrompt,
+    });
+    return send(res, 200, {
+      ok: true,
+      defaultHost: hosts.find((h) => h.id === 'dsh' && h.installed) ? 'dsh' : (hosts.find((h) => h.installed) || hosts[0]).id,
+      hosts,
+    });
+  }
+
+  // ---- 梦神破甲（AutoKill 配置层）--------------------------------------------
+  if (p === '/api/autokill/patches' && method === 'GET') {
+    if (!existsSync(akCliPath())) return send(res, 404, { ok: false, error: 'autokill_not_installed', hint: '没找到 ' + akCliPath() });
+    try {
+      const items = await akPatchStatus();
+      const running = await akAppRunning();
+      const ver = await akVersion();
+      return send(res, 200, {
+        ok: true,
+        name: '梦神破甲',
+        cli: akCliPath(),
+        config: akConfigPath(),
+        running,
+        version: ver,
+        support: Object.assign({ tester: 'AutoKill', label: HOST_SUPPORT.autokill.label, verified: HOST_SUPPORT.autokill.verified }, versionStatus(ver, HOST_SUPPORT.autokill.verified)),
+        items,
+        applied: items.filter((x) => x.applied).length,
+        total: items.length,
+      });
+    } catch (e) {
+      return send(res, 500, { ok: false, error: 'ak_read_failed', detail: publicError(e) });
+    }
+  }
+  if (p === '/api/autokill/apply' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '会改 AutoKill 的 config.toml，传 confirm:true' });
+    if (!existsSync(akCliPath())) return send(res, 404, { ok: false, error: 'autokill_not_installed' });
+    const want = Array.isArray(body.ids) && body.ids.length ? body.ids.map(String) : AUTOKILL_PATCHES.map((x) => x.id);
+    // 改之前先备份 config.toml（与 DSH 的快照放一起，便于统一回滚）
+    let backup = null;
+    try {
+      const cfg = akConfigPath();
+      if (existsSync(cfg)) {
+        const dir = join(DATA_DIR, 'host-snapshots');
+        await mkdir(dir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        backup = join(dir, 'autokill-config-' + stamp + '.toml');
+        await copyFile(cfg, backup);
+      }
+    } catch { /* 备份失败不阻断，但结果里会 backup=null */ }
+    const results = [];
+    // 标量项直接改 TOML 文本（一次写盘），不走 settings_set：多个 CLI 进程的延迟落盘会互相覆盖
+    let toml = await readAkConfigText();
+    if (!toml) return send(res, 400, { ok: false, error: 'config_unreadable' });
+    for (const id of want) {
+      const pp = AUTOKILL_PATCHES.find((x) => x.id === id);
+      if (!pp) { results.push({ id, ok: false, error: 'unknown_patch' }); continue; }
+      if (pp.kind === 'ai') {
+        // 后端开关仍走 CLI（改的是 backends 数组，不宜手改）
+        const r = await runAk(['ai', pp.target === 'on' ? 'on' : 'off', String(pp.name)]);
+        results.push({ id: pp.id, ok: r.ok, want: pp.target, key: pp.key, kind: pp.kind, detail: String(r.out || r.err || '').slice(0, 160) });
+        continue;
+      }
+      toml = setTomlKey(toml, pp.key, pp.target);
+      results.push({ id: pp.id, ok: true, want: pp.target, key: pp.key, kind: pp.kind, detail: 'toml' });
+    }
+    // 同一份文本里把 MCP 插件与 UI 插槽一起写进去，最后一次性落盘
+    try { toml = withPurgeMcp(toml, purgeMcpBlock()); } catch { /* 保留原配置 */ }
+    try { toml = withPurgeSlotsToml(toml, await currentEquipPresets()); } catch { /* 保留原配置 */ }
+    // [memory] 表只有认识它的版本才写：旧版会把它整份配置判为坏档（实测 13 个 .broken）
+    let memSupport = false;
+    try {
+      const r0 = await runAk(['settings_show']);
+      if (r0.ok) {
+        const s0 = (JSON.parse(r0.out).result || {}).settings || {};
+        memSupport = Object.prototype.hasOwnProperty.call(s0, 'memory');
+      }
+    } catch { memSupport = false; }
+    if (memSupport) { try { toml = withPurgeMemory(toml); } catch { /* 忽略 */ } }
+    await writeFile(akConfigPath(), toml, 'utf8');
+    await waitConfigStable();
+    const side = {
+      mcp: { ok: /id\s*=\s*"purge"/.test(toml) },
+      slots: { ok: /\[\[ui\.slots\]\]/.test(toml) },
+      memory: { ok: /\[memory\]/.test(toml), supported: memSupport },
+      dsh: null,
+      mengbot: null,
+    };
+    // 一键同时同步其它宿主：DSH 的 agent 预设、MengBot 的 bot gear
+    const chosenPresets = await currentEquipPresets();
+    if (chosenPresets.length) {
+      try {
+        const r = await runNode(['scripts/inject-dsh-gear.mjs', '--presets', chosenPresets.join(',')]);
+        side.dsh = { ok: r.ok, presets: chosenPresets, detail: String(r.out || r.err || '').trim().split('\n')[0] || null };
+      } catch (e) { side.dsh = { ok: false, error: publicError(e) }; }
+      if (body.mengbotId) {
+        try {
+          const r = mbSetGear(String(body.mengbotId), chosenPresets[0]);
+          side.mengbot = { ok: r.ok !== false, gear: r.gear || chosenPresets[0], botId: String(body.mengbotId), name: r.name || '', restartRequired: !!r.restartRequired, detail: r.error || null };
+        } catch (e) { side.mengbot = { ok: false, error: publicError(e) }; }
+      }
+    }
+    let verify = [];
+    try { verify = await akPatchStatus(); } catch { verify = []; }
+    const residue = await akResidueAudit();
+    return send(res, 200, {
+      ok: true,
+      name: '梦神破甲',
+      backup,
+      applied: results.filter((x) => x.ok).length,
+      total: results.length,
+      results,
+      verify: verify.map((x) => ({ id: x.id, current: x.current, applied: x.applied })),
+      side,
+      residue,
+      restartRequired: true,
+      hint: '重启 AutoKill 生效；config.toml 原件已备份',
+    });
+  }
+
+  // 装备模式（供前端与 MCP 共用同一份预设）
+  // 装备清单与可注入段落：给其它宿主（MengBot 等）直接取用，避免各自维护一份阶段表
+  if (p === '/api/gear' && method === 'GET') {
+    return send(res, 200, {
+      ok: true,
+      modes: EQUIP_PRESETS.map((x) => ({ id: x.id, name: x.name, desc: x.desc, stages: (x.items || []).length })),
+    });
+  }
+  if (p.startsWith('/api/gear/') && method === 'GET') {
+    const id = decodeURIComponent(p.slice('/api/gear/'.length));
+    const preset = EQUIP_PRESETS.find((x) => x.id === id);
+    if (!preset) {
+      return send(res, 404, { ok: false, error: 'unknown_mode', modes: EQUIP_PRESETS.map((x) => x.id) });
+    }
+    return send(res, 200, {
+      ok: true,
+      id: preset.id,
+      name: preset.name,
+      desc: preset.desc,
+      stages: (preset.items || []).map((it) => ({ id: it.id, name: it.name })),
+      markdown: renderGearMarkdown([preset]),
+    });
+  }
+
+  if (p === '/api/presets' && method === 'GET') {
+    return send(res, 200, { ok: true, presets: EQUIP_PRESETS });
+  }
+
+  // 梦神破甲 · UI 插槽（把装备/破甲控件画进 AutoKill 界面）
+  if (p === '/api/autokill/slots' && method === 'GET') {
+    try {
+      return send(res, 200, Object.assign({ ok: true }, await akSlotsState(), { running: await akAppRunning(), installed: existsSync(akCliPath()) }));
+    } catch (e) {
+      return send(res, 500, { ok: false, error: 'slots_state_failed', detail: publicError(e) });
+    }
+  }
+  if (p === '/api/autokill/slots' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '会改 AutoKill 的 config.toml，传 confirm:true' });
+    if (!existsSync(akCliPath())) return send(res, 404, { ok: false, error: 'autokill_not_installed' });
+    const action = body.action === 'unmount' ? 'unmount' : 'mount';
+    try {
+      const r = action === 'unmount' ? await unmountPurgeSlots() : await mountPurgeSlots();
+      const state = await akSlotsState();
+      const residue = await akResidueAudit();
+      return send(res, 200, Object.assign({ ok: true, action }, r, {
+        state,
+        residue,
+        running: await akAppRunning(),
+        hint: action === 'unmount' && !residue.traces.any
+          ? '插槽已从配置里移除（重启 AutoKill 后控件消失）'
+          : (state.supported
+            ? '重启 AutoKill 后，构建助手旁（builder.side）与标题栏（titlebar.side）各出现一个装备下拉'
+            : '这个 AutoKill 版本还没带 ui.slots，槽位已写入但不会被渲染'),
+      }));
+    } catch (e) {
+      return send(res, 400, { ok: false, error: 'slots_write_failed', detail: publicError(e) });
+    }
+  }
+
+  // 梦神破甲 · MCP 插件挂载（装备在 AutoKill GUI 里的可见面）
+  if (p === '/api/autokill/mcp' && method === 'GET') {
+    try {
+      return send(res, 200, Object.assign({ ok: true }, await akMcpState(), { running: await akAppRunning(), installed: existsSync(akCliPath()) }));
+    } catch (e) {
+      return send(res, 500, { ok: false, error: 'mcp_state_failed', detail: publicError(e) });
+    }
+  }
+  if (p === '/api/autokill/mcp' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '会改 AutoKill 的 config.toml，传 confirm:true' });
+    if (!existsSync(akCliPath())) return send(res, 404, { ok: false, error: 'autokill_not_installed' });
+    const action = body.action === 'unmount' ? 'unmount' : 'mount';
+    try {
+      const r = action === 'unmount' ? await unmountPurgeMcp() : await mountPurgeMcp();
+      // 卸载时顺手把我们自己的 mcp-server 子进程收掉（AutoKill 不会因为改配置就退掉它）
+      const killed = action === 'unmount' && body.kill !== false ? await akKillMcpProcesses() : [];
+      const residue = await akResidueAudit();
+      return send(res, 200, Object.assign({ ok: true, action, killed }, r, {
+        state: await akMcpState(),
+        residue,
+        running: await akAppRunning(),
+        hint: residue.clean
+          ? '已卸干净（配置无残留、没有 mcp-server 进程）'
+          : `仍有残留：${residue.traces.mcp ? 'mcp 插件 ' : ''}${residue.traces.slots ? 'ui.slots 插槽 ' : ''}${residue.processes.length ? '进程 ' + residue.processes.length + ' 个（重启 AutoKill 才会断开）' : ''}`.trim(),
+      }));
+    } catch (e) {
+      return send(res, 400, { ok: false, error: 'mcp_write_failed', detail: publicError(e) });
+    }
+  }
+
+  // 梦神破甲 · 卸载：把每项按 AUTOKILL_PATCHES.was 恢复成原始值（不需要用户记原值）
+  if (p === '/api/autokill/revert' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '会把改过的项恢复成原值，传 confirm:true' });
+    if (!existsSync(akCliPath())) return send(res, 404, { ok: false, error: 'autokill_not_installed' });
+    let backup = null;
+    try {
+      const cfg = akConfigPath();
+      if (existsSync(cfg)) {
+        const dir = join(DATA_DIR, 'host-snapshots');
+        await mkdir(dir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        backup = join(dir, 'autokill-config-revert-' + stamp + '.toml');
+        await copyFile(cfg, backup);
+      }
+    } catch { /* 备份失败不阻断 */ }
+    const coerce = (raw) => {
+      if (raw === 'true') return true;
+      if (raw === 'false') return false;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : raw;
+    };
+    const results = [];
+    // 同样直接改 TOML：标量项一次写回原值，再在同一份文本里撤掉 mcp/slots（避开异步落盘竞争）
+    let toml = await readAkConfigText();
+    if (!toml) return send(res, 400, { ok: false, error: 'config_unreadable' });
+    for (const pp of AUTOKILL_PATCHES) {
+      if (pp.kind === 'ai') {
+        const r = await runAk(['ai', pp.was === 'on' ? 'on' : 'off', String(pp.name)]);
+        results.push({ id: pp.id, ok: r.ok, target: pp.was, detail: String(r.out || r.err || '').slice(0, 120) });
+        continue;
+      }
+      toml = setTomlKey(toml, pp.key, coerce(pp.was));
+      results.push({ id: pp.id, ok: true, target: pp.was, detail: 'toml' });
+    }
+    try { toml = stripPurgeMcp(toml); } catch { /* 保留 */ }
+    try { toml = stripPurgeSlots(toml); } catch { /* 保留 */ }
+    try { toml = stripUiSlotsKey(toml); } catch { /* 保留 */ }
+    try { toml = stripPurgeMemory(toml); } catch { /* 保留 */ }
+    await writeFile(akConfigPath(), toml, 'utf8');
+    await waitConfigStable();
+    let verify = [];
+    try { verify = await akPatchStatus(); } catch { verify = []; }
+    const side = {
+      mcp: { ok: !/id\s*=\s*"purge"/.test(toml) },
+      slots: { ok: !/autokill-purge/.test(toml) },
+      killed: await akKillMcpProcesses().catch(() => []),
+    };
+    const residue = await akResidueAudit();
+    const running = await akAppRunning();
+    return send(res, 200, {
+      ok: true,
+      name: '梦神破甲',
+      mode: 'revert',
+      backup,
+      running,
+      restored: results.filter((x) => x.ok).length,
+      total: results.length,
+      results,
+      verify: verify.map((x) => ({ id: x.id, current: x.current, target: x.target, applied: x.applied })),
+      side,
+      residue,
+      restartRequired: true,
+      hint: residue.clean
+        ? '已全部卸干净（配置恢复原值、MCP 插件与插槽已移除、无残留进程）'
+        : `仍不完全干净：${residue.traces.mcp ? 'mcp ' : ''}${residue.traces.slots ? '插槽 ' : ''}${residue.processes.length ? '进程 ' + residue.processes.length + ' 个' : ''}${running ? '（AutoKill 在运行，退出后重跑一次）' : ''}`,
+    });
   }
 
   if (p === '/api/host/inventory' && method === 'GET') {
@@ -1085,9 +2405,23 @@ async function handleApi(req, res, url, state) {
       try {
         return send(res, 200, mbEquipBot(String(body.id || ''), {
           modelSelection: body.modelSelection, approvalMode: body.approvalMode, autoApprove: body.autoApprove,
+          // 装备跟着「一并装备」一起带过去；不传就不碰这个字段
+          ...(body.gear !== undefined ? { gear: body.gear } : {}),
         }));
       } catch (e) { return send(res, 400, { ok: false, error: 'mb_equip_failed', detail: publicError(e) }); }
     });
+  }
+  // 装备模式：写 MengBot 的 BotRecord.gear（值域与 MengBot shared/gear.ts 一致，认不出落空）
+  if (p === '/api/mengbot/gear' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '会改写 ~/.mengbot/bots.json（先备份，可还原）' });
+    return withLock(async () => {
+      try { return send(res, 200, mbSetGear(String(body.id || ''), body.gear)); }
+      catch (e) { return send(res, 400, { ok: false, error: 'mb_gear_failed', detail: publicError(e) }); }
+    });
+  }
+  if (p === '/api/mengbot/gear' && method === 'GET') {
+    return send(res, 200, { ok: true, ids: GEAR_IDS, labels: { '': '不装备', redteam: '红队全装', recon: '侦察刀', lateral: '内网横向', radio: '无线电 / IoT', re: '逆向研究', custom: '自定义' } });
   }
   if (p === '/api/mengbot/snapshots' && method === 'GET') {
     try { return send(res, 200, mbSnapshots(String(url.searchParams.get('id') || ''))); }
@@ -1284,6 +2618,137 @@ async function handleApi(req, res, url, state) {
     });
   }
 
+  // 破甲成功 → 入库（闭环第 1 环）。key 用 模型+技术+变体+任务+载荷 的内容哈希，重复提交是覆盖而非堆卡。
+  if (p === '/api/breach/absorb' && method === 'POST') {
+    const body = await bodyOf(req);
+    const model = String(body.model || '').trim();
+    const technique = String(body.technique || '').trim();
+    const text = String(body.text || '').trim();
+    if (!model || !technique || !text) {
+      return send(res, 400, { ok: false, error: 'model, technique and text are required' });
+    }
+    const task = String(body.task || '').trim();
+    const variant = String(body.variant || 'text');
+    const result = String(body.result || 'pass');
+    const key = 'purge.breach.' + createHash('sha1').update([model, technique, variant, task, text].join('\u0000')).digest('hex').slice(0, 12);
+    const title = '破甲载荷：' + technique + ' @ ' + model;
+    const cardBody = [
+      '# ' + title,
+      '',
+      '- 生成时间：' + new Date().toISOString(),
+      '- 模型：' + model,
+      '- 技术：' + technique,
+      '- 变体：' + variant + (body.template && body.template !== 'none' ? '（套模板 ' + body.template + '）' : ''),
+      '- 验证结论：' + (result === 'pass' ? '这次成功了' : '被拒绝了'),
+      '- 任务：' + (task || '（未记录）'),
+      '',
+      '## 载荷全文',
+      '',
+      '```',
+      text,
+      '```',
+      '',
+      '## 复用说明',
+      '',
+      '- 换任务句仍可套这个技术的模板结构；同类任务先抄结构再改素材。',
+      '- 被拒绝时优先换技术或加模板层，别在同一句上反复微调。',
+    ].join('\n');
+    const r = await upsertMemoryCard(state, { key, kind: String(body.kind || 'skill'), title, body: cardBody });
+    if (!r.ok) {
+      if (r.error === 'memory_unreachable') return sendMemoryError(res, 503);
+      return send(res, 502, { ok: false, error: r.error, detail: r.detail || null });
+    }
+    // 顺带记账：入库即可视为一次尝试记录（前端不再重复提交）
+    if (body.recordAttempt !== false) {
+      await withLock(async () => {
+        const s = await readState();
+        s.attempts.push({ id: 'a' + (s.attempts.length + 1), model, technique, result, note: 'absorb:' + key, at: new Date().toISOString() });
+        await writeState(s);
+      });
+    }
+    return send(res, 200, { ok: true, card: r, note: '待审：审核通过后才会进默认检索' });
+  }
+
+  // 破甲载荷 → DSH 宿主提示词层。形式就是 DSH 每次会话都会注入的 prompt-inject.md：
+  //   mode=replace 整份替换；mode=append 追加成带标记的块（重复注入会替换旧块，不会越堆越长）。
+  if (p === '/api/breach/inject-host' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) {
+      return send(res, 400, { ok: false, error: 'confirm_required', hint: '会写入宿主 prompt-inject.md，重启 dsh 才生效；传 confirm:true' });
+    }
+    const text = String(body.text || '').trim();
+    if (!text) return send(res, 400, { ok: false, error: 'text is required' });
+    const mode = body.mode === 'append' ? 'append' : 'replace';
+    const host = String(body.host || 'dsh') === 'autokill' ? 'autokill' : 'dsh';
+    const BEGIN = '<!-- autokill-purge:payload:begin -->';
+    const END = '<!-- autokill-purge:payload:end -->';
+    const guard = await createSnapshot(DATA_DIR, 'pre-inject');
+    return withLock(async () => {
+      try {
+        const cur = host === 'autokill' ? await readAutoKillPrompt() : await readPromptFile();
+        const existing = String((cur && cur.text) || '');
+        // 先摘掉上一次注入的块（幂等），再按模式写
+        let stripped = existing;
+        const bi = stripped.indexOf(BEGIN);
+        if (bi >= 0) {
+          const ei = stripped.indexOf(END, bi);
+          if (ei >= 0) stripped = (stripped.slice(0, bi) + stripped.slice(ei + END.length)).replace(/\n{3,}/g, '\n\n');
+        }
+        const next = mode === 'append'
+          ? (stripped.trimEnd() + '\n\n' + BEGIN + '\n' + text + '\n' + END + '\n')
+          : text + '\n';
+        const r = host === 'autokill' ? await writeAutoKillPrompt(next) : await writePromptFile(DATA_DIR, next);
+        return send(res, 200, {
+          ok: true,
+          mode,
+          host,
+          form: 'prompt-inject.md',
+          file: (r && r.path) || (cur && cur.path) || null,
+          bytes: (r && r.bytes) || Buffer.byteLength(next, 'utf8'),
+          guardSnapshot: guard.id,
+          restartRequired: true,
+          hint: host === 'autokill' ? '重启 AutoKill 生效；原文已备份到 data/host-snapshots/autokill-prompt-*' : '重启 dsh 生效；要撤掉就在「宿主」页点「恢复默认提示词」',
+        });
+      } catch (e) {
+        return send(res, 400, { ok: false, error: 'inject_failed', detail: publicError(e), guardSnapshot: guard.id });
+      }
+    });
+  }
+
+  // 提示词层 · 摘块：只删我们自己的标记块，宿主原有内容一字不动
+  if (p === '/api/breach/uninject-host' && method === 'POST') {
+    const body = await bodyOf(req);
+    const host = String(body.host || 'dsh') === 'autokill' ? 'autokill' : 'dsh';
+    const BEGIN = '<!-- autokill-purge:payload:begin -->';
+    const END = '<!-- autokill-purge:payload:end -->';
+    return withLock(async () => {
+      try {
+        const cur = host === 'autokill' ? await readAutoKillPrompt() : await readPromptFile();
+        const existing = String((cur && cur.text) || '');
+        const bi = existing.indexOf(BEGIN);
+        if (bi < 0) {
+          return send(res, 200, { ok: true, removed: false, host, file: (cur && cur.path) || null, bytes: Buffer.byteLength(existing, 'utf8'), hint: '没找到注入块，目标文件没被改过' });
+        }
+        const ei = existing.indexOf(END, bi);
+        const next = ei >= 0
+          ? (existing.slice(0, bi) + existing.slice(ei + END.length)).replace(/\n{3,}/g, '\n\n')
+          : existing.slice(0, bi);
+        const r = host === 'autokill' ? await writeAutoKillPrompt(next) : await writePromptFile(DATA_DIR, next);
+        return send(res, 200, {
+          ok: true,
+          removed: true,
+          host,
+          file: (r && r.path) || null,
+          bytes: (r && r.bytes) || Buffer.byteLength(next, 'utf8'),
+          restartRequired: true,
+          hint: host === 'autokill' ? '已摘掉注入块，重启 AutoKill 生效' : '已摘掉注入块，重启 dsh 生效',
+        });
+      } catch (e) {
+        return send(res, 400, { ok: false, error: 'uninject_failed', detail: publicError(e) });
+      }
+    });
+  }
+
   // equipment (FR-4)
   if (p === '/api/equipment' && method === 'POST') {
     const body = await bodyOf(req);
@@ -1303,7 +2768,50 @@ async function handleApi(req, res, url, state) {
       };
       s.equipment.push(equipment);
       await writeState(s);
-      return send(res, 200, { ok: true, equipment: equipment });
+
+      // 装备到 AutoKill 时，顺手把本机 autokill-purge 挂成它的 MCP 插件 —— 这样装备在 AutoKill
+      // 的「设置 → 插件」里看得见，AI 会话也能直接查记忆库与装备清单。
+      let mounted = null;
+      if (equipment.agents.includes('autokill')) {
+        try { mounted = await mountPurgeMcp(); } catch (e) { mounted = { ok: false, error: publicError(e) }; }
+      }
+
+      // 装备成功 → 入库（闭环第 2 环）。默认入库，body.absorb === false 可跳过；
+      // 记忆服务不可达不影响装备记录本身保存（absorbed.ok=false 带回原因）。
+      let absorbed = null;
+      if (body.absorb !== false) {
+        const tpl = String(body.template || '').trim();
+        const key = 'purge.equip.' + createHash('sha1')
+          .update([equipment.preset, equipment.agents.join('+'), equipment.items.join(','), equipment.models.join(','), tpl].join('\u0000'))
+          .digest('hex').slice(0, 12);
+        const title = '装备：' + equipment.preset + ' @ ' + equipment.agents.join('+');
+        const cardBody = [
+          '# ' + title,
+          '',
+          '- 登记时间：' + equipment.at,
+          '- 预设组合：' + equipment.presets.join(' / '),
+          '- 智能体：' + equipment.agents.join(', '),
+          '- 权限：' + equipment.permissions,
+          '- 能力项：' + (equipment.items.length ? equipment.items.join(', ') : '（未选）'),
+          '- 模型：' + (equipment.models.length ? equipment.models.join(', ') : '（未指定）'),
+          '- 备注：' + (equipment.notes || '（无）'),
+          '',
+          '## 注入模板（可选）',
+          '',
+          tpl ? '```\n' + tpl + '\n```' : '本次未选注入模板。',
+          '',
+          '## 使用方式',
+          '',
+          '被装备的宿主在任务开始前先查本库，命中就引用 title + path：',
+          '',
+          '```bash',
+          'curl -s "http://127.0.0.1:' + deployInfo().webPort + '/api/memory/search?q=<关键词>&semantic=1&limit=8"',
+          '```',
+        ].join('\n');
+        const r = await upsertMemoryCard(state, { key, kind: String(body.absorbKind || 'skill'), title, body: cardBody });
+        absorbed = r.ok ? r : { ok: false, error: r.error };
+      }
+      return send(res, 200, { ok: true, equipment: equipment, absorbed: absorbed, mounted: mounted });
     });
   }
 
@@ -1354,4 +2862,28 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log('autokill-purge web: http://127.0.0.1:' + PORT);
+  // ---- 启动自检：宿主是否漂移（官方升级 / asar 又回来了 / 补丁被还原）----
+  // 默认只记录 + 在「能力补齐」里提示，不擅自改宿主；
+  // AUTOKILL_AUTO_REAPPLY=1 放行安全步骤（重放补丁），=auto 才允许解包 + 落地（会重启宿主）。
+  setTimeout(async () => {
+    try {
+      const st = await opStatus(DATA_DIR, 'reapply');
+      const d = (st && st.detail) || {};
+      const needs = !!(d.needsReapply || d.needsRepack || d.needsHandoff);
+      const mode = String(process.env.AUTOKILL_AUTO_REAPPLY || '').trim();
+      let autoRun = null;
+      if (needs && mode) {
+        autoRun = await opRun(DATA_DIR, 'reapply', { confirm: true, auto: mode === 'auto' });
+      }
+      const fs = await import('node:fs/promises');
+      await fs.writeFile(join(DATA_DIR, 'ops-startup.json'), JSON.stringify({
+        at: new Date().toISOString(),
+        needs: needs,
+        mode: mode || 'off',
+        summary: (st && st.summary) || '',
+        facts: d.facts || null,
+        autoRun: autoRun ? { ok: autoRun.ok, changed: autoRun.changed, summary: autoRun.summary } : null,
+      }, null, 2) + '\n', 'utf8');
+    } catch { /* 自检失败不影响控制台启动 */ }
+  }, 3000);
 });

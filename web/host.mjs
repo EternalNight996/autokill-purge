@@ -1,8 +1,10 @@
 // 宿主破甲（照搬 dsh-purge 1.1.71 的补丁引擎）+ 备份/恢复闭环。
 //
-// 分工：破甲内容归本仓库（web/prompts/*），改宿主这件事交给本机已安装的 dsh-purge 1.1.71
-// 的补丁引擎（lib/core.js 的 ALL_PATCHES / gatherState / revertAllHosts）。我们不复制它 344KB
-// 的 patch 表，只驱动它 —— 效果与它原版一致，且升级它我们就跟着升级。
+// 分工（1.1.7 起）：补丁清单与补丁引擎**都在本仓库内**（web/patch-engine/），运行时零外部依赖。
+//   · 清单：web/patch-engine/catalog.json（83 条，由 extract-catalog.mjs 从 vendor 引擎抽出）
+//   · 引擎：web/patch-engine/vendor/core.js（上游 lib/core.js 的 12 模块相对 import 闭包，477 KB）
+// 外部 dsh-purge 只在「想升级引擎」时才用：node scripts/vendor-dsh-engine.mjs --from <上游根>。
+// 实测口径：把上游目录整个改名隐藏，hostStatus 仍返回 83 条 / engine=true / drift.same=true。
 //
 // 恢复闭环两级：
 //   1. 快照（snapshot）：apply 前把「被补丁的文件当前内容」整份复制到 data/host-snapshots/<ts>/
@@ -12,25 +14,51 @@
 //
 // 安全约束：这里任何写宿主的动作都只在被显式调用时发生（路由带 confirm），并且必然先备份；
 // 备份失败则不写。恢复出厂不依赖 dsh-purge 的 .bak（本机实测 .bak 数为 0，靠不住）。
-import { open, readFile, writeFile, mkdir, readdir, copyFile, stat, rm } from 'node:fs/promises';
+import { open, readFile, writeFile, mkdir, readdir, copyFile, stat, rm, rename } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE_DIR = dirname(fileURLToPath(import.meta.url));
 
-const DSH_PURGE_CANDIDATES = [
+/** 本仓库内化的引擎（web/patch-engine/vendor/core.js）：默认就走它，不依赖任何外部 dsh-purge */
+const VENDORED_ENGINE = join(HERE_DIR, 'patch-engine', 'vendor');
+/** DSH_PURGE_ENGINE=- 表示禁用引擎：只读清单，不落盘（自检/纯展示用） */
+const ENGINE_DISABLED = process.env.DSH_PURGE_ENGINE === '-';
+const DSH_PURGE_CANDIDATES = ENGINE_DISABLED ? [] : [
+  process.env.DSH_PURGE_ENGINE || VENDORED_ENGINE,   // 1) 本仓库 vendor（默认）
+  VENDORED_ENGINE,
+  // 2) 以下仅为「有就用」的兜底，不是依赖：vendor 在就不会看它们
   'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/plugins/dsh-purge',
   join(process.env.USERPROFILE || '', '.dsh/profiles/desktop/node_modules/dsh-purge'),
   join(process.env.USERPROFILE || '', '.dsh/profiles/web/node_modules/dsh-purge'),
 ];
+
+/** 补丁清单（catalog.json）候选位置；环境变量 DSH_PATCH_CATALOG 可指定单文件 */
+const CATALOG_CANDIDATES = [
+  process.env.DSH_PATCH_CATALOG || '',
+  join(HERE_DIR, 'patch-engine', 'catalog.json'),   // 本仓库自带
+  join(HERE_DIR, '..', 'patches', 'catalog.json'),
+  join(process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh'), 'patches', 'catalog.json'),
+];
 const ASAR_PATH = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app.asar';
 const APP_DIR = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app';
+
+/** 引擎目录里 core.js 的位置：vendor 是平铺（<root>/core.js），上游是 <root>/lib/core.js */
+function coreFileIn(root) {
+  if (!root) return null;
+  for (const c of [join(root, 'core.js'), join(root, 'lib', 'core.js')]) {
+    if (existsSync(c)) return c;
+  }
+  return null;
+}
 
 let corePromise = null;
 export function dshPurgeRoot() {
   for (const p of DSH_PURGE_CANDIDATES) {
-    if (p && existsSync(join(p, 'lib', 'core.js'))) return p;
+    if (coreFileIn(p)) return p;
   }
   return null;
 }
@@ -38,9 +66,83 @@ export function dshPurgeRoot() {
 async function core() {
   if (corePromise) return corePromise;
   const root = dshPurgeRoot();
-  if (!root) throw new Error('dsh-purge 未安装：找不到 lib/core.js（宿主破甲依赖它）');
-  corePromise = import('file:///' + join(root, 'lib', 'core.js').replace(/\\/g, '/'));
+  const file = coreFileIn(root);
+  if (!root || !file) {
+    throw new Error(
+      '找不到补丁引擎 core.js。补丁清单仍可用（内置 catalog），但要落盘注入需要引擎：' +
+      '确认 web/patch-engine/vendor/core.js 存在（缺失就跑 node scripts/vendor-dsh-engine.mjs）'
+    );
+  }
+  corePromise = import('file:///' + file.replace(/\\/g, '/'));
   return corePromise;
+}
+
+// ---- 独立补丁清单（catalog.json）：不依赖引擎就能拿到 83 条补丁定义 ------------
+let catalogCache = null;
+
+/** 补丁行指纹：与 patches/extract-catalog.mjs 完全同一算法，用来校验清单与引擎是否同源 */
+function patchRowDigest(p) {
+  const repl = Array.isArray(p.replacements)
+    ? p.replacements.map((r) => ({ pattern: String(r.pattern ?? ''), replace: String(r.replace ?? '') }))
+    : [];
+  return cryptoHash(JSON.stringify(repl));
+}
+
+function cryptoHash(s) {
+  // 同步 sha256，避免再多引依赖
+  return createHash('sha256').update(String(s), 'utf8').digest('hex');
+}
+
+function catalogDigestOf(patches) {
+  return cryptoHash(JSON.stringify(patches.map((p) => [p.id, patchRowDigest(p)])));
+}
+
+/** 读独立补丁清单；找不到返回 {ok:false, reason}，找到给出 83 条完整定义 */
+export async function patchCatalog({ refresh = false } = {}) {
+  if (catalogCache && !refresh) return catalogCache;
+  const tried = [];
+  for (const p of CATALOG_CANDIDATES) {
+    if (!p) continue;
+    tried.push(p);
+    if (!existsSync(p)) continue;
+    try {
+      const raw = JSON.parse(await readFile(p, 'utf8'));
+      if (!Array.isArray(raw.patches) || !raw.patches.length) throw new Error('catalog.patches 为空');
+      catalogCache = {
+        ok: true,
+        path: p,
+        count: raw.count || raw.patches.length,
+        digest: raw.digest || catalogDigestOf(raw.patches),
+        generatedAt: raw.generated_at || null,
+        upstream: raw.upstream || null,
+        groups: raw.groups || {},
+        fieldKeys: raw.field_keys || [],
+        patches: raw.patches,
+      };
+      return catalogCache;
+    } catch (e) {
+      catalogCache = { ok: false, reason: 'catalog 解析失败：' + ((e && e.message) || e), path: p, tried };
+      return catalogCache;
+    }
+  }
+  catalogCache = { ok: false, reason: '未找到独立补丁清单 catalog.json', tried };
+  return catalogCache;
+}
+
+/** 引擎侧 ALL_PATCHES 的指纹，用于判断「清单」与「正在用的引擎」是否同源 */
+export function engineCatalogDrift(enginePatches, catalog) {
+  if (!catalog || !catalog.ok) return { comparable: false, reason: '无清单' };
+  const list = Array.isArray(enginePatches) ? enginePatches : [];
+  const engineCount = list.length;
+  const engineDigest = catalogDigestOf(list);
+  return {
+    comparable: true,
+    same: engineCount === catalog.count && engineDigest === catalog.digest,
+    engineCount,
+    catalogCount: catalog.count,
+    engineDigest,
+    catalogDigest: catalog.digest,
+  };
 }
 
 // ---- asar 读取（只按需取单个文件，不整包解压） -------------------------------
@@ -94,18 +196,43 @@ export async function asarRead(relPath) {
   }
 }
 
-/** 宿主被 patch 的文件清单：{ key: [绝对路径...] } */
+/**
+ * 宿主被 patch 的文件清单：{ key: [绝对路径...] }。
+ *
+ * 必须扫**全部**宿主根（enumeratePatchAiBases），不能只信 gatherState().files：
+ * 后者只覆盖「当前进程判定出的那一个宿主」，而 apply 会同时打到桌面 resources/app 与
+ * npm-global/profile 副本。只备份一个根 = 另外几个根改了却没快照，撤销就成了假动作。
+ */
 async function hostFiles() {
   const c = await core();
   const state = await c.gatherState();
   const out = [];
-  for (const [key, value] of Object.entries(state.files || {})) {
-    for (const p of String(value).split(',')) {
-      const abs = p.trim();
-      if (abs) out.push({ key: key, path: abs });
+  const seen = new Set();
+  const push = (key, value) => {
+    const abs = String(value || '').trim();
+    if (!abs) return;
+    const k = abs.replace(/\\/g, '/').toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push({ key: key, path: abs });
+  };
+  const bases = [];
+  try {
+    for (const b of c.enumeratePatchAiBases({ discover: true })) bases.push(b);
+  } catch { /* 枚举失败就退回 state.files */ }
+  for (const base of bases) {
+    let files = null;
+    try { files = c.targetFiles(base); } catch { continue; }
+    for (const [key, value] of Object.entries(files || {})) {
+      if (Array.isArray(value)) value.forEach((v) => push(key, v));
+      else String(value || '').split(',').forEach((v) => push(key, v));
     }
   }
-  return { state: state, files: out };
+  for (const [key, value] of Object.entries(state.files || {})) {
+    if (Array.isArray(value)) value.forEach((v) => push(key, v));
+    else String(value || '').split(',').forEach((v) => push(key, v));
+  }
+  return { state: state, files: out, bases: bases };
 }
 
 /** 磁盘路径 → asar 内相对路径；映射不到返回 null（例如 asar 之外的用户文件） */
@@ -151,21 +278,107 @@ async function diskDshVersion() {
 }
 
 // ---- 状态 -------------------------------------------------------------------
+/** 只有清单、没有引擎时，用它把 83 条照样列出来（状态一律 unknown，tone 走灰） */
+function catalogOnlyRows(cat) {
+  return (cat.patches || []).map((p) => {
+    const name = p.name || p.raw?.name || ('patch-' + p.id);
+    const layer = p.layer || p.raw?.layer || null;
+    const layerEn = p.layer_en || p.raw?.layer_en || null;
+    const tone = patchTone('unknown');
+    return {
+      id: p.id,
+      name,
+      nameZh: patchZh(name),
+      layer,
+      layerEn,
+      status: 'unknown',
+      tone: tone.tone,
+      statusZh: tone.label,
+      files: (p.rel || p.raw?.rel || []).join('/') || (p.file || p.raw?.file || ''),
+      desc: p.desc || p.raw?.desc || '',
+      replacements: (p.replacements || []).length,
+    };
+  });
+}
+
 export async function hostStatus(dataDir) {
   const root = dshPurgeRoot();
+  const cat = await patchCatalog();
+  const catalogInfo = cat.ok
+    ? { ok: true, path: cat.path, count: cat.count, digest: cat.digest, generatedAt: cat.generatedAt, upstream: cat.upstream }
+    : { ok: false, reason: cat.reason, tried: cat.tried || [] };
   if (!root) {
-    return { ok: false, available: false, reason: 'dsh-purge 未安装，宿主破甲不可用', dshPurgeRoot: null };
+    // 引擎缺席：清单仍然完整（这是「脱离引擎」的核心）——区别只是不能落盘
+    if (cat.ok) {
+      const rows = catalogOnlyRows(cat);
+      return {
+        ok: true,
+        available: false,
+        engineAvailable: false,
+        inventoryAvailable: true,
+        reason: '未找到补丁引擎目录（清单可用，注入不可用）：把 dsh-purge 源码放到 ' + DEFAULT_ENGINE_DIR + '，或设 DSH_PURGE_ENGINE',
+        dshPurgeRoot: null,
+        catalog: catalogInfo,
+        patches: rows,
+        counts: { total: rows.length, applied: 0, pending: 0, failed: 0, na: rows.length, other: 0 },
+        files: [],
+        baseline: { asarPath: ASAR_PATH, readable: existsSync(ASAR_PATH) },
+        snapshots: dataDir ? await listSnapshots(dataDir) : [],
+      };
+    }
+    return {
+      ok: false, available: false, engineAvailable: false, inventoryAvailable: false,
+      reason: '既没有补丁引擎目录，也没有独立补丁清单 catalog.json',
+      dshPurgeRoot: null, catalog: catalogInfo,
+      patches: [], counts: { total: 0, applied: 0, pending: 0, failed: 0, na: 0, other: 0 },
+      snapshots: [],
+    };
   }
   let gather;
   try {
     gather = await hostFiles();
   } catch (e) {
-    return { ok: false, available: false, reason: '读取 dsh-purge 状态失败：' + ((e && e.message) || e), dshPurgeRoot: root };
+    return { ok: false, available: false, engineAvailable: !!root, reason: '读取补丁引擎状态失败：' + ((e && e.message) || e), dshPurgeRoot: root, catalog: catalogInfo };
   }
   const c = await core();
   const st = gather.state;
+  const drift = engineCatalogDrift(c.ALL_PATCHES, cat);
+  // 每个宿主根单独统计：桌面 resources/app 才是「会被加载」的那份；npm-global / profile 副本只是陪跑。
+  // 以前这里只读 gatherState().patch_status（= 当前进程判定的那一个宿主），
+  // 结果界面绿了一片，桌面壳读的 app.asar 却一条都没改 —— 假绿就是这么来的。
+  const hosts = [];
+  for (const base of gather.bases || []) {
+    let statusMap = {};
+    try { statusMap = (await c.patchStatus(base)) || {}; } catch { statusMap = {}; }
+    const cnt = { applied: 0, pending: 0, failed: 0, na: 0 };
+    for (const s of Object.values(statusMap)) {
+      const t = patchTone(s).tone;
+      if (t === 'ok') cnt.applied += 1;
+      else if (t === 'wait') cnt.pending += 1;
+      else if (t === 'fail') cnt.failed += 1;
+      else cnt.na += 1;
+    }
+    let hostWritten = false;
+    try { hostWritten = c.hostCleanMarkersPresent(base); } catch { hostWritten = false; }
+    hosts.push({
+      aiBase: base,
+      kind: (base.indexOf('\\resources\\app\\') >= 0 || base.indexOf('/resources/app/') >= 0) ? 'desktop' : 'package',
+      applied: cnt.applied,
+      pending: cnt.pending,
+      failed: cnt.failed,
+      na: cnt.na,
+      hostWritten: hostWritten,
+    });
+  }
+  const primary = hosts.find((h) => h.kind === 'desktop') || hosts[0] || null;
+  let statusMap = st.patch_status || {};
+  if (primary) {
+    try { statusMap = (await c.patchStatus(primary.aiBase)) || statusMap; } catch { /* 读不到就用 gatherState 的 */ }
+  }
+  // app.asar 还在 = 桌面壳仍从 asar 里加载 dsh，resources/app 里的补丁一条都不生效
+  const desktopSealed = desktopSealedNow(c);
   const patches = (c.ALL_PATCHES || []).map((p) => {
-    const tone = patchTone((st.patch_status && st.patch_status[p.id]) || 'unknown');
+    const tone = patchTone(statusMap[p.id] || 'unknown');
     return {
       id: p.id,
       name: p.name,
@@ -187,8 +400,17 @@ export async function hostStatus(dataDir) {
   return {
     ok: true,
     available: true,
+    engineAvailable: true,
+    inventoryAvailable: cat.ok,
     dshPurgeRoot: root,
+    catalog: catalogInfo,
+    catalogDrift: drift,
     surface: st.surface,
+    hosts: hosts,
+    primaryHost: primary,
+    desktopSealed: desktopSealed,
+    // false = 补丁写进去了但不会被加载（asar 还没挪走）：界面必须提示「落地并重启宿主」
+    effective: !desktopSealed,
     dshHome: st.dsh_home,
     overridePath: st.override_path,
     overrideStatus: st.override_status,
@@ -328,23 +550,308 @@ export async function factoryRestore() {
 }
 
 /** 应用补丁：调 dsh-purge 的原版引擎（会改宿主，必须重启 dsh 生效） */
-export async function applyHostPatches(kind) {
-  const root = dshPurgeRoot();
-  if (!root) throw new Error('dsh-purge 未安装');
-  const c = await core();
-  if (kind === 'revert') {
-    const r = await c.revertAllHosts();
-    return { mode: 'revert', reverted: r.reverted || [], errors: r.errors || [] };
+/**
+ * 应用 / 还原宿主补丁。
+ *
+ * @param {'apply'|'revert'} kind
+ * @param {{patchIds?:string[]}} [opts] patchIds 为空 = 全部补丁；给了就只应用这些
+ *
+ * 注意还原的边界：补丁是**文件级字节替换**，多个补丁共用一个 `.dshpurge.bak`，
+ * 所以核心层只有 revertAll（按文件还原），没有「按补丁还原」。自选应用 + 整份还原是安全组合：
+ * 备份点永远是第一次应用前的状态。
+ */
+/**
+ * 在「桌面面」下跑一段逻辑。
+ *
+ * 控制台是裸 node 进程，引擎的 detectSurface() 会判成 "web"，于是
+ * sealedAsarHandoff() 直接返回 null：既不会解开 app.asar，也不会挪走它。
+ * 上游的 apply 一直跑在桌面宿主进程里，所以这段判断天然成立 —— 我们得自己把面标对。
+ */
+async function asDesktopSurface(fn) {
+  const prev = process.env.DSH_SURFACE;
+  process.env.DSH_SURFACE = 'desktop';
+  try { return await fn(); } finally {
+    if (prev === undefined) delete process.env.DSH_SURFACE;
+    else process.env.DSH_SURFACE = prev;
   }
-  const r = await c.applyPatchesAllHosts(c.ALL_PATCHES, { preserveClientBundles: false, forApply: true });
-  const applied = (r.report || []).filter((x) => x.status === 'applied').length;
-  const already = (r.report || []).filter((x) => x.status === 'already').length;
-  return { mode: 'apply', hosts: (r.hosts || []).map((h) => h.aiBase), applied: applied, already: already, restartRequired: true };
 }
 
-/** 目录是否可用（只读自检，供 readiness 用） */
+/** 密封桌面宿主（asar 还在 = 补丁不会被加载）的只读探测 */
+function sealedHandoff(c) {
+  try {
+    return c.sealedAsarHandoff({ surface: 'desktop', discover: true }) || null;
+  } catch { return null; }
+}
+
+function desktopSealedNow(c) {
+  try { return !!c.desktopAsarStillSealed({ surface: 'desktop' }); } catch { return false; }
+}
+
+export async function applyHostPatches(kind, opts = {}) {
+  return asDesktopSurface(() => applyHostPatchesInner(kind, opts));
+}
+
+async function applyHostPatchesInner(kind, { patchIds = [] } = {}) {
+  const c = await core();
+  // 与上游 apply 同口径：先把 DSH_HOME / 桌面安装目录钉住，清掉定位缓存，
+  // 否则这次 apply 可能落到另一份 dsh 上（上游 lib/index.js 的 apply 也是这三步打头）。
+  try { c.applyRuntimeEnv?.(); } catch { /* 非致命 */ }
+  try { c.clearDesktopLocateCache?.(); } catch { /* 非致命 */ }
+  if (kind === 'revert') {
+    const r = await c.revertAllHosts();
+    return {
+      mode: 'revert',
+      reverted: r.reverted || [],
+      errors: r.errors || [],
+      note: '还原是文件级（补丁共用 .dshpurge.bak），只能整份还原',
+    };
+  }
+  const all = Array.isArray(c.ALL_PATCHES) ? c.ALL_PATCHES : [];
+  const want = (Array.isArray(patchIds) ? patchIds : []).map((x) => String(x || '').trim()).filter(Boolean);
+  const subset = want.length
+    ? all.filter((p) => want.includes(String(p.id)) || want.includes(String(p.name)))
+    : all;
+  if (want.length && !subset.length) throw new Error('没有一个补丁匹配：' + want.join(', ') + '（可用 /api/host/status 拿 id 清单）');
+  // 引擎内部的收尾（silenceCmdFlash 之类）一旦抛错，会把「已经写进去的宿主」连带丢掉。
+  // 这里兜住：报错也把逐宿主复核结果带回去，绝不出现「看着失败 / 其实半写」这种哑弹。
+  let r = null;
+  let applyError = null;
+  try {
+    r = await c.applyPatchesAllHosts(subset, { preserveClientBundles: false, forApply: true });
+  } catch (e) {
+    applyError = String((e && e.message) || e);
+    r = { hosts: [], report: [] };
+  }
+  // 上游 apply 在补丁之后还有一步 patchAllShims()：把 npm bin / ps1 启动壳重新指向被洗过的宿主。
+  // 少了它，命令行启动的 dsh 仍会走旧入口（桌面图标每次重新解析）。
+  let shim = null;
+  try { shim = await c.patchAllShims(); } catch (e) { shim = { error: String((e && e.message) || e) }; }
+  const applied = (r.report || []).filter((x) => x.status === 'applied').length;
+  const already = (r.report || []).filter((x) => x.status === 'already').length;
+  let hosts = (r.hosts || []).map((h) => h.aiBase);
+  if (!hosts.length) {
+    // 半途抛错时用整体枚举兜底，至少让人看见哪些宿主真的被改过
+    try { hosts = c.enumeratePatchAiBases({ discover: true }); } catch { hosts = []; }
+  }
+  // 逐宿主复核：报告说 applied 不算数，回读一遍文件才知道到底写进去没有
+  const verified = [];
+  for (const base of hosts) {
+    let statusMap = {};
+    try { statusMap = (await c.patchStatus(base)) || {}; } catch { statusMap = {}; }
+    let pending = 0;
+    for (const s of Object.values(statusMap)) if (s === 'pending') pending += 1;
+    let hostWritten = false;
+    try { hostWritten = c.hostCleanMarkersPresent(base); } catch { hostWritten = false; }
+    verified.push({ aiBase: base, pending: pending, hostWritten: hostWritten });
+  }
+  const desktopSealed = desktopSealedNow(c);
+  return {
+    mode: 'apply',
+    selected: subset.length,
+    total: all.length,
+    ids: subset.map((p) => p.id),
+    hosts: hosts,
+    verified: verified,
+    shim: shim,
+    applied,
+    already,
+    applyError: applyError,
+    desktopSealed: desktopSealed,
+    // 这一条就是「注入了却没反应」的开关：true 时必须点「落地并重启宿主」
+    pendingHandoff: desktopSealed,
+    restartRequired: true,
+    note: desktopSealed
+      ? '补丁已写进 resources/app，但 resources/app.asar 还在：桌面壳按 app.getAppPath() 仍从 asar 里加载 dsh，重启也不会变。必须再执行「落地并重启宿主」（挪走 asar + 重启 exe）。'
+      : '补丁已写进当前宿主（asar 已让位），重启 dsh 即生效。',
+  };
+}
+
+/** 目录是否可用（只读自检，供 readiness 用）：注入 = 引擎在 + asar 可读 */
 export function hostFeatureAvailable() {
   return !!(dshPurgeRoot() && existsSync(ASAR_PATH));
+}
+
+/** 清单是否可用（不需要引擎）：独立 catalog 存在即可 */
+export async function hostInventoryAvailable() {
+  const cat = await patchCatalog();
+  return !!cat.ok;
+}
+
+// ---- 落地（sealed handoff）：为什么注入完还得再走一步 -----------------------
+//
+// 桌面壳启动 dsh 用的路径是 `path.join(app.getAppPath(), "dsh")`；官方包把整个 app 打成
+// resources/app.asar，所以 getAppPath() = `<resources>\app.asar`，命令行里就能看到
+// `<resources>\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\index.js`。
+// 结论：只要 app.asar 还在，旁边那份 resources/app 里的字节替换**一条都不会被加载**，
+// 重启多少次都一样。必须先结束宿主 → 把 app.asar 改名让位 → 再拉起 exe。
+// 上游 dsh-purge 的 apply 末尾就是 restartSealedDesktopIfNeeded() 干这件事；
+// autokill-purge 的旧 apply 只有 applyPatchesAllHosts()，缺的正是这一步。
+
+const DESKTOP_EXE_GUESS = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/DeepSeek Harness.exe';
+
+function asidePathFor(asar) {
+  return asar + '.dshpurge-aside';
+}
+
+/** 只读：现在到底是不是「补丁写了但不生效」的状态 */
+export async function hostHandoffStatus() {
+  const c = await core();
+  return asDesktopSurface(async () => {
+    const handoff = sealedHandoff(c);
+    const sealed = desktopSealedNow(c);
+    const asar = handoff?.asar || (existsSync(ASAR_PATH) ? ASAR_PATH : null);
+    const aside = asar ? asidePathFor(asar) : null;
+    const appDir = asar ? join(dirname(asar), 'app') : null;
+    const asideExists = !!(aside && existsSync(aside));
+    return {
+      ok: true,
+      sealed: sealed,                 // true = 需要落地
+      effective: !sealed,             // false = 桌面壳读的是 asar，补丁不生效
+      exe: handoff?.exe || (existsSync(DESKTOP_EXE_GUESS) ? DESKTOP_EXE_GUESS : null),
+      asar: asar,
+      aside: aside,
+      asideExists: asideExists,       // true = 之前落地过（asar 已让位）
+      appDir: appDir,
+      appDirPatched: !!(appDir && existsSync(join(appDir, 'dsh', 'package.json'))),
+      // 这里要看的是「桌面那份」的版本，不是 npm-global 残留
+      dshVersionOnDisk: await readDesktopDshVersion(appDir),
+      dshVersionInAsar: await asarVersion(),
+    };
+  });
+}
+
+async function readDesktopDshVersion(appDir) {
+  if (!appDir) return null;
+  try {
+    const raw = JSON.parse(await readFile(join(appDir, 'dsh', 'package.json'), 'utf8'));
+    return raw.version || null;
+  } catch { return null; }
+}
+
+function runDetached(cmd, args) {
+  return new Promise((resolve) => {
+    let done = false;
+    try {
+      const child = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true });
+      child.on('error', (e) => { if (!done) { done = true; resolve({ ok: false, error: String((e && e.message) || e) }); } });
+      child.on('spawn', () => { if (!done) { done = true; resolve({ ok: true, pid: child.pid }); } });
+      child.unref();
+    } catch (e) {
+      resolve({ ok: false, error: String((e && e.message) || e) });
+    }
+  });
+}
+
+/**
+ * 结束宿主：按映像名两段式（先温和，再强制）。
+ *
+ * 刻意**不用 /T**。/T 会顺着主进程把整棵子树端掉；而本函数常被「挂在宿主树里的一方」触发
+ * （宿主自己的插件、PTC 派生的 watcher、控制台的子进程），/T 会把调用方一起杀。
+ * 2026-11-18 18:07 那次落地就是这么自杀的：45 个同名进程连同 watcher 一起没了，
+ * 日志停在 "before: asar exists=true"，asar 根本没来得及改名。
+ * 只按映像名杀，watcher（node.exe）不受牵连。
+ */
+async function killDesktopHost(exe) {
+  if (!exe) return { ok: false, error: 'no_exe' };
+  const image = basename(exe);
+  const soft = await runDetached('taskkill', ['/IM', image]);
+  await new Promise((r) => setTimeout(r, 2000));
+  const hard = await runDetached('taskkill', ['/IM', image, '/F']);
+  await new Promise((r) => setTimeout(r, 1200));
+  return { ok: true, soft: soft, hard: hard, image: image, tree: false };
+}
+
+/** 等 asar 的锁释放后改名让位（Electron 退出时文件句柄有几秒延迟） */
+async function moveAsarAside(asar, aside, timeoutMs = 20000) {
+  const started = Date.now();
+  let lastError = null;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      if (!existsSync(asar)) return { ok: true, already: true };
+      await rename(asar, aside);
+      return { ok: true, moved: true, aside: aside };
+    } catch (e) {
+      lastError = String((e && e.message) || e);
+      await new Promise((r) => setTimeout(r, 700));
+    }
+  }
+  return { ok: false, error: lastError };
+}
+
+/**
+ * 落地并重启桌面宿主。
+ *
+ * @param {{restart?:boolean}} [opts] restart=false 只让 asar 让位、不拉起来（想手动开）
+ */
+export async function finishHostHandoff({ restart = true } = {}) {
+  const c = await core();
+  return asDesktopSurface(async () => {
+    const handoff = sealedHandoff(c);
+    const asar = handoff?.asar || ASAR_PATH;
+    const exe = handoff?.exe || (existsSync(DESKTOP_EXE_GUESS) ? DESKTOP_EXE_GUESS : null);
+    if (!exe) {
+      return { ok: false, error: 'no_desktop_install', note: '没找到桌面宿主 exe：这台机器上可能只装了 web/CLI 版 dsh，那种情况补丁本来就会直接生效，不需要落地。' };
+    }
+    if (!existsSync(asar)) {
+      return { ok: true, needed: false, asarMoved: true, appDir: join(dirname(asar), 'app'), note: 'app.asar 已经不在了：resources/app 就是当前宿主，重启即生效。' };
+    }
+    // 1) 挪走 asar 前先确认 resources/app 真的有完整宿主，否则挪完就打不开了
+    const appDir = join(dirname(asar), 'app');
+    const pkg = join(appDir, 'dsh', 'package.json');
+    if (!existsSync(pkg)) {
+      return {
+        ok: false,
+        error: 'app_dir_incomplete',
+        appDir: appDir,
+        note: 'resources/app 里没有 dsh/package.json，现在挪 asar 会让桌面打不开。先点一次「一键注入」把 asar 解开再来。',
+      };
+    }
+    // 2) 结束宿主
+    const killed = await killDesktopHost(exe);
+    // 3) asar 让位（保留原名 + .dshpurge-aside，可一键放回）
+    let aside = asidePathFor(asar);
+    if (existsSync(aside)) {
+      try { await rm(aside, { force: true }); } catch { /* 上一次的残留，删不掉就换个名 */ }
+    }
+    if (existsSync(aside)) aside = aside + '-' + Date.now();
+    const moved = await moveAsarAside(asar, aside);
+    if (!moved.ok) {
+      return { ok: false, error: 'asar_locked', detail: moved.error, killed: killed, note: 'app.asar 一直被占用：宿主可能还活着，等它退干净再点一次。' };
+    }
+    // 4) 重新拉起（此时 app.getAppPath() 回落到 resources/app）
+    let launched = null;
+    if (restart) {
+      launched = await runDetached(exe, []);
+    }
+    return {
+      ok: true,
+      needed: true,
+      asarMoved: true,
+      asar: asar,
+      aside: moved.aside || aside,
+      appDir: appDir,
+      killed: killed,
+      launched: launched,
+      restarting: !!(launched && launched.ok),
+      note: restart
+        ? 'app.asar 已让位，宿主已重新拉起：现在加载的是 resources/app/dsh，83 条补丁这次才真的生效。想回滚就把 app.asar.dshpurge-aside 改回 app.asar。'
+        : 'app.asar 已让位；手动打开桌面宿主即生效。回滚：把 app.asar.dshpurge-aside 改回 app.asar。',
+    };
+  });
+}
+
+/** 撤销落地：把 asar 放回去（宿主下次启动就又读 asar 原件） */
+export async function restoreHostAsar() {
+  const asar = ASAR_PATH;
+  const aside = asidePathFor(asar);
+  if (!existsSync(aside)) return { ok: false, error: 'no_aside', note: '没找到 ' + aside + '，说明没走过落地（或已经放回过）。' };
+  if (existsSync(asar)) return { ok: false, error: 'asar_present', note: 'app.asar 已经在了，不需要放回。' };
+  try {
+    await rename(aside, asar);
+    return { ok: true, restored: true, asar: asar, restartRequired: true, note: 'asar 已放回：下次启动桌面宿主会重新读 asar 原件（补丁失效）。' };
+  } catch (e) {
+    return { ok: false, error: 'rename_failed', detail: String((e && e.message) || e) };
+  }
 }
 
 // ---- 补丁中文名（原版只有英文常量名，界面上要中英并列） ----------------------
