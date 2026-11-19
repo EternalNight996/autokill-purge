@@ -27,17 +27,19 @@ if (!ping || ping.ok !== true) {
   process.exit(1);
 }
 
-// 1) DSH：83 条补丁 + 插件 + 6 项能力都适用
+// 1) DSH：83 条补丁 + 插件 + 7 项能力都适用
 const dsh = await get('?host=dsh&fresh=1');
 ok('1. dsh 200', dsh.status === 200);
 ok('1a. hostId=dsh', dsh.j.hostId === 'dsh');
 ok('1b. 补丁段适用且 total=83', dsh.j.patches && dsh.j.patches.applicable === true && dsh.j.patches.total === 83, 'total=' + (dsh.j.patches && dsh.j.patches.total));
 ok('1c. 插件段适用且 bundles 有值', dsh.j.plugins && dsh.j.plugins.applicable === true && Array.isArray(dsh.j.plugins.bundles), 'bundles=' + ((dsh.j.plugins && dsh.j.plugins.bundles) || []).length);
-ok('1d. 能力段适用且 6 项', dsh.j.capabilities && dsh.j.capabilities.applicable === true && dsh.j.capabilities.total === 6, 'total=' + (dsh.j.capabilities && dsh.j.capabilities.total));
+ok('1d. 能力段适用且 7 项', dsh.j.capabilities && dsh.j.capabilities.applicable === true && dsh.j.capabilities.total === 7, 'total=' + (dsh.j.capabilities && dsh.j.capabilities.total));
 ok('1e. host.rows 有 DSH 版本行', (dsh.j.host.rows || []).some((r) => r.k === 'DSH'));
 ok('1f. 注入探针字段齐全', !!dsh.j.injection && typeof dsh.j.injection.ready === 'boolean' && Array.isArray(dsh.j.injection.sessions));
 ok('1g. 探针给出每请求 token 估算', Number(dsh.j.injection.estTokensPerRequest) > 4000, 'est=' + (dsh.j.injection && dsh.j.injection.estTokensPerRequest));
 const newest = (dsh.j.injection.sessions || [])[0] || null;
+ok('1i. 指令层字段齐全', !!dsh.j.injection.instructions && typeof dsh.j.injection.instructions.hasBlock === 'boolean', 'hasBlock=' + (dsh.j.injection.instructions && dsh.j.injection.instructions.hasBlock));
+ok('1j. 指令层给 inRecentSessions', !!dsh.j.injection.instructions && typeof dsh.j.injection.instructions.inRecentSessions === 'boolean');
 ok('1h. effective = 最新会话是否注入', dsh.j.injection.effective === !!(newest && newest.hasInjection), 'eff=' + dsh.j.injection.effective + ' newest=' + (newest && newest.hasInjection));
 
 // 2) MengBot：没有补丁层/插件层 → applicable=false + 说明，不许留空

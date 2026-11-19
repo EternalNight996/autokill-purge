@@ -7,7 +7,7 @@
 // 宿主是唯一维度：`?host=dsh|mengbot|autokill`，返回同一套骨架（host / patches / plugins /
 // capabilities），每段都带 applicable —— 不适用的段给 note 说明为什么，而不是留空或编数。
 import os from 'node:os';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostStatus, patchCatalog } from './host.mjs';
 import { listOps } from './ops/index.mjs';
@@ -64,16 +64,24 @@ function injectionProbe(dshHome, opts = {}) {
     } catch { fileInfo = null; }
   }
   const found = [];
+  let newestTouch = 0;
   if (home) {
     let rowsList = [];
     try { rowsList = listSessionFiles(join(home, 'sessions')); } catch { rowsList = []; }
+    for (const r of rowsList) newestTouch = Math.max(newestTouch, r.mtimeMs || 0);
     // 按"会话创建时间"判定，而不是文件 mtime：老会话被续写时 mtime 会插到最前，
     // 那会让「最新会话有没有注入」在同一个宿主上反复跳（实测 16:55 触发过一次）。
     for (const row of rowsList) {
-      if (found.length >= 12) break;
+      if (found.length >= limit) break;
       if (row.sizeBytes > maxBytes) continue;
       let text = '';
-      try { text = decodeSession(readFileSync(row.path)).text; } catch { continue; }
+      try {
+        const fd = openSync(row.path, 'r');
+        const buf = Buffer.alloc(Math.min(131072, row.sizeBytes || 131072));
+        readSync(fd, buf, 0, buf.length, 0);
+        closeSync(fd);
+        text = decodeSession(buf).text;
+      } catch { continue; }
       const lines = text.split(String.fromCharCode(10));
       let createdAt = row.mtimeMs;
       try { const head = JSON.parse(lines[0] || '{}'); if (head && head.createdAt) createdAt = Number(head.createdAt); } catch { /* 用 mtime */ }
@@ -81,6 +89,11 @@ function injectionProbe(dshHome, opts = {}) {
       if (!line) continue;
       let hasInjection = false;
       let sysChars = 0;
+      let instructionsSeen = false;
+      for (const ln of lines) {
+        if (!ln.includes('agent-instructions')) continue;
+        if (ln.includes('UNRESTRICTED SANDBOX') || ln.includes('autokill-purge:agents:begin')) { instructionsSeen = true; break; }
+      }
       try {
         const m = JSON.parse(line);
         const content = (m.data && m.data.message && m.data.message.content) || [];
@@ -88,13 +101,22 @@ function injectionProbe(dshHome, opts = {}) {
         sysChars = t.length;
         hasInjection = t.includes(INJECT_MARK);
       } catch { continue; }
-      found.push({ id: row.id, project: row.project, at: createdAt, sysChars, hasInjection });
+      found.push({ id: row.id, project: row.project, at: createdAt, mtimeMs: row.mtimeMs, sysChars, hasInjection, instructionsSeen });
     }
   }
   found.sort((a, b) => b.at - a.at);
   const checked = found.slice(0, limit);
   const latest = checked[0] || null;
   const withInjection = checked.filter((x) => x.hasInjection).length;
+  const agentsPath = home ? join(home, 'AGENTS.md') : '';
+  let agents = null;
+  if (agentsPath) {
+    try {
+      const ast = statSync(agentsPath);
+      const atxt = readFileSync(agentsPath, 'utf8');
+      agents = { path: agentsPath, exists: true, bytes: ast.size, mtimeMs: ast.mtimeMs, hasBlock: atxt.includes('autokill-purge:agents:begin') };
+    } catch { agents = { path: agentsPath, exists: false, bytes: 0, hasBlock: false }; }
+  }
   return {
     ready: !!fileInfo,
     effective: !!(fileInfo && latest && latest.hasInjection),
@@ -103,6 +125,7 @@ function injectionProbe(dshHome, opts = {}) {
     checked: checked.length,
     withInjection,
     sessions: checked,
+    instructions: agents ? Object.assign({}, agents, { inRecentSessions: !!(agents.hasBlock && agents.mtimeMs && newestTouch > agents.mtimeMs), checked: checked.length, newestTouch }) : null,
     estTokensPerRequest: estTokens,
     note: '按最近 ' + limit + ' 个会话的 system/message 判定；token 为估算（0.288 tokens/字符）',
   };
@@ -138,7 +161,7 @@ async function opsSection(dataDir, applicable) {
       total: 0,
       available: 0,
       items: [],
-      note: '这 6 项是宿主内能力（reapply / restart / plugin-install / identity / rewind / redteam-pack），只对 DSH 生效',
+      note: '这 7 项是宿主内能力（reapply / restart / plugin-install / identity / instruction-inject / rewind / redteam-pack），只对 DSH 生效',
     };
   }
   const ops = await listOps(dataDir);
@@ -158,7 +181,7 @@ function opsSectionFrom(ops, applicable) {
     total: items.length,
     available: applicable ? items.filter((x) => x.available).length : 0,
     items,
-    note: applicable ? '' : '这 6 项是宿主内能力（DQSH profile / 会话 / 技能），只对 DSH 生效',
+    note: applicable ? '' : '这 7 项是宿主内能力（DSH profile / 会话 / 技能 / 指令层），只对 DSH 生效',
   };
 }
 

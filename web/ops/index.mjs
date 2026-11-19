@@ -21,7 +21,7 @@ export const RESOURCES_DIR = 'C:/Users/Administrator/AppData/Local/Programs/Deep
 export const DESKTOP_EXE = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/DeepSeek Harness.exe';
 
 /** 注册顺序 = UI 展示顺序 */
-export const OPS_ORDER = ['reapply', 'restart', 'plugin-install', 'identity', 'rewind', 'redteam-pack'];
+export const OPS_ORDER = ['reapply', 'restart', 'plugin-install', 'identity', 'instruction-inject', 'rewind', 'redteam-pack'];
 
 const cache = new Map();
 

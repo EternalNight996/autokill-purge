@@ -2,6 +2,33 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.21] — 2026-11-19（指令层注入：AGENTS.md · 免重启）
+
+### 问题
+宿主补丁路线（83 条 + 落地 + 重启）在「不重启 DSH 客户端」的约束下不可用。
+需要一条不改宿主、不重启，也能把破甲提示词送进模型的通道。
+
+### Added · 指令层注入（免重启）
+- `web/ops/instruction-inject.mjs`（新能力）：写 `<dshHome>/AGENTS.md` 的标记块。
+  DSH 原生 `dsh-agent-instructions` 在每个 agent step 前读取该文件（`maxBytes=65536`），
+  以 `source.kind='agent-instructions'` 的用户消息注入模型上下文 —— **写文件即生效，不重启客户端**。
+- 幂等与安全：APPLY 先摘旧块再写（保留用户原有内容）、REMOVE 只摘块、同内容 `changed=false`、
+  超 65536B 拒绝（`too_large`）、写前备份到 `data/instruction-backups/`。
+- `web/summary.mjs`：注入探针新增 `instructions` 通道（文件 hasBlock/bytes/mtime +
+  按会话日志 mtime 判定 `inRecentSessions`）。
+- 控制台：破甲页新增「写 AGENTS.md（免重启）」/「撤销指令层」（两段确认）；右侧栏新增「指令层」行。
+
+### 实测
+```
+node test/ops-instruction-inject.mjs → 21 PASS（临时 dshHome，不碰真实 ~/.dsh）
+真实链路：写 187B 探针块 → 下一步 agent step 立刻收到 Instructions from: ~/.dsh/AGENTS.md
+         → 未重启 DSH；summary instructions.hasBlock=true / inRecentSessions=true
+```
+
+### 还缺
+- 指令层走的是**用户消息**通道（不是系统提示词头部），权重低于 prompt-inject.md；
+  需要最强权重时仍要走「宿主补丁 + 落地 + 重启」（本轮按用户要求不做重启）。
+- 浏览器级断言（rail「指令层」行、破甲页按钮）还没进 `ui-error-red-browser`。
 ## [1.1.20] — 2026-11-19（报错统一红色标识：toast 三色 + 右侧栏错误红）
 
 ### 问题

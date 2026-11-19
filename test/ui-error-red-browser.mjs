@@ -116,7 +116,7 @@ if (ready) {
     '    const st = (typeof railState !== \'undefined\' && railState && railState.data) || null;',
     '    if (!el || el.dataset.loading !== \'0\') return JSON.stringify({ loading: true });',
     '    const row = Array.from(el.querySelectorAll(\'.rail-kv\')).find((r) => r.innerText.includes(\'提示词注入\')) || null;',
-    '    return JSON.stringify({ loading: false, has: !!row, red: row ? row.querySelector(\'.rail-err\') !== null : false, effective: st && st.injection ? !!st.injection.effective : null, errors: (window.__apErrors || []).length });',
+    '    return JSON.stringify({ loading: false, has: !!row, red: row ? row.querySelector(\'.rail-err\') !== null : false, hasInstructions: !!(Array.from(el.querySelectorAll(\'.rail-kv\')).find((r) => r.innerText.includes(\'\u6307\u4ee4\u5c42\'))), effective: st && st.injection ? !!st.injection.effective : null, errors: (window.__apErrors || []).length });',
     '  })()',
   ].join(String.fromCharCode(10));
   let rail = null;
@@ -126,6 +126,7 @@ if (ready) {
     if (rail && rail.loading === false) break;
   }
   ok('8. 右侧栏有「提示词注入」行', !!(rail && rail.has));
+  ok('8a. 右侧栏有「指令层」行', !!(rail && rail.hasInstructions));
   ok('9. 未生效时该行标红', !!(rail && rail.has && (rail.effective ? true : rail.red)), 'effective=' + (rail && rail.effective) + ' red=' + (rail && rail.red));
   ok('10. 全程 __apErrors 干净', !!rail && rail.errors === 0, 'errors=' + (rail && rail.errors));
 }

@@ -88,6 +88,13 @@ POST /api/ops/<id>/run           → 执行，必须 { confirm:true }；支持 {
 - 冲突告警：有效配置 = profile `cordis.patch.yml` 覆盖 > 插件自带 patch（只看 `id: dsh-purge` 后 3KB 内的 `autoApplyOnStart`，避免误判别的插件）；
   开着 → `warning.level='warn'` / `code='auto-apply-conflict'`，直说「会覆盖本项目注入结果」。
 
+### instruction-inject（指令层 · 免重启）
+- **为什么另开一条**：宿主补丁路线要「落地 + 重启客户端」；用户明确不重启时，这条路不可用。
+- **机制**：DSH 原生 `dsh-agent-instructions` 在每个 agent step 前读 `<dshHome>/AGENTS.md`（用户全局）与项目 `AGENTS.md/CLAUDE.md`，
+  以 `source.kind='agent-instructions'` 的用户消息注入；写文件即生效（预算 `maxBytes=65536`）。
+- **本实现**：写带标记的块（`<!-- autokill-purge:agents:begin/end -->`），APPLY 先摘旧块再写、REMOVE 只摘块，用户原有内容保留；
+  同内容幂等，超预算拒绝，写前备份到 `data/instruction-backups/`；控制台破甲页两个按钮 + 右侧栏「指令层」行。
+- **权重**：走用户消息通道，低于 `prompt-inject.md` 的系统提示词头部；要最强权重仍走宿主补丁 + 重启。
 ### plugin-install（插件注入，与内核补丁同一事务）
 
 **为什么需要它**：宿主补丁改的是 `resources/app` 里的内核文件；插件装的是 profile 的 `node_modules` + `dsh.profile.bundles`。

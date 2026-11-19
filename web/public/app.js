@@ -2296,6 +2296,8 @@ function renderSimpleResults() {
         <button type="button" class="small" data-simple-attempt="pass" data-simple-key="${esc(key)}"${recorded ? " disabled" : ""}>这次成功了</button>
         <button type="button" class="small" data-simple-attempt="refused" data-simple-key="${esc(key)}"${recorded ? " disabled" : ""}>被拒绝了</button>
         <button type="button" class="small" data-inject-host="${esc(key)}">${S.breach.injectArm === key ? "确认注入宿主？" : "注入宿主"}</button>
+        <button type="button" class="small" data-inject-agents="${esc(key)}">${S.breach.agentsArm === key ? "确认写 AGENTS.md？" : "写 AGENTS.md（免重启）"}</button>
+        <button type="button" class="small" data-inject-agents-off>撤销指令层</button>
         <button type="button" class="small" data-absorb="${esc(key)}"${absorbed ? " disabled" : ""}>${absorbed ? "已入库" : "入库"}</button>
       </div>
     </article>`;
@@ -2867,6 +2869,47 @@ async function injectHostPayload(key) {
     toastError(simpleReason(e));
   } finally {
     b.injectBusy = false;
+    renderPage();
+  }
+}
+/** 破甲载荷 → 指令层（AGENTS.md · 免重启）：DSH 每个 agent step 前读 <dshHome>/AGENTS.md 并注入 */
+async function injectAgentsMd(key) {
+  const b = S.breach;
+  if (b.agentsArm !== key) {
+    b.agentsArm = key;
+    renderPage();
+    toast("再点一次确认：写 ~/.dsh/AGENTS.md（下一步生效，不重启 dsh）", "warn");
+    return;
+  }
+  b.agentsArm = null;
+  if (b.agentsBusy) return;
+  b.agentsBusy = true;
+  try {
+    const data = await request("/api/ops/instruction-inject/run", { method: "POST", body: { confirm: true, mode: "append" } });
+    if (!data || data.ok === false) throw payloadError(data, "写入失败");
+    b.agentsResult = data;
+    toast("已写 AGENTS.md 指令层：下一步生效，无需重启");
+    scheduleRailRefresh();
+  } catch (e) {
+    if (isAgreementError(e)) return;
+    toastError(simpleReason(e));
+  } finally {
+    b.agentsBusy = false;
+    renderPage();
+  }
+}
+
+async function removeAgentsMd() {
+  const b = S.breach;
+  try {
+    const data = await request("/api/ops/instruction-inject/run", { method: "POST", body: { confirm: true, action: "remove" } });
+    if (!data || data.ok === false) throw payloadError(data, "撤销失败");
+    b.agentsResult = data;
+    toast(data.changed ? "已移除指令层注入块" : "本来就没有注入块");
+    scheduleRailRefresh();
+  } catch (e) {
+    toastError(simpleReason(e));
+  } finally {
     renderPage();
   }
 }
@@ -4955,6 +4998,8 @@ function renderBreach() {
         <pre tabindex="0">${esc(v.text || "")}</pre>
         <div class="payload-foot"><span class="faint small">${String(v.text || "").length} 字符</span>
           <button type="button" class="small" data-inject-host="${esc(id)}">${S.breach.injectArm === id ? "确认注入宿主？" : "注入宿主"}</button>
+          <button type="button" class="small" data-inject-agents="${esc(id)}">${S.breach.agentsArm === id ? "确认写 AGENTS.md？" : "写 AGENTS.md（免重启）"}</button>
+          <button type="button" class="small" data-inject-agents-off>撤销指令层</button>
           <button type="button" class="small" data-absorb="${esc(id)}"${S.simple.absorbed[id] ? " disabled" : ""}>${S.simple.absorbed[id] ? "已入库" : "入库"}</button>
           ${copyBtn(v.text || "", "复制载荷")}</div>
       </article>`;
@@ -7759,6 +7804,17 @@ function init() {
       injectHostPayload(injectHost.dataset.injectHost);
       return;
     }
+    // 指令层（AGENTS.md · 免重启）：同两次点击确认
+    const injectAgents = event.target.closest("[data-inject-agents]");
+    if (injectAgents) {
+      injectAgentsMd(injectAgents.dataset.injectAgents);
+      return;
+    }
+    const injectAgentsOff = event.target.closest("[data-inject-agents-off]");
+    if (injectAgentsOff) {
+      removeAgentsMd();
+      return;
+    }
     const retry = event.target.closest("[data-retry-boot]");
     if (retry) {
       boot();
@@ -7880,6 +7936,12 @@ function railHostBadge(d) {
 }
 
 /** 注入生效行：文件在 ≠ 生效；未生效时由调用方加红色 class */
+function instructionsRailText(x) {
+  if (!x) return "—";
+  if (!x.hasBlock) return x.exists ? "AGENTS.md 在 · 无注入块" : "未写入";
+  return x.inRecentSessions ? "生效中（免重启）" : "已写入 · 等下一步生效";
+}
+
 function injectionRailText(inj) {
   if (!inj) return "—";
   if (!inj.ready) return "未写入（没有 prompt-inject.md）";
@@ -7993,6 +8055,7 @@ function renderInjectRail() {
     + railRowsHtml(host.rows)
     + (d.hostId === "dsh" && badge.cls !== "ok" ? '  <div class="rail-kv"><span>状态</span><span class="mini">' + esc(badge.text) + '</span></div>' : "")
     + (d.injection ? '  <div class="rail-kv"><span>提示词注入</span><span class="mini' + (d.injection.ready && !d.injection.effective ? ' rail-err' : '') + '">' + esc(injectionRailText(d.injection)) + '</span></div>' : "")
+    + (d.injection && d.injection.instructions ? '  <div class="rail-kv"><span>指令层</span><span class="mini">' + esc(instructionsRailText(d.injection.instructions)) + '</span></div>' : "")
     + railNoteHtml(host.note)
     + '</div>'
     + patchCard

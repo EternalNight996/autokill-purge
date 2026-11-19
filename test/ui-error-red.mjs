@@ -51,6 +51,8 @@ ok('5c. 错误处理器会重渲染横幅', (js.match(/try \{ renderRuntimeError
 
 // 6) 注入生效探针（文件在 ≠ 生效）
 ok('6. 右侧栏渲染注入生效行', /injectionRailText/.test(js) && /d\.injection/.test(js));
+ok('7. 指令层 rail 文案存在', /instructionsRailText/.test(js) && js.includes('指令层'));
+ok('7a. 破甲页有「写 AGENTS.md」按钮', /data-inject-agents=/.test(js) && /data-inject-agents-off/.test(js));
 ok('6a. 未生效时用 rail-err', /d\.injection\.ready && !d\.injection\.effective \? ' rail-err'/.test(js));
 
 
