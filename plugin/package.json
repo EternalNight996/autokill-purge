@@ -1,6 +1,6 @@
 {
   "name": "autokill-purge-plugin",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "梦神破甲 · autokill-purge 的宿主内装备插件：58 个 redteam_* 工具、演练台事实库、预设/技能落地（内化 redteam 内核，不依赖 dsh-purge）",
   "type": "module",
   "main": "lib/index.js",

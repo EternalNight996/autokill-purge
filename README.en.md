@@ -1,10 +1,8 @@
 <p align="center"><img src="assets/autokill-purge.png" width="96" height="96" alt="autokill-purge icon" /></p>
 
-<h1 align="center">🍊 autokill-purge · Dream God Armor Break (梦神破甲)</h1>
+<h1 align="center">🍊 autokill-purge · Mengshen Armor Break</h1>
 
-<p align="center"><b>One command to install the purge console · Dream God Armor Break (梦神破甲)</b><br/>One-click injection · 83 patches visualized · payloads · memory vault · MCP manager</p>
-
-<p align="center"><sub>Signed: Dream God Armor Break (梦神破甲) · autokill-purge</sub></p>
+<p align="center"><b>A jailbreak console for three hosts (DSH / MengBot / AutoKill): patch visibility, payload generation, gear dispatch, one-click install/uninstall, backup &amp; restore</b></p>
 
 <p align="center">
   <img src="https://img.shields.io/npm/v/autokill-purge?style=flat" alt="npm" />
@@ -12,79 +10,129 @@
   <img src="https://img.shields.io/badge/dependencies-0-FF7A45" alt="deps" />
   <img src="https://img.shields.io/badge/node-%E2%89%A522-3c873a" alt="node" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license" />
+  <img src="https://img.shields.io/badge/hosts-DSH%20%C2%B7%20MengBot%20%C2%B7%20AutoKill-8957e5" alt="hosts" />
 </p>
 
 <p align="center">
-  <img src="docs/shots-ux2/theme2-ops.png" width="49%" alt="Purge page" />
-  <img src="docs/shots-ux2/memory-full.png" width="49%" alt="Memory vault" />
+  <img src="docs/shots-ux2/theme2-ops.png" width="49%" alt="breach page" />
+  <img src="docs/shots-ux2/memory-full.png" width="49%" alt="memory vault" />
 </p>
 
-**English** · [简体中文](README.md)
+**简体中文（默认）** · [English](README.en.md)
 
 ## ⚡ Install in one line
 
 ```bash
-npm i -g autokill-purge && autokill-purge
+npx autokill-purge            # or: npm i -g autokill-purge && autokill-purge
 ```
 
-It starts three things for you: the memory vault (port 7989) → the console (port 8792) → your browser.
-**Zero dependencies, no build step, no system changes.**
+Then open `http://127.0.0.1:8792`. Zero dependencies (Node stdlib only). On Windows desktop hosts there is a one-click "land &amp; restart" (moves `app.asar` aside so `resources\app` gets loaded).
 
-```bash
-npx autokill-purge                 # run without installing
-autokill-purge                     # already running? it just opens the page
-node scripts/install-desktop.mjs   # desktop icon + autostart (Windows)
-```
+## 🎯 What it actually does
 
-## 🎯 What you get
+A model refusing to work is rarely one sentence — four gate layers stack up:
 
-| Capability | Details |
-|---|---|
-| **Purge** | **梦神破甲** template (follows the package version, currently 1.1.22) + **83 host patches with bilingual labels**, green = applied / red = failed / gray = skipped, plus **sealed-asar handoff** (rename app.asar aside + relaunch) - without it the patched files are never loaded |
-| **Rollback** | Auto snapshot before every write; one-click factory restore from the official asar; auto-rollback on failure |
-| **Payloads** | 27+ models detected live (multi-select → smart match), 12 techniques, text / Base64 / ROT13 variants, 7 binary `break` actions |
-| **梦神装甲 (armor)** | 6 multi-selectable packs, paged by pack, real skill names attached, cracked models included; issue to dsh / mengbot / autokill. **A matching nav item (icon + name) sits at the bottom of the DSH sidebar and jumps back to this console.** |
-| **Memory** | Embeds memory-eternal in an **isolated vault** (`mem-purge` @ 7989, never touches your operations vault); MEM Pair for cross-instance card sync |
-| **MCP** | Manage local MCP servers with a **real handshake test** (initialize → tools/list) and export JSON for Claude / Cursor |
-| **Parity** | The 5 host-side dsh-purge capabilities rebuilt outside the host: **reapply** (startup replay / official-update heal), **restart** (reuses the upstream helper), **identity** (fragment library compiled into prompt-inject.md), **rewind** (multi-frame zstd session rewind), **redteam-pack** (48 skills + 3 roles installed; 58 `redteam_*` tools audited and hosted) |
-| **Themes** | 7 skins: ops amber (default) / terminal / steel / matrix / cyber / amber CRT / default blue |
+| Layer | Gate | What this project does |
+|---|---|---|
+| Prompt | blocklists / refusal boilerplate / identity lines injected by the host | **83 host patches**, byte-level, listed per item, revertible |
+| Injection | how your payload reaches the model | writes `prompt-inject.md` / `AGENTS.md`, merged in `system-prompt/assemble` |
+| Approval | escalations, tool asks, sandbox denials | patches turn "must ask / must deny" into "allow, no interruption" |
+| Host | desktop shell loads from `app.asar`, so edits do nothing | "land" renames `app.asar` aside, host reloads from `resources\app` |
 
-## 📊 How it compares
+The console turns all of that into clickable, inspectable, revertible actions.
 
-| | **autokill-purge** | dsh-purge as-is | Editing config by hand |
+## 🧩 Host capability matrix
+
+| Capability | DSH (DeepSeek Harness) | MengBot | AutoKill |
 |---|---|---|---|
-| Install | `npm i -g autokill-purge` **one line** | Install plugin + read docs | Find the paths yourself |
-| UI | Web console · 7 themes · **two modes** | CLI / config files | None |
-| 83 patches | **Bilingual labels + tri-state colors** | Just a number | No idea if it applied |
-| Rollback | Snapshot + factory restore + **auto-rollback** | Partial | Back it up yourself |
-| Payloads | 12 techniques × 3 encodings × multi-model | None | Hand-written |
-| Memory | **Isolated embedded vault**, switch vault/port in one click | — | — |
-| MCP | Real handshake + export | — | Hand-write JSON |
-| Dependencies | **0** (no npm deps, no build) | — | — |
+| Mechanism | 83 host patches + injection | bot soul injection + 5 host patches | prompt injection + MCP tool bridge |
+| Patch coverage | **79/83** (4 declared dead, see below) | **5/5** | — |
+| Gear / skills | plugin + equipment records + preset sync | `BotRecord.gear` + soul | `ui.slots` + `build.gear` |
+| Backup | full snapshot (files + sha256) | per-bot pre-inject snapshots | `config.toml` + prompt backup |
+| Restore | latest snapshot / factory restore | per-bot rollback | copy back from backup |
+| Install | patches + injection + plugin | patches + inject all bots | mount MCP + inject |
+| Clean uninstall | asar back + patches reverted + plugin removed | `--revert` + soul restored | unmount MCP + remove injection |
+| Verify | 4 residue checks | 2 checks | 2 checks |
 
-> Rule of thumb: use this if you want fewer sharp edges; if you only need to flip two bytes, hand-editing is fine.
-
-## 🖥 Two modes, one switch
-
-- **Simple mode**: four-step pipeline (pick template → make purge take effect → pick model and write the task → grab the payload)
-- **Technical mode**: same flow with every parameter exposed (layer / technique library / sampling / zero-width / encodings / hit rate / binary `break`)
-
-The switch is top-right; the choice is stored server-side and survives refreshes.
-
-## 🔒 Private deployment
-
-```jsonc
-// data/deploy.json  — switchable in Settings, auto-rollback on failure
-{ "port": 7989, "dbName": "mem-purge" }
-```
-
-Fixed entry `http://127.0.0.1:8792/#/memory`; the memory vault is physically isolated from the operations vault (7999).
-`scripts/mem-keepalive.mjs` keeps it alive: probe → relaunch with an explicit `--vault` → **verify the vault and correct** if it came up on the wrong library.
-
-## ✅ Verify
+## 🚀 Quick start
 
 ```bash
-npm test    # acceptance 21 · ux2layer 18 · ux2layer-ui 16 · ac-check 19
+git clone https://github.com/EternalNight996/autokill-purge.git
+cd autokill-purge
+node web/server.mjs            # http://127.0.0.1:8792
 ```
 
-MIT License · screenshots under `docs/shots-ux2/`
+Handy commands:
+
+```bash
+node scripts/lifecycle.mjs status                 # install/effective state for all three hosts
+node scripts/lifecycle.mjs backup --host=all      # full backup
+node scripts/lifecycle.mjs install --host=mengbot # one-click install (use --dry-run first)
+node scripts/lifecycle.mjs uninstall --host=all   # uninstall
+node scripts/lifecycle.mjs verify  --host=all     # "is it really clean?" acceptance
+node scripts/patch-mengbot-wrap.mjs --check       # anchor uniqueness for MengBot patches
+node test/patch-compat-0202.mjs                   # 0.2.2 compat-anchor regression
+```
+
+## 🧠 Where the 83 patches come from
+
+Upstream `dsh-purge` enumerates the gates as patches (prompt 25 / code 47 / tools 8 / compat 3). This repo vendors that engine plus a machine-readable `catalog.json`, and adds **DSH 0.2.2-rc.5** anchor compatibility:
+
+- the compat layer **appends** anchors, never rewrites upstream ones: 0.1.7 takes the original path, 0.2.2 hits the new one;
+- files are re-targeted per version (`dsh-harness-dev-context`, `deliverable-file-references`, `dsh-tool-executor-ptc`, `dsh-tools/lib/pipeline.js`, the two hooks packages inside the profile);
+- the 4 dead ones are documented instead of faked green: `#56 #77` (rewind moved server-side), `#76` (preset has no identity line any more), `#80` (upstream already minimal).
+
+Details: [docs/0.2.2-兼容工作记录.md](docs/0.2.2-兼容工作记录.md), [docs/补丁缺口清单-2026-11-20.md](docs/补丁缺口清单-2026-11-20.md).
+
+## 🔐 Backup / restore / clean uninstall
+
+```bash
+node scripts/lifecycle.mjs backup    --host=all   # snapshot with sha256 manifest
+node scripts/lifecycle.mjs restore   --host=all   # restore (writes a pre-restore guard first)
+node scripts/lifecycle.mjs uninstall --host=all   # uninstall, every step revertible
+node scripts/lifecycle.mjs verify    --host=all   # residue acceptance: clean=true or it is not done
+```
+
+The MengBot roundtrip is machine-tested: `uninstall → verify(clean=true) → install → status(injected=10)`.
+
+## 🗺️ Layout
+
+```
+web/               console (zero-dep HTTP server + frontend)
+web/patch-engine/  patch engine (vendored from dsh-purge) + catalog + 0.2.2 compat layer
+plugin/            in-host plugin (assemble rewrite / redteam_* tools / preset bootstrap)
+gear/              AutoKill-side plugin skeleton
+break/             PE byte-patch CLI
+scripts/           lifecycle / patch-mengbot-wrap / install & ops scripts
+docs/              compat log, gap list, landing runbook, MengBot internals map
+test/              68 contract & regression tests
+```
+
+## 🙏 Upstream credits
+
+The patch engine, wording and presets are **not invented here**. Explicit credits:
+
+| Upstream | Author / repo | Used for |
+|---|---|---|
+| **dsh-purge v1.1.71** | [@YuJunZhiXue](https://github.com/YuJunZhiXue) · [dsh-purge](https://github.com/YuJunZhiXue/dsh-purge) | the 83 patch definitions and byte anchors (`web/patch-engine/vendor` is its relative-import closure) |
+| **dsh-purge-community** | [@mikamikasuki](https://github.com/mikamikasuki/dsh-purge) · [@MMovo](https://github.com/MMovo/dsh-purge) | community-line adaptations and new-version anchor references |
+| **Liangshen preset** | [@linxin666](https://www.npmjs.com/package/@linxin666/dsh-liangshen) · [zhu1090093659/dsh-web-ui](https://github.com/zhu1090093659/dsh-web-ui) | `~/.dsh/.agent-presets/liangshen` preset and bootstrap |
+| **DeepSeek Harness** | [@deepseek-ai](https://github.com/deepseek-ai) · [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | the host itself (0.1.7 vs 0.2.2 layout drift is what the compat layer handles) |
+| **memory-eternal** | [@EternalNight996](https://github.com/EternalNight996/memory-eternal) | the memory vault this project ships with, plus the README / description / topics layout reference |
+
+Two closed-source desktop hosts, **MengBot** and **AutoKill**, are only touched where they expose plain-text `resources/server` JS; injection lands in their own data structures (`bots.json` → `soul`, `config.toml` → `ui.slots`).
+
+If any upstream author objects to this attribution or redistribution, open an issue and the relevant part will be removed or adjusted immediately.
+
+## ⚠️ Boundaries
+
+- Built for **hosts and machines you own**: every write is backed up, uninstall has a `verify` gate;
+- it removes the **host's own** gates (approval / sandbox / prompt), not a model vendor's server-side moderation;
+- official host upgrades overwrite those directories — re-run `apply` (DSH) or `--apply` (MengBot) afterwards;
+- comply with your local law and the terms of the models/hosts you use. Use at your own risk.
+
+## 📄 License
+
+MIT. Upstream components keep their own licenses; `web/patch-engine/vendor` retains dsh-purge's MIT notice and provenance.
+
+<p align="center"><sub>Mengshen Armor Break · autokill-purge · make the gates listen</sub></p>

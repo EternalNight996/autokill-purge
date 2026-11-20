@@ -2,6 +2,23 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.25-beta.2] — 2026-11-21（三宿主生命周期 · 记忆库 0.52.0 · 开源门面）
+
+### Added
+- `scripts/lifecycle.mjs`：三宿主（DSH / MengBot / AutoKill）× 五个动作（status / backup / restore / install / uninstall / verify），全部幂等、支持 `--dry-run`，卸载后用 `verify` 逐项判残留（`clean=true` 才算干净）。
+- `scripts/patch-mengbot-wrap.mjs` 扩到 5 条 MengBot 宿主补丁（SOUL 优先级句、授权句、团队上下文、团队记忆、approval grant 短路），按文件分组校验锚点唯一性。
+- 装备 → DSH 同步：`GET /api/gear/current` 产出「本次装备」段，插件每 step 取一次（30s 缓存）拼到注入末尾。
+
+### Changed
+- 记忆库运行时钉到 **memory-eternal v0.52.0**（GitHub tag；两库 10,479 / 182 张卡，schema 2，升级前自动备份 db/wal/shm）。
+- README 中英双语重写：三宿主能力矩阵、83 补丁来源、备份/还原/卸载验收、上游作者逐条署名（dsh-purge by YuJunZhiXue、community 线、@linxin666 梁神预设、DeepSeek Harness、memory-eternal）。
+- 仓库 description 与 Topics 重做（参考 memory-eternal 的版式）。
+
+### Fixed
+- AutoKill 备份不再错用 DSH 快照接口：改为直接复制 `config.toml` + `prompt-inject.md` 到 `data/lifecycle-backups/`。
+- `hostHandoffStatus()` 落地后仍能算出 aside，回滚入口不再消失。
+
+
 ## [1.1.25-beta.1] — 2026-11-21（DSH 0.2.2-rc.5 兼容锚点 + 落地 · beta）
 
 > 1.1.22–1.1.24 的改动没有单独留档，本次 beta 一并覆盖：DSH 0.2.2 兼容、落地、插件标签修正。

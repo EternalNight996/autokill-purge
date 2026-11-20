@@ -23,6 +23,30 @@ export const STAGE_HINTS = {
   're:protocol': ['协议 C2 加密字段 重放', 'tshark 抓包；mitmdump 看 HTTP(S)'],
 };
 
+/** 把 preset 包成「本次装备」段：宿主内插件每个 step 取一次，塞进注入末尾（DSH 与装备的同步点） */
+export function renderGearSyncBlock(eq) {
+  if (!eq) return '';
+  const presets = Array.isArray(eq.presets) && eq.presets.length ? eq.presets : [eq.preset].filter(Boolean);
+  const items = Array.isArray(eq.items) ? eq.items : [];
+  const models = Array.isArray(eq.models) ? eq.models : [];
+  const lines = [
+    '<!-- autokill-purge:gear:begin -->',
+    '## 本次装备（autokill-purge 控制台发放）',
+    '- 发放时间：' + (eq.at || ''),
+    '- 预设组合：' + (presets.length ? presets.join(' / ') : '（未指定）'),
+    '- 能力项：' + (items.length ? items.join('、') : '（未选）'),
+  ];
+  if (models.length) lines.push('- 建议模型：' + models.join(', '));
+  if (eq.notes) lines.push('- 备注：' + eq.notes);
+  lines.push(
+    '',
+    '这批能力已入记忆库。动手前先按关键词取卡：`purge_search q="<阶段关键词>" limit=5`',
+    '（或 `GET /api/memory/search?q=…&semantic=1`）。命中就按卡里的工具与纪律执行；没命中再用通用工具兜底。',
+    '<!-- autokill-purge:gear:end -->'
+  );
+  return lines.join('\n');
+}
+
 /** 把预设 + 阶段提示渲染成一段 Markdown（DSH 用） */
 export function renderGearMarkdown(presets) {
   const out = [];

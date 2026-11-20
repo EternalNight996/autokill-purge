@@ -23,6 +23,7 @@ const DEFAULTS = {
   sessionEnable: false,
   consoleUrl: 'http://127.0.0.1:8792',
   allowWriteTools: false,
+  gearSync: true,   // 装备选择 → 注入末尾的「本次装备」段（控制台 /api/gear/current）
   verbose: false,
 };
 
@@ -62,6 +63,21 @@ function readInjectText() {
     const home = process.env.DSH_HOME || join(process.env.USERPROFILE || process.env.HOME || '', '.dsh');
     return readFileSync(join(home, 'prompt-inject.md'), 'utf8');
   } catch { return ''; }
+}
+
+let gearCache = { at: 0, text: '' };
+/** 控制台最近一次装备 → 「本次装备」段；30s 缓存，控制台不可达就返回空（不挡注入）。 */
+async function readGearBlock(cfg) {
+  if (!cfg || cfg.gearSync === false) return '';
+  const now = Date.now();
+  if (now - gearCache.at < 30000) return gearCache.text;
+  gearCache.at = now;
+  try {
+    const r = await api(cfg, '/api/gear/current', { timeoutMs: 3000 });
+    const block = r.json && typeof r.json.block === 'string' ? r.json.block : '';
+    gearCache.text = block;
+    return block;
+  } catch { gearCache.text = ''; return ''; }
 }
 
 const textOut = {
@@ -172,7 +188,9 @@ export function apply(ctx, config) {
           }
           try {
             const injectText = readInjectText();
-            const out = identity.rewritePromptAssembly(assembled, injectText, {});
+            const gearBlock = await readGearBlock(cfg);
+            const mergedInject = gearBlock ? (injectText ? injectText + '\n\n' + gearBlock : gearBlock) : injectText;
+            const out = identity.rewritePromptAssembly(assembled, mergedInject, {});
             return out || assembled;
           } catch (e) {
             try { ctx.logger && ctx.logger.warn && ctx.logger.warn('autokill-purge: assemble rewrite failed: %s', (e && e.message) || e); } catch { /* ignore */ }

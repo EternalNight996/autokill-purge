@@ -26,7 +26,7 @@ import { memCliStatus, memCliRestart, memCliStop, memCliLedger, memCliAuditList 
 import { readDeploy, switchDeploy } from './deploy.mjs';
 import { mbStatus, mbListBots, mbReadBot, mbInjectSoul, mbRestoreSoul, mbEquipBot, mbSetGear, GEAR_IDS, mbSnapshots, mbPruneSnapshots, mbServiceStop, mbServiceStart } from './mengbot.mjs';
 import { EQUIP_PRESETS } from './presets.mjs';
-import { renderGearMarkdown } from './stage-hints.mjs';
+import { renderGearMarkdown, renderGearSyncBlock } from './stage-hints.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -2042,6 +2042,18 @@ async function handleApi(req, res, url, state) {
       modes: EQUIP_PRESETS.map((x) => ({ id: x.id, name: x.name, desc: x.desc, stages: (x.items || []).length })),
     });
   }
+  if (p === '/api/gear/current' && method === 'GET') {
+    // 装备 → DSH 会话的同步源：控制台给出「本次装备段」，宿主内插件每个 step 取一次（30s 缓存）。
+    try {
+      const s = await readState();
+      const list = Array.isArray(s.equipment) ? s.equipment : [];
+      const forDsh = list.filter((e) => Array.isArray(e.agents) && e.agents.includes('dsh'));
+      const eq = forDsh.length ? forDsh[forDsh.length - 1] : (list.length ? list[list.length - 1] : null);
+      return send(res, 200, { ok: true, equipment: eq, block: renderGearSyncBlock(eq) });
+    } catch (e) {
+      return send(res, 500, { ok: false, error: publicError(e) });
+    }
+  }
   if (p.startsWith('/api/gear/') && method === 'GET') {
     const id = decodeURIComponent(p.slice('/api/gear/'.length));
     const preset = EQUIP_PRESETS.find((x) => x.id === id);
@@ -2834,6 +2846,8 @@ async function handleApi(req, res, url, state) {
       };
       s.equipment.push(equipment);
       await writeState(s);
+      // 装备 → DSH 同步源：写盘一份，插件取不到 HTTP 时也能读文件
+      try { await writeFile(join(DATA_DIR, 'gear-sync.json'), JSON.stringify({ at: equipment.at, equipment, block: renderGearSyncBlock(equipment) }, null, 2) + '\n', 'utf8'); } catch { /* 同步失败不挡装备记录 */ }
 
       // 装备到 AutoKill 时，顺手把本机 autokill-purge 挂成它的 MCP 插件 —— 这样装备在 AutoKill
       // 的「设置 → 插件」里看得见，AI 会话也能直接查记忆库与装备清单。
