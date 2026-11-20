@@ -12,7 +12,7 @@
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const name = 'autokill-purge';
 export const inject = ['systemPrompt', 'tools'];
@@ -46,13 +46,11 @@ async function api(cfg, path, options = {}) {
   return { status: res.status, json };
 }
 
-/** 上游 identity.js 的绝对路径：绕过 exports 限制，直接按包根拼。 */
+/** identity.js 用本包内化的 vendor 版本（不依赖 dsh-purge 包）。 */
 async function loadUpstreamIdentity() {
   try {
-    const req = createRequire(import.meta.url);
-    const entry = req.resolve('dsh-purge');                       // …/dsh-purge/lib/index.js
-    const root = dirname(dirname(entry));                         // …/dsh-purge
-    return await import(pathToFileURL(join(root, 'lib', 'identity.js')).href);
+    const here = dirname(fileURLToPath(import.meta.url));
+    return await import(pathToFileURL(join(here, '..', 'vendor', 'lib', 'identity.js')).href);
   } catch (e) {
     return { __error: String((e && e.message) || e) };
   }
@@ -197,13 +195,13 @@ export function apply(ctx, config) {
     } catch { /* ignore */ }
   }
 
-  ctx.autokillPurge = {
+  if (typeof ctx.provide === 'function') ctx.provide('autokillPurge', {
     async restart() {
       const runtime = typeof ctx.desktopRuntime === 'object' ? ctx.desktopRuntime : null;
       if (!runtime || typeof runtime.requestRestart !== 'function') return { ok: false, error: 'desktopRuntime 不可用' };
       try { await runtime.requestRestart(); return { ok: true }; } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
     },
-  };
+  });
 
   log(cfg, 'loaded · console=' + cfg.consoleUrl + ' · assemble=' + cfg.assembleEnable + ' · write=' + cfg.allowWriteTools);
 }

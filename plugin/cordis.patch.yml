@@ -1,42 +1,31 @@
-# autokill-purge 宿主内薄插件（v2）—— bundle patch
+# 梦神破甲 · autokill-purge 装备插件 bundle patch（v0.3.0）
 #
-# 两条线：
-#   A. 宿主补丁：**不在本插件里做**（归控制台的 83 条引擎，可快照/回滚/落地）
-#   B. 宿主内能力：本插件负责
-#      1) 组装期身份改写 —— 复用 dsh-purge/lib/identity.js 的 rewritePromptAssembly（不重写）
-#      2) 58 个 redteam_* 工具 + 演练台 UI —— 直接挂载 dsh-purge 的 redteam 单元（不重写）
-#      3) autokill_* 工具 —— 把控制台能力交给模型（HTTP 转调 127.0.0.1:8792）
+# 只做三件事：
+#   ① 发布演练台事实库服务（ctx.redteam）
+#   ② 落地预设/技能（~/.dsh/.agent-presets/redteam、~/.dsh/redteam/skills）
+#   ③ 控制台工具桥（autokill_*，HTTP 转 127.0.0.1:8792）
 #
-# 关键取舍：
-#   · dsh-purge **包**必须留在 profile（作为代码库），但它的 **bundle 条目要从 dsh.profile.bundles 移除**，
-#     否则它的 host-patch 单元会和控制台抢同一批宿主文件。
-#     切换脚本：node scripts/switch-redteam-units.mjs --disable-host-patch
-#   · 与 dsh-purge 主单元同时存在时，本插件的 assemble 段设 assembleEnable=false，避免双重改写。
+# 58 个 redteam_* 工具**不在这里全局挂载**：只挂在「梦神破甲」预设里，
+# 避免每个会话都白付约 1.1 万 tokens 的工具 schema。
+# 内核已内化在 vendor/，不依赖 dsh-purge 包。
 
 - insert:
-    # ---- ① 58 个 redteam_* 工具 + 事实库 + 演练台 UI（引用 dsh-purge 的单元）----
+    # ---- 演练台事实库（进程级唯一，SQLite 在 $DSH_HOME/redteam）----
     - id: autokill-redteam-store
-      name: 'dsh-purge/redteam/store'
+      name: 'autokill-purge-plugin/redteam/store'
       config:
         root: !!js dshHomePath('redteam')
 
+    # ---- 预设/技能自举（宿主平面；不改系统提示词）----
     - id: autokill-redteam
-      name: 'dsh-purge/redteam'
+      name: 'autokill-purge-plugin/redteam'
 
-    - id: autokill-redteam-tools
-      name: 'dsh-purge/redteam/tools'
-      inject: [tools, redteam]
-
-    - id: autokill-redteam-ui
-      name: 'dsh-purge/redteam/ui'
-
-    # ---- ② autokill-purge 自己的薄插件（工具桥 + 组装期改写）----
+    # ---- autokill-purge 自己的工具桥（autokill_*）----
     - id: autokill-purge
       name: 'autokill-purge-plugin'
       inject: [systemPrompt, tools]
       config:
         toolsEnable: true
-        # 复用 dsh-purge 的 rewritePromptAssembly 做组装期改写；与 dsh-purge 主单元并存时改 false
         assembleEnable: true
         sessionEnable: false
         consoleUrl: 'http://127.0.0.1:8792'

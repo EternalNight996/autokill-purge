@@ -7,7 +7,7 @@
 // 宿主是唯一维度：`?host=dsh|mengbot|autokill`，返回同一套骨架（host / patches / plugins /
 // capabilities），每段都带 applicable —— 不适用的段给 note 说明为什么，而不是留空或编数。
 import os from 'node:os';
-import { existsSync, readFileSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostStatus, patchCatalog } from './host.mjs';
 import { listOps } from './ops/index.mjs';
@@ -40,6 +40,7 @@ function rows(list) {
 }
 
 const INJECT_MARK = '<project_instructions>';
+let scanCache = { home: null, at: 0, rows: [] };
 /**
  * 「注入生效」探针：prompt-inject.md 在盘上 ≠ 模型真的收到。
  * 读最近 N 个会话的 system/message，看 <project_instructions> 是否真的下发；
@@ -67,7 +68,12 @@ function injectionProbe(dshHome, opts = {}) {
   let newestTouch = 0;
   if (home) {
     let rowsList = [];
-    try { rowsList = listSessionFiles(join(home, 'sessions')); } catch { rowsList = []; }
+    // 会话目录扫描（1200+ 次 stat，约 1s）缓存 20 秒：rail 只关心“有没有比注入块更新”
+    if (scanCache.home === home && Date.now() - scanCache.at < 20000) rowsList = scanCache.rows;
+    else {
+      try { rowsList = listSessionFiles(join(home, 'sessions')); } catch { rowsList = []; }
+      scanCache = { home, at: Date.now(), rows: rowsList };
+    }
     for (const r of rowsList) newestTouch = Math.max(newestTouch, r.mtimeMs || 0);
     // 按"会话创建时间"判定，而不是文件 mtime：老会话被续写时 mtime 会插到最前，
     // 那会让「最新会话有没有注入」在同一个宿主上反复跳（实测 16:55 触发过一次）。
@@ -398,6 +404,23 @@ const CACHE = new Map();
 const INFLIGHT = new Map();
 const CACHE_TTL = 15000;
 
+function summaryCacheFile(dataDir, id) { return join(String(dataDir || '.'), 'summary-cache-' + id + '.json'); }
+function readSummaryCache(dataDir, id) {
+  try { const j = JSON.parse(readFileSync(summaryCacheFile(dataDir, id), 'utf8')); return j && j.data && Number.isFinite(Number(j.at)) ? j : null; } catch { return null; }
+}
+function writeSummaryCache(dataDir, id, data) {
+  try { writeFileSync(summaryCacheFile(dataDir, id), JSON.stringify({ at: Date.now(), data: data })); } catch { /* 缓存写不进不影响主流程 */ }
+}
+
+/**
+ * 按宿主聚合。providers.autokill 由 server 注入（CLI 调用住在 server 里）。
+ *
+ * 冷启动实测 20.6s（hostStatus ~2.4s + 7 项 ops 状态 + 1,200 会话扫描），首屏体验太差。
+ * 三层缓存：
+ *  · 内存 15s（CACHE）；
+ *  · 进程重启后先读盘里上一次结果（10 分钟内），**立刻返回、后台刷新**（stale-while-revalidate）；
+ *  · 真正计算时单飞，避免启动预热与首屏各算一遍。
+ */
 export async function injectSummary(dataDir, hostId = 'dsh', providers = {}, opts = {}) {
   const id = String(hostId || 'dsh').toLowerCase();
   if (!SUMMARY_HOSTS.includes(id)) {
@@ -406,18 +429,9 @@ export async function injectSummary(dataDir, hostId = 'dsh', providers = {}, opt
     e.hostId = id;
     throw e;
   }
-  // 短缓存：hostStatus(2.5s) + listOps(2.3s) 是右侧栏最贵的两块，并行后冷启动 ~2.3s。
-  // 缓存活 15 秒；写操作后前端带 fresh=1 绕过它 —— 所以不会出现"点完注入栏里还是旧数"。
   const key = id + '|' + (dataDir || '');
   const now = Date.now();
-  if (!opts.fresh) {
-    const hit = CACHE.get(key);
-    if (hit && now - hit.at < CACHE_TTL) return Object.assign({}, hit.data, { cached: true, ageMs: now - hit.at });
-  }
-  // 单飞：启动预热与页面首屏常常同时到达，不合并就会把同一份 hostStatus+listOps 跑两遍（实测 7.7s）
-  const inflight = INFLIGHT.get(key);
-  if (inflight) return inflight;
-  const p = (async () => {
+  const compute = async () => {
     const out = baseOut(id);
     try {
       if (id === 'dsh') await dshPayload(out, dataDir);
@@ -427,13 +441,29 @@ export async function injectSummary(dataDir, hostId = 'dsh', providers = {}, opt
       out.ok = false;
       out.errors.push(id + ': ' + String((e && e.message) || e));
     }
-    if (out.ok) CACHE.set(key, { at: Date.now(), data: out });
+    if (out.ok) { CACHE.set(key, { at: Date.now(), data: out }); writeSummaryCache(dataDir, id, out); }
     return out;
-  })();
-  INFLIGHT.set(key, p);
-  try {
-    return await p;
-  } finally {
-    if (INFLIGHT.get(key) === p) INFLIGHT.delete(key);
+  };
+  const kick = () => {
+    const existing = INFLIGHT.get(key);
+    if (existing) return existing;
+    const p = compute();
+    INFLIGHT.set(key, p);
+    p.then(() => { if (INFLIGHT.get(key) === p) INFLIGHT.delete(key); }).catch(() => { if (INFLIGHT.get(key) === p) INFLIGHT.delete(key); });
+    return p;
+  };
+  // 短缓存：15 秒内的同一份数据直接命中
+  if (!opts.fresh) {
+    const hit = CACHE.get(key);
+    if (hit && now - hit.at < CACHE_TTL) return Object.assign({}, hit.data, { cached: true, ageMs: now - hit.at });
+    const disk = readSummaryCache(dataDir, id);
+    if (disk && now - Number(disk.at) < 10 * 60 * 1000) {
+      kick().catch(() => {});
+      return Object.assign({}, disk.data, { cached: true, ageMs: now - Number(disk.at), stale: true, disk: true });
+    }
   }
+  const inflight = INFLIGHT.get(key);
+  if (inflight) return inflight;
+  const p = kick();
+  try { return await p; } finally { if (INFLIGHT.get(key) === p) INFLIGHT.delete(key); }
 }

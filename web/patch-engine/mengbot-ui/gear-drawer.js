@@ -18,7 +18,7 @@
   let API_BASE = null;
   const GEARS = [
     { id: '', label: '不装备', hint: '纯对话，不带工具集' },
-    { id: 'redteam', label: '红队全装', hint: '侦察/打点/横向/权限维持一条链' },
+    { id: 'redteam', label: '梦神攻装', hint: '侦察/打点/横向/权限维持一条链' },
     { id: 'recon', label: '侦察刀', hint: '被动收集、资产测绘、指纹' },
     { id: 'lateral', label: '内网横向', hint: 'SMB / WinRM / 凭据复用' },
     { id: 'radio', label: '无线电 / IoT', hint: 'BLE、串口、固件' },

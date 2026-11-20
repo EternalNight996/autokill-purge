@@ -2,6 +2,28 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.25-beta.1] — 2026-11-21（DSH 0.2.2-rc.5 兼容锚点 + 落地 · beta）
+
+> 1.1.22–1.1.24 的改动没有单独留档，本次 beta 一并覆盖：DSH 0.2.2 兼容、落地、插件标签修正。
+
+### Added
+- `COMPAT_0202`：只追加锚点、不动上游锚点 —— 0.1.7 走原路径，0.2.2 命中新锚点。覆盖 #13 #14 #17 #18 #28 #32 #35 #40 #53 #54 #60 #62 #67 #74。
+- `COMPAT_0202_FILES`：目标文件键重定向（网页面文案 → `dsh-harness-dev-context`、交付物禁令 → `dsh-deliverable-file-references`、run_code 话术 → `dsh-tool-executor-ptc`、审批分支 → `dsh-tools/lib/pipeline.js`、hooks 两包改认 profile 副本）。
+- `COMPAT_0202_MARKERS`：给 #28 #32 #53 补 marker —— 只带 replacements 的补丁打完原本永远显示 skipped。
+- `targetFiles()` 新增 8 个键：harness-dev-context、deliverable-file-references、dsh-tools-pipeline、dsh-tools-types-pipeline、ptc-executor、ptc-executor-types、hooks-claude-code-profile、hooks-codex-profile。
+- `test/patch-compat-0202.mjs`（21 条断言）并接入 `npm test`：守住 COMPAT 段、逐条 replacements 下限、catalog 与引擎同源、桌面宿主 14 条兼容补丁全部已注入。
+- hooks 两包（`@deepseek-ai/dsh-hooks-claude-code` / `dsh-hooks-codex` 0.2.2-rc.5）装进 profile 并提供补丁落点（只装文件、不挂 bundle）。
+
+### Changed
+- 插件 `autokill-purge-plugin` 0.3.4：DSH 侧栏标签统一为「梦神装甲」。
+- `hostHandoffStatus()`：落地后 `app.asar` 不存在时也能算出 aside 副本，回滚入口不再消失；新增 `asarExists` / `asarPath`。
+
+### Result
+- 桌面 `0.2.2-rc.5`：60/83 → **79/83**；npm `0.1.7-rc.2`：74/83 → **76/83**。
+- 剩余 4 条判死：#56 #77（回溯改服务端 surface replace）、#76（预设已无身份句）、#80（上游已最小化）。
+- 落地：`app.asar` → `app.asar.dshpurge-aside`，宿主从 `resources\app` 加载，`effective=true`。
+
+
 ## [1.1.21] — 2026-11-19（指令层注入：AGENTS.md · 免重启）
 
 ### 问题

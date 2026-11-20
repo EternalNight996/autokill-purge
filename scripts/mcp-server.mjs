@@ -41,7 +41,7 @@ const TOOLS = [
   },
   {
     name: 'purge_modes',
-    description: '列出可选的装备模式（红队全装 / 侦察刀 / 内网横向 / 无线电 IoT / 逆向研究），含每项能力与技能清单。',
+    description: '列出可选的装备模式（梦神攻装 / 侦察刀 / 内网横向 / 无线电 IoT / 逆向研究），含每项能力与技能清单。',
     inputSchema: { type: 'object', properties: {} },
   },
   {

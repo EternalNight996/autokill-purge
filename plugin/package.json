@@ -1,7 +1,7 @@
 {
   "name": "autokill-purge-plugin",
-  "version": "0.2.1",
-  "description": "autokill-purge 的宿主内薄插件：把控制台补不了的宿主内能力（工具注册 / 组装期改写 / 会话改写 / 优雅重启）接进来",
+  "version": "0.3.4",
+  "description": "梦神破甲 · autokill-purge 的宿主内装备插件：58 个 redteam_* 工具、演练台事实库、预设/技能落地（内化 redteam 内核，不依赖 dsh-purge）",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -11,10 +11,23 @@
     "./client": {
       "default": "./lib/client.js"
     },
+    "./redteam": {
+      "default": "./vendor/lib/redteam/index.js"
+    },
+    "./redteam/store": {
+      "default": "./vendor/lib/redteam/store.js"
+    },
+    "./redteam/tools": {
+      "default": "./vendor/lib/redteam/tools.js"
+    },
+    "./redteam/ui": {
+      "default": "./vendor/lib/redteam/ui.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "vendor",
     "cordis.patch.yml",
     "README.md"
   ],
@@ -34,5 +47,5 @@
       "inject": []
     }
   },
-  "dshTarget": "0.2.2-rc.1"
+  "dshTarget": "0.2.2-rc.5"
 }

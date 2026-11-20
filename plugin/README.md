@@ -8,11 +8,11 @@
 | `package.json` | `dsh.bundle.patch` → `cordis.patch.yml`（宿主侧）；`dsh.client` + `exports["./client"]` → `lib/client.js`（浏览器侧）；`main` 是插件入口 |
 | `cordis.patch.yml` | `insert` 一个插件单元，`inject: [systemPrompt, tools]`，所有开关都在 config |
 | `lib/index.js` | `export const name / inject` + `export function apply(ctx, config)`（宿主侧、Node） |
-| `lib/client.js` | 浏览器侧 bundle（`__ModuleLoader__` 工厂格式）：在 DSH 左侧栏底部注册「梦神装甲」，点击回到控制台 |
+| `lib/client.js` | 浏览器侧 bundle（`__ModuleLoader__` 工厂格式）：在 DSH 左侧栏底部注册「梦神破甲」，点击回到控制台 |
 
-## 梦神装甲（DSH 里的导航项）
+## 梦神破甲（DSH 里的导航项）
 
-`lib/client.js` 只做一件事：往 **`sidebar.footer.action`（list 槽）** 加一项 —— 图标 + 名称「梦神装甲」，
+`lib/client.js` 只做一件事：往 **`sidebar.footer.action`（list 槽）** 加一项 —— 图标 + 名称「梦神破甲」，
 点一下用 `window.open` 打开 `http://127.0.0.1:8792`（可用 `localStorage["ap.consoleUrl"]` 覆盖）。
 
 为什么选这个槽：

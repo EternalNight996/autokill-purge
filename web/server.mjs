@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
 import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
 import { listOps, opStatus, opRun, opPlan } from './ops/index.mjs';
+import { run as instructionRun } from './ops/instruction-inject.mjs';
 import { injectSummary } from './summary.mjs';
 import { detectLiveModels } from './models-live.mjs';
 import { kbStats, searchPoc, readPoc, searchNotes, readNote, recentPoc } from './kb.mjs';
@@ -2227,12 +2228,52 @@ async function handleApi(req, res, url, state) {
     const body = await bodyOf(req);
     if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '卸载会先还原宿主再清插件文件，传 confirm:true' });
     const guard = await createSnapshot(DATA_DIR, 'pre-uninstall');
+    const steps = [];
+    const home = process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
+    // 1) 落地过的 asar 放回
+    try { const r = await restoreHostAsar(); steps.push({ id: 'asar', ok: r.ok !== false, ...r }); }
+    catch (e) { steps.push({ id: 'asar', ok: false, error: publicError(e) }); }
+    // 2) 补丁按 asar 原件还原
+    try { const r = await factoryRestore(); steps.push({ id: 'patches', ok: true, restored: r.restored, skipped: r.skipped }); }
+    catch (e) { steps.push({ id: 'patches', ok: false, error: publicError(e) }); }
+    // 3) AGENTS.md 注入块（用户正文保留）
+    try { const r = await instructionRun({ dshHome: home, dataDir: DATA_DIR }, { action: 'remove' }); steps.push({ id: 'instructions', ok: r.ok !== false, changed: !!r.changed, summary: r.summary }); }
+    catch (e) { steps.push({ id: 'instructions', ok: false, error: publicError(e) }); }
+    // 4) prompt-inject.md：只删内置模板副本，用户自定义保留
     try {
-      const r = await uninstallHostPurge();
-      return send(res, 200, { ok: true, uninstall: r, guardSnapshot: guard.id, restartRequired: true });
-    } catch (e) {
-      return send(res, 500, { ok: false, error: 'uninstall_failed', detail: publicError(e), guardSnapshot: guard.id });
-    }
+      const pf = await readPromptFile();
+      if (pf.exists && pf.isBuiltin) { await rm(pf.path, { force: true }); steps.push({ id: 'prompt', ok: true, removed: true }); }
+      else steps.push({ id: 'prompt', ok: true, removed: false, note: pf.exists ? '自定义提示词，保留' : '本来就没有' });
+    } catch (e) { steps.push({ id: 'prompt', ok: false, error: publicError(e) }); }
+    // 5) profile：去掉插件依赖 / bundle / node_modules
+    try {
+      const prof = join(home, 'profiles', 'desktop');
+      const pkgPath = join(prof, 'package.json');
+      let changed = false;
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+        for (const k of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+          if (pkg[k] && Object.prototype.hasOwnProperty.call(pkg[k], 'autokill-purge-plugin')) { delete pkg[k]['autokill-purge-plugin']; changed = true; }
+        }
+        const b = pkg.dsh && pkg.dsh.profile && pkg.dsh.profile.bundles;
+        if (Array.isArray(b)) { const n = b.filter((x) => x !== 'autokill-purge-plugin'); if (n.length !== b.length) { pkg.dsh.profile.bundles = n; changed = true; } }
+        if (changed) writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+      }
+      await rm(join(prof, 'node_modules', 'autokill-purge-plugin'), { recursive: true, force: true });
+      steps.push({ id: 'profile', ok: true, changed });
+    } catch (e) { steps.push({ id: 'profile', ok: false, error: publicError(e) }); }
+    // 6) 红队预设里的工具行（避免留下指向已删插件的坏行）
+    try {
+      const presetPath = join(home, '.agent-presets', 'redteam', 'agent.cordis.yml');
+      if (existsSync(presetPath)) {
+        const s = readFileSync(presetPath, 'utf8');
+        const n = s.replace(/^-\s*id:\s*redteam-tools\n\s*name:\s*autokill-purge-plugin\/redteam\/tools\n?/m, '');
+        if (n !== s) { writeFileSync(presetPath, n, 'utf8'); steps.push({ id: 'preset', ok: true, removed: true }); }
+        else steps.push({ id: 'preset', ok: true, removed: false });
+      } else steps.push({ id: 'preset', ok: true, removed: false, note: '无预设' });
+    } catch (e) { steps.push({ id: 'preset', ok: false, error: publicError(e) }); }
+    const errors = steps.filter((s) => s.ok === false);
+    return send(res, 200, { ok: true, uninstall: { ok: errors.length === 0, applied: true, stripped: steps.map((s) => s.id), errors, steps }, guardSnapshot: guard.id, restartRequired: true });
   }
 
   // ---- 规则集 / 出口白名单 / 技能（原版面板另外三栏） -------------------------------
@@ -2446,7 +2487,7 @@ async function handleApi(req, res, url, state) {
     });
   }
   if (p === '/api/mengbot/gear' && method === 'GET') {
-    return send(res, 200, { ok: true, ids: GEAR_IDS, labels: { '': '不装备', redteam: '红队全装', recon: '侦察刀', lateral: '内网横向', radio: '无线电 / IoT', re: '逆向研究', custom: '自定义' } });
+    return send(res, 200, { ok: true, ids: GEAR_IDS, labels: { '': '不装备', redteam: '梦神攻装', recon: '侦察刀', lateral: '内网横向', radio: '无线电 / IoT', re: '逆向研究', custom: '自定义' } });
   }
   if (p === '/api/mengbot/snapshots' && method === 'GET') {
     try { return send(res, 200, mbSnapshots(String(url.searchParams.get('id') || ''))); }
@@ -2801,6 +2842,14 @@ async function handleApi(req, res, url, state) {
         try { mounted = await mountPurgeMcp(); } catch (e) { mounted = { ok: false, error: publicError(e) }; }
       }
 
+      // 装备到 DSH 时，把随包的「梦神破甲」插件一起装进 profile（58 个 redteam_* 工具）。
+      // 失败不回滚装备记录：装备是数据，插件是运行时；两件事分开返回状态。
+      let plugin = null;
+      if (equipment.agents.includes('dsh') && body.installPlugin !== false) {
+        try { plugin = await opRun(DATA_DIR, 'plugin-install', { confirm: true, plugins: ['autokill-purge-plugin'] }); }
+        catch (e) { plugin = { ok: false, error: publicError(e) }; }
+      }
+
       // 装备成功 → 入库（闭环第 2 环）。默认入库，body.absorb === false 可跳过；
       // 记忆服务不可达不影响装备记录本身保存（absorbed.ok=false 带回原因）。
       let absorbed = null;
@@ -2836,7 +2885,7 @@ async function handleApi(req, res, url, state) {
         const r = await upsertMemoryCard(state, { key, kind: String(body.absorbKind || 'skill'), title, body: cardBody });
         absorbed = r.ok ? r : { ok: false, error: r.error };
       }
-      return send(res, 200, { ok: true, equipment: equipment, absorbed: absorbed, mounted: mounted });
+      return send(res, 200, { ok: true, equipment: equipment, absorbed: absorbed, mounted: mounted, plugin: plugin, restartRequired: !!(plugin && plugin.changed) });
     });
   }
 

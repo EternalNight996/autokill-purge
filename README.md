@@ -1,8 +1,10 @@
 <p align="center"><img src="assets/autokill-purge.png" width="96" height="96" alt="autokill-purge icon" /></p>
 
-<h1 align="center">🍊 autokill-purge</h1>
+<h1 align="center">🍊 autokill-purge · 梦神破甲</h1>
 
-<p align="center"><b>一条命令装好破甲控制台</b><br/>一键注入 · 83 条补丁可视化 · 载荷生成 · 记忆库 · MCP 管理</p>
+<p align="center"><b>一条命令装好破甲控制台 · 梦神破甲（Dream God Armor Break）</b><br/>一键注入 · 83 条补丁可视化 · 载荷生成 · 记忆库 · MCP 管理</p>
+
+<p align="center"><sub>署名：梦神破甲 · autokill-purge</sub></p>
 
 <p align="center">
   <img src="https://img.shields.io/npm/v/autokill-purge?style=flat" alt="npm" />
@@ -37,7 +39,7 @@ node scripts/install-desktop.mjs   # 加桌面图标 + 开机自启（Windows）
 
 | 能力 | 具体 |
 |---|---|
-| **破甲** | **梦神破甲** 模板（随包版本，当前 1.1.21）+ **83 条宿主补丁中英对照**，绿=已注入 / 红=失败 / 灰=跳过 + **落地并重启宿主**（密封 asar 必须让位才生效） |
+| **破甲** | **梦神破甲** 模板（随包版本，当前 1.1.22）+ **83 条宿主补丁中英对照**，绿=已注入 / 红=失败 / 灰=跳过 + **落地并重启宿主**（密封 asar 必须让位才生效） |
 | **回滚** | 每次写入前自动快照；一键还原到出厂（官方 asar 原件覆盖），失败自动回滚 |
 | **载荷** | 27+ 模型实时识别（可多选→智能匹配）、12 种技术、文本/Base64/ROT13 三变体、二进制 `break` 七动作 |
 | **梦神装甲** | 6 个装甲包可多选、按包分页、挂真实技能名，连「已破甲模型」一起装给 dsh / mengbot / autokill；**DSH 左侧栏底部有同名导航（图标 + 名称），点一下回到控制台** |

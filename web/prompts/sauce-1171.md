@@ -1,5 +1,6 @@
 <!--
   破甲模板：小码酱（Little Code Sauce）
+  署名：梦神破甲（Dream God Armor Break）· autokill-purge
   照搬自 dsh-purge v1.1.71 的内置默认提示词（lib/default-prompt-inject.md → lib/asset-table.js 密封槽）。
   来源仓库：https://github.com/YuJunZhiXue/dsh-purge （MIT）——按该项目的署名要求标注。
   本文件只在本机 web 端内作为「一键生成」的默认模板使用；换模型可换模板。

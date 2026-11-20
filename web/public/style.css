@@ -313,6 +313,7 @@ button[aria-busy="true"] { opacity: .7; cursor: progress; }
 .alert .hint { color: var(--dim); font-size: 12px; line-height: 1.55; }
 .alert.bad { border-color: rgba(255, 133, 120, .42); background: var(--bad-soft); }
 .alert.bad strong { color: var(--bad); }
+.alert.bad .hint { color: var(--bad); opacity: .92; }
 .alert.good { border-color: rgba(85, 214, 162, .34); background: var(--ok-soft); }
 .alert.good strong { color: var(--ok); }
 .alert.warn { border-color: rgba(231, 180, 90, .34); background: var(--warn-soft); }

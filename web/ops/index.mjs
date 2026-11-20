@@ -10,7 +10,7 @@
 //
 // 设计约束：模块可能暂时不存在（并行开发/裁剪安装），所以一律**动态 import + 缺省降级**，
 // 少了哪个模块只影响它自己那一行，不会把整个控制台拖挂。
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeResult } from './contract.mjs';
@@ -65,12 +65,30 @@ async function load(id) {
   }
 }
 
-/** 只读：所有能力的 META + 可用性摘要（UI 首屏用） */
-export async function listOps(dataDir) {
+/**
+ * 只读：所有能力的 META + 可用性摘要（UI 首屏用）。
+ *
+ * 为什么带缓存：7 项 status 里 reapply/restart 各 ~2.6s、rewind 扫 1,200+ 会话 ~1.7s，
+ * 串起来首屏要 5s+、冷启动实测 20s。右侧栏只是“状态一览”，允许几十秒的陈旧：
+ *  · 内存命中（<30s）直接返回；
+ *  · 过期/首次：**先返回旧值，后台刷新**（stale-while-revalidate），落盘 data/ops-cache.json；
+ *  · 服务重启后先读盘 → 首屏不再等探测；
+ *  · 写操作后 opRun 会同步刷新被点的那一项，避免“点完还显示旧值”。
+ */
+const OPS_TTL_MS = 30000;
+let opsMem = { home: null, at: 0, rows: null, loading: null };
+
+function opsCacheFile(dataDir) { return join(String(dataDir || '.'), 'ops-cache.json'); }
+function readOpsCache(dataDir) {
+  try { const j = JSON.parse(readFileSync(opsCacheFile(dataDir), 'utf8')); return j && Array.isArray(j.rows) ? j : null; } catch { return null; }
+}
+function writeOpsCache(dataDir, rows) {
+  try { writeFileSync(opsCacheFile(dataDir), JSON.stringify({ at: Date.now(), rows: rows }, null, 0)); } catch { /* 缓存写不进去不影响主流程 */ }
+}
+
+async function computeOpsRows(dataDir) {
   const ctx = makeCtx(dataDir);
-  // 并行探测：reapply(1.9s) / restart(1.3s) / rewind(0.9s) 是三个慢块，串行要 4s+，
-  // 右侧栏每次刷新都吃这个延迟。Promise.all 之后按 OPS_ORDER 顺序返回，顺序仍然稳定。
-  const rows = await Promise.all(OPS_ORDER.map(async (id) => {
+  return Promise.all(OPS_ORDER.map(async (id) => {
     const mod = await load(id);
     if (!mod || mod.__loadError) {
       return { id, zh: id, en: id, kind: 'both', available: false, reason: mod && mod.__loadError ? mod.__loadError : '模块不存在', summary: '' };
@@ -96,7 +114,43 @@ export async function listOps(dataDir) {
       detail: st.detail,
     };
   }));
-  return { ok: true, contract: 1, ctx: { dshHome: ctx.dshHome, appDir: ctx.appDir, asarPath: ctx.asarPath }, ops: rows };
+}
+
+function opsPayload(dataDir, rows, extra = {}) {
+  const ctx = makeCtx(dataDir);
+  return Object.assign({ ok: true, contract: 1, ctx: { dshHome: ctx.dshHome, appDir: ctx.appDir, asarPath: ctx.asarPath }, ops: rows }, extra);
+}
+
+/** 后台刷新（单飞）；任何异常都不能让调用方看到空数据 */
+function refreshOps(dataDir) {
+  const home = dshHome();
+  if (opsMem.loading) return opsMem.loading;
+  opsMem.loading = computeOpsRows(dataDir).then((rows) => {
+    opsMem = { home, at: Date.now(), rows, loading: null };
+    writeOpsCache(dataDir, rows);
+    return rows;
+  }).catch(() => { opsMem.loading = null; return opsMem.rows || []; });
+  return opsMem.loading;
+}
+
+export async function listOps(dataDir, opts = {}) {
+  const home = dshHome();
+  const fresh = opts.fresh === true;
+  if (!fresh && opsMem.home === home && opsMem.rows) {
+    if (Date.now() - opsMem.at > OPS_TTL_MS) refreshOps(dataDir).catch(() => {});
+    return opsPayload(dataDir, opsMem.rows, { cached: true, ageMs: Date.now() - opsMem.at, stale: Date.now() - opsMem.at > OPS_TTL_MS });
+  }
+  if (!fresh && opsMem.home === home && !opsMem.rows) { /* 首次：走盘 */ }
+  if (!opsMem.rows || opsMem.home !== home) {
+    const disk = readOpsCache(dataDir);
+    if (disk && disk.rows) {
+      opsMem = { home, at: Number(disk.at) || 0, rows: disk.rows, loading: null };
+      refreshOps(dataDir).catch(() => {});
+      return opsPayload(dataDir, disk.rows, { cached: true, ageMs: Date.now() - (Number(disk.at) || 0), stale: true });
+    }
+  }
+  const rows = await refreshOps(dataDir);
+  return opsPayload(dataDir, rows, { cached: false });
 }
 
 export async function opStatus(dataDir, id) {
@@ -118,6 +172,14 @@ export async function opRun(dataDir, id, opts = {}) {
   try {
     const r = normalizeResult('run', await mod.run(ctx, opts || {}));
     ctx.log('[run] ' + id + ' → ok=' + r.ok + ' changed=' + r.changed + ' ' + r.summary);
+    // 写操作后同步刷新被点的那一项（其余项继续 SWR 旧值），避免“点完还显示旧值”
+    try {
+      const st = normalizeResult('status', await mod.status(ctx));
+      if (opsMem.rows && opsMem.home === dshHome()) {
+        const row = opsMem.rows.find((x) => x.id === id);
+        if (row) { row.available = st.available; row.summary = st.summary; row.detail = st.detail; row.reason = ''; opsMem.at = Date.now(); writeOpsCache(dataDir, opsMem.rows); }
+      }
+    } catch { /* 状态刷新失败不改变执行结果 */ }
     return r;
   } catch (e) {
     const msg = String((e && e.message) || e);

@@ -110,7 +110,7 @@ const AGENTS = [
 ];
 
 const PRESETS = [
-  { id: "redteam", name: "红队全装", desc: "侦察、打点、横向、权限维持，一条链的默认装备。", agents: ["dsh"], items: [
+  { id: "redteam", name: "梦神攻装", desc: "侦察、打点、横向、权限维持，一条链的默认装备。", agents: ["dsh"], items: [
     { id: "recon", name: "侦察与资产测绘", desc: "被动/主动收集、指纹识别、资产落库", skills: ["passive-recon", "fofa-recon", "recon-pipeline", "active-scan", "web-fingerprint", "asset-correlation"] },
     { id: "vuln", name: "漏洞验证与打点", desc: "Nday/1day、未授权、Web 漏洞链", skills: ["nuclei-scan", "unauth-exploit", "dir-bruteforce", "java-deserialization", "vuln-intel"] },
     { id: "shell", name: "WebShell 与隧道", desc: "冰蝎/哥斯拉马、suo5 socks5", skills: ["webshell-toolkit", "suo5-tunnel", "chisel-tunnel"] },
@@ -608,6 +608,14 @@ function toast(message, kind = "ok") {
 function toastError(message) { toast(message, "bad"); }
 
 /** 装备/破甲入库结果拼成一句人话（后端 absorbed 字段） */
+function equipPluginNote(d) {
+  const p = d && d.plugin;
+  if (!p) return '';
+  if (p.ok === false) return '；插件安装失败：' + (p.summary || p.error || '未知原因');
+  if (p.changed) return '；已装「梦神破甲」插件（重启 DSH 后 58 个 redteam_* 工具生效）';
+  return '';
+}
+
 function absorbNote(absorbed) {
   if (!absorbed) return "";
   if (absorbed.ok) return `；已入库待审：${absorbed.path || absorbed.key}（审核通过后才进检索）`;
@@ -2989,7 +2997,7 @@ async function sendEquipmentIfNeeded() {
   if (!d || d.ok === false) throw payloadError(d, "装备发放失败");
   if (Array.isArray(d.equipment)) S.equipment = d.equipment;
   else if (d.equipment && typeof d.equipment === "object") S.equipment = [...S.equipment, d.equipment];
-  return absorbNote(d.absorbed);
+  return absorbNote(d.absorbed) + equipPluginNote(d);
 }
 
 /** 生成之后的投递动作：按「破甲方式」把载荷送出去（payload = 什么都不做） */
@@ -3276,7 +3284,7 @@ function renderSimpleEquip() {
   bindSimpleEquip();
 }
 
-/* 普通模式当前选的装备包（可多选，默认红队全装） */
+/* 普通模式当前选的装备包（可多选，默认梦神攻装） */
 function simpleEquipPresetObjs() {
   const ids = Array.isArray(S.simple.equipPresets) && S.simple.equipPresets.length
     ? S.simple.equipPresets
@@ -3416,6 +3424,8 @@ async function simpleEquipPreset() {
     if (Array.isArray(data.equipment)) S.equipment = data.equipment;
     else if (data.equipment && typeof data.equipment === "object") S.equipment = [...S.equipment, data.equipment];
     else S.equipment = [...S.equipment, Object.assign({}, body, { at: new Date().toISOString() })];
+    if (data.plugin && data.plugin.changed) toast('已同时安装「梦神破甲」插件；重启 DSH 后工具生效', 'warn');
+    else if (data.plugin && data.plugin.ok === false) toastError('插件安装失败：' + (data.plugin.summary || data.plugin.error || ''));
     S.simple.removed = [];
     const items = simpleEquippedItems();
     const chosen = simpleChosenItems();
@@ -4734,7 +4744,7 @@ function renderHostSection() {
       ${(() => {
         const cat = d.catalog || {};
         const dr = d.catalogDrift || {};
-        const head2 = cat.ok ? `独立 catalog.json · ${fmtNum(cat.count)} 条 · ${String(cat.digest || "").slice(0, 12)}…` : ("清单不可用：" + (cat.reason || "未找到"));
+        const head2 = cat.ok ? `梦神破甲 · 独立 catalog.json · ${fmtNum(cat.count)} 条 · ${String(cat.digest || "").slice(0, 12)}…` : ("清单不可用：" + (cat.reason || "未找到"));
         const tail = dr.comparable ? (dr.same ? "与引擎逐条一致" : `⚠ 与引擎不同源（引擎 ${dr.engineCount} 条 / 清单 ${dr.catalogCount} 条，重跑 patches/extract-catalog.mjs）`) : "";
         return `<div class="s-row"><div class="s-row-main"><strong>补丁清单</strong><span>${esc(head2)}${tail ? " · " + esc(tail) : ""}</span></div></div>`;
       })()}
@@ -6389,7 +6399,7 @@ function renderEquip() {
     ? `<div class="table-wrap" tabindex="0" role="region" aria-label="发放历史"><table class="min"><caption class="sr-only">装备发放历史</caption><thead><tr><th>时间</th><th>装备包</th><th>智能体</th><th>权限</th><th>备注</th><th>操作</th></tr></thead><tbody>
       ${history.map((it) => `<tr>
         <td class="mono nowrap">${esc(fmtTime(it.at))}</td>
-        <td>${esc(presetName(it.preset))}</td>
+        <td>${esc(((Array.isArray(it.presets) && it.presets.length) ? it.presets : [it.preset]).map(presetName).join(' / '))}</td>
         <td class="mono">${esc((it.agents || []).join(", ") || "—")}</td>
         <td>${badge(permissionName(it.permissions), it.permissions === "full" ? "bad" : (it.permissions === "controlled" ? "warn" : "good"))}</td>
         <td class="small">${esc(it.notes || "—")}</td>
@@ -6614,7 +6624,9 @@ async function issueEquipment() {
     else if (data.equipment && typeof data.equipment === "object") S.equipment = [...S.equipment, data.equipment];
     else if (data.item) S.equipment = [...S.equipment, data.item];
     else S.equipment = [...S.equipment, { preset: e.preset, agents, permissions: e.permissions, notes: e.notes.trim(), at: new Date().toISOString() }];
-    e.ok = "装备已发放；历史新增一条。" + absorbNote(data.absorbed);
+    e.ok = "装备已发放；历史新增一条。" + absorbNote(data.absorbed) + equipPluginNote(data);
+    if (data.plugin && data.plugin.changed) toast('已同时安装「梦神破甲」插件；重启 DSH 后 58 个 redteam_* 工具生效', 'warn');
+    else if (data.plugin && data.plugin.ok === false) toastError('插件安装失败：' + (data.plugin.summary || data.plugin.error || ''));
   } catch (err) {
     e.error = { message: err.message, hint: err.hint };
     if (isAgreementError(err)) return;
@@ -7682,9 +7694,10 @@ function renderAbout() {
       <h2 id="h-a-project"><span class="num">1</span>项目</h2>
       <div class="card">
         <div class="kv compact">
-          <dt>项目名</dt><dd>autokill-purge</dd>
+          <dt>项目名</dt><dd>autokill-purge（梦神破甲）</dd>
           <dt>版本</dt><dd class="mono">${esc(S.version || "—")}</dd>
           <dt>作者</dt><dd>EternalNight996（YG）</dd>
+          <dt>署名</dt><dd>梦神破甲（Dream God Armor Break）</dd>
           <dt>许可</dt><dd>MIT</dd>
           <dt>定位</dt><dd>二进制破甲内核 · 模型红队研究 · 智能体装备 · memory-eternal 实时分发</dd>
           <dt>运行方式</dt><dd>本机单进程；默认只连本机 memory-eternal，云端需显式改地址</dd>

@@ -168,6 +168,11 @@ check('归档身份不符时计划里先 extract 再 reapply/handoff',
   && stepsRepack.some((s) => s.id === 'handoff'));
 const stepsAuto = OPS.buildSteps(baseFacts, closed, { auto: true });
 check('auto=true 时 extract/handoff 变为 runnable', stepsAuto.find((s) => s.id === 'handoff').runnable === true);
+
+check('解包后必须重算 apply（旧宿主 0 pending 也不能跳过）',
+  OPS.needsApplyAfterExtract({ needsReapply: false }, { extracted: true }) === true
+  && OPS.needsApplyAfterExtract({ needsReapply: false }, null) === false
+  && OPS.needsApplyAfterExtract({ needsReapply: true }, null) === true);
 const stepsNoop = OPS.buildSteps({ asarPresent: false, appDirComplete: true }, OPS.decide({ asarPresent: false, appDirComplete: true, stamp: { appliedRev: 'x' }, stampAligned: true }));
 check('无事可做时给 noop 一步', stepsNoop.length === 1 && stepsNoop[0].id === 'noop');
 

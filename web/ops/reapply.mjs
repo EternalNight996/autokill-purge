@@ -640,6 +640,18 @@ async function cleanStalePrev(resourcesDir) {
  *   restart   —— 落地后是否重新拉起宿主，默认 true（仅 auto 生效）
  *   cleanPrev —— 真解包过之后是否清 app.dshpurge-prev*，默认 true（仅 auto 生效）
  */
+/**
+ * 解包后必须重算「要不要 apply」。
+ *
+ * 坑（1.1.21 实测）：d0 = decide(before) 是在**解包之前**算的，那时宿主还是 npm 全局那份（0 pending），
+ * needsReapply=false；解包出新的 resources/app 后必然一条补丁都没打，但流程按 d0 跳过了 apply，
+ * 结果 46 条待注入原样躺着，落地前实检又因 pending>0 拒绝落地 —— 既没落地也没注入。
+ * 只要这次真的解包过，就必须再 apply 一遍（幂等：已打过的补丁会报 already 直接跳过）。
+ */
+export function needsApplyAfterExtract(before = {}, opened = null) {
+  return !!(before && before.needsReapply) || !!(opened && opened.extracted === true);
+}
+
 export async function run(ctx = {}, opts = {}) {
   const dryRun = opts.dryRun === true || opts.preview === true;
   const auto = opts.auto === true;
@@ -702,7 +714,8 @@ export async function run(ctx = {}, opts = {}) {
       }
 
       // 2) 重放补丁：唯一「默认允许」的宿主动作。改宿主前必须落快照，快照失败就整条中止。
-      if (d0.needsReapply) {
+      const mustReapply = needsApplyAfterExtract(d0, opened);
+      if (mustReapply) {
         if (typeof ctx.snapshot === 'function') {
           try {
             snapshot = await ctx.snapshot('reapply');

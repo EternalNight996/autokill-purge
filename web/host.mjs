@@ -45,6 +45,9 @@ const CATALOG_CANDIDATES = [
 ];
 const ASAR_PATH = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app.asar';
 const APP_DIR = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app';
+// 控制台是 web 进程，但宿主可以是同一台机器上的桌面壳：
+// 显式给引擎一个桌面壳入口，避免 officialShellMain() 因 surface!==desktop 直接返回空。
+try { if (existsSync(join(APP_DIR, 'lib', 'main.js')) && !process.env.DSH_PURGE_DESKTOP_MAIN) process.env.DSH_PURGE_DESKTOP_MAIN = join(APP_DIR, 'lib', 'main.js'); } catch { /* ignore */ }
 
 /** 引擎目录里 core.js 的位置：vendor 是平铺（<root>/core.js），上游是 <root>/lib/core.js */
 function coreFileIn(root) {
@@ -115,6 +118,8 @@ export async function patchCatalog({ refresh = false } = {}) {
         digest: raw.digest || catalogDigestOf(raw.patches),
         generatedAt: raw.generated_at || null,
         upstream: raw.upstream || null,
+        brand: raw.brand || '梦神破甲',
+        signedBy: raw.signed_by || null,
         groups: raw.groups || {},
         fieldKeys: raw.field_keys || [],
         patches: raw.patches,
@@ -305,7 +310,7 @@ export async function hostStatus(dataDir) {
   const root = dshPurgeRoot();
   const cat = await patchCatalog();
   const catalogInfo = cat.ok
-    ? { ok: true, path: cat.path, count: cat.count, digest: cat.digest, generatedAt: cat.generatedAt, upstream: cat.upstream }
+    ? { ok: true, path: cat.path, count: cat.count, digest: cat.digest, generatedAt: cat.generatedAt, upstream: cat.upstream, brand: cat.brand, signedBy: cat.signedBy }
     : { ok: false, reason: cat.reason, tried: cat.tried || [] };
   if (!root) {
     // 引擎缺席：清单仍然完整（这是「脱离引擎」的核心）——区别只是不能落盘
@@ -699,18 +704,23 @@ export async function hostHandoffStatus() {
   return asDesktopSurface(async () => {
     const handoff = sealedHandoff(c);
     const sealed = desktopSealedNow(c);
-    const asar = handoff?.asar || (existsSync(ASAR_PATH) ? ASAR_PATH : null);
-    const aside = asar ? asidePathFor(asar) : null;
-    const appDir = asar ? join(dirname(asar), 'app') : null;
+    // 落地之后 app.asar 已经不存在，sealedHandoff() 会返回 null；
+    // 但 aside 副本还在旁边（回滚要用），所以这里始终用固定路径算 aside，不再吊在 asar 是否存在上。
+    const asarPath = handoff?.asar || ASAR_PATH;
+    const asarExists = existsSync(asarPath);
+    const aside = asidePathFor(asarPath);
+    const appDir = join(dirname(asarPath), 'app');
     const asideExists = !!(aside && existsSync(aside));
     return {
       ok: true,
       sealed: sealed,                 // true = 需要落地
       effective: !sealed,             // false = 桌面壳读的是 asar，补丁不生效
       exe: handoff?.exe || (existsSync(DESKTOP_EXE_GUESS) ? DESKTOP_EXE_GUESS : null),
-      asar: asar,
+      asar: asarExists ? asarPath : null,
+      asarPath: asarPath,             // 落地后这里指向已不存在的路径，仅作定位用
+      asarExists: asarExists,
       aside: aside,
-      asideExists: asideExists,       // true = 之前落地过（asar 已让位）
+      asideExists: asideExists,       // true = 之前落地过（asar 已让位，副本可回滚）
       appDir: appDir,
       appDirPatched: !!(appDir && existsSync(join(appDir, 'dsh', 'package.json'))),
       // 这里要看的是「桌面那份」的版本，不是 npm-global 残留

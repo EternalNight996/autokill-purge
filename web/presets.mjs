@@ -1,7 +1,7 @@
 // 装备预设（从 web/public/app.js 的 PRESETS 抽出来的同一份数据，供 /api/presets 与 MCP 使用）
 // 改这里要同步改前端，或以后让前端也从 /api/presets 读。
 export const EQUIP_PRESETS = [
-  { id: "redteam", name: "红队全装", desc: "侦察、打点、横向、权限维持，一条链的默认装备。", agents: ["dsh"], items: [
+  { id: "redteam", name: "梦神攻装", desc: "侦察、打点、横向、权限维持，一条链的默认装备。", agents: ["dsh"], items: [
     { id: "recon", name: "侦察与资产测绘", desc: "被动/主动收集、指纹识别、资产落库", skills: ["passive-recon", "fofa-recon", "recon-pipeline", "active-scan", "web-fingerprint", "asset-correlation"] },
     { id: "vuln", name: "漏洞验证与打点", desc: "Nday/1day、未授权、Web 漏洞链", skills: ["nuclei-scan", "unauth-exploit", "dir-bruteforce", "java-deserialization", "vuln-intel"] },
     { id: "shell", name: "WebShell 与隧道", desc: "冰蝎/哥斯拉马、suo5 socks5", skills: ["webshell-toolkit", "suo5-tunnel", "chisel-tunnel"] },

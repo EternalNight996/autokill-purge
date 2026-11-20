@@ -95,17 +95,38 @@ function installedVersion(dir, name) {
 }
 
 /** 本地 tgz 优先（版本可钉死、离线可装），其次目录（pnpm 会 symlink，仅开发用）。 */
+function specVersionOf(spec) {
+  const s = String(spec || '');
+  const tgz = s.match(/-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\.tgz$/);
+  if (tgz) return tgz[1];
+  if (s.startsWith('file:')) {
+    const p = s.slice(5);
+    try { return JSON.parse(readFileSync(join(p, 'package.json'), 'utf8')).version || null; } catch { return null; }
+  }
+  return null;
+}
+
 function resolveSpec(ctx, name) {
   const pkgs = join(ctx.dshHome || '', 'local-pkgs');
   const candidates = [];
   if (name === 'autokill-purge-plugin') {
-    candidates.push(join(ctx.rootDir || '', 'plugin'));
-    if (existsSync(pkgs)) {
-      // 版本从高到低：避免目录里留着旧 tgz 时误装旧版
-      const t = readdirSync(pkgs).filter((f) => f.startsWith('autokill-purge-plugin-') && f.endsWith('.tgz')).sort().reverse();
-      // 一次 unshift 整个数组：保持「高版本在前」，逐个 unshift 会把顺序倒过来（曾经因此装到旧版）
-      if (t.length) candidates.unshift(...t.map((f) => join(pkgs, f)));
+    // 随包 tgz + local-pkgs 一起按版本从高到低排；目录只作最后兜底（pnpm file:<dir> 是 symlink）
+    const repoPlugin = join(ctx.rootDir || '', 'plugin');
+    const tgzs = [];
+    for (const dir of [repoPlugin, pkgs]) {
+      try {
+        for (const f of readdirSync(dir)) if (f.startsWith('autokill-purge-plugin-') && f.endsWith('.tgz')) tgzs.push(join(dir, f));
+      } catch { /* 目录不存在就跳过 */ }
     }
+    const ver = (p) => { const m = String(p).match(/-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\.tgz$/); return m ? m[1] : '0.0.0'; };
+    const num = (v) => v.split('-')[0].split('.').map((x) => parseInt(x, 10) || 0);
+    tgzs.sort((a, b) => {
+      const pa = num(ver(a)), pb = num(ver(b));
+      for (let i = 0; i < 3; i++) { const d = pb[i] - pa[i]; if (d) return d; }
+      return String(ver(b)).localeCompare(String(ver(a)));
+    });
+    candidates.push(...tgzs);
+    candidates.push(repoPlugin);
   }
   if (name === 'dsh-purge' && existsSync(pkgs)) {
     for (const f of readdirSync(pkgs)) {
@@ -176,12 +197,15 @@ export async function status(ctx) {
   const rows = [];
   for (const name of [...DEFAULT_PLUGINS, 'memory-eternal', 'dsh-purge']) {
     const spec = resolveSpec(ctx, name);
+    const installed = installedVersion(profile, name);
+    const sourceVersion = specVersionOf(spec);
     rows.push({
       name,
       spec: spec || null,
-      installed: installedVersion(profile, name),
+      installed,
+      sourceVersion,
       inBundles: bundles.includes(name),
-      needed: name === 'autokill-purge-plugin' && (!installedVersion(profile, name) || !bundles.includes(name)),
+      needed: name === 'autokill-purge-plugin' && (!installed || !bundles.includes(name) || (sourceVersion && installed !== sourceVersion)),
     });
   }
   let skipped = [];
@@ -225,7 +249,8 @@ export async function plan(ctx, opts = {}) {
     const row = (d.plugins || []).find((p) => p.name === name);
     if (!row) { steps.push({ id: 'unknown', name, note: '不在候选清单' }); continue; }
     if (!row.spec) { steps.push({ id: 'missing-source', name, note: '找不到安装源（tgz/目录）' }); continue; }
-    if (!row.installed) steps.push({ id: 'add', name, spec: row.spec, note: 'pnpm add' });
+    const upgrade = !!(row.installed && row.sourceVersion && row.installed !== row.sourceVersion);
+    if (!row.installed || upgrade) steps.push({ id: upgrade ? 'upgrade' : 'add', name, spec: row.spec, note: 'pnpm add ' + (row.sourceVersion || '') });
     else if (!row.inBundles) steps.push({ id: 'register', name, note: 'package 已在，补 bundles' });
     else steps.push({ id: 'skip', name, note: '已装且已登记' });
   }
@@ -302,8 +327,9 @@ export async function run(ctx, opts = {}) {
       const spec = resolveSpec(ctx, name);
       if (!spec) { skipped.push({ name, reason: 'no_source' }); continue; }
       const installed = installedVersion(profile, name);
-      const wanted = opts.force === true ? null : installed;   // force=true 时即使已装也重装（升级路径）
-      if (wanted) { skipped.push({ name, reason: 'already-installed', version: installed }); continue; }
+      const sourceVersion = specVersionOf(spec);
+      const upToDate = opts.force !== true && !!installed && (!sourceVersion || installed === sourceVersion);
+      if (upToDate) { skipped.push({ name, reason: 'already-installed', version: installed }); continue; }
       const r = await pnpmAdd(ctx, profile, spec);
       performed.push({ name, action: 'pnpm add', code: r.code, tail: (r.stdout || '').split('\n').filter(Boolean).slice(-3).join(' | ') });
       if (r.code !== 0) throw new Error('pnpm add ' + name + ' 失败：' + (r.stderr || r.stdout || 'code ' + r.code));

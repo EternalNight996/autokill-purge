@@ -1,8 +1,10 @@
 <p align="center"><img src="assets/autokill-purge.png" width="96" height="96" alt="autokill-purge icon" /></p>
 
-<h1 align="center">🍊 autokill-purge</h1>
+<h1 align="center">🍊 autokill-purge · Dream God Armor Break (梦神破甲)</h1>
 
-<p align="center"><b>One command to install the purge console</b><br/>One-click injection · 83 patches visualized · payloads · memory vault · MCP manager</p>
+<p align="center"><b>One command to install the purge console · Dream God Armor Break (梦神破甲)</b><br/>One-click injection · 83 patches visualized · payloads · memory vault · MCP manager</p>
+
+<p align="center"><sub>Signed: Dream God Armor Break (梦神破甲) · autokill-purge</sub></p>
 
 <p align="center">
   <img src="https://img.shields.io/npm/v/autokill-purge?style=flat" alt="npm" />
@@ -38,7 +40,7 @@ node scripts/install-desktop.mjs   # desktop icon + autostart (Windows)
 
 | Capability | Details |
 |---|---|
-| **Purge** | **梦神破甲** template (follows the package version, currently 1.1.21) + **83 host patches with bilingual labels**, green = applied / red = failed / gray = skipped, plus **sealed-asar handoff** (rename app.asar aside + relaunch) - without it the patched files are never loaded |
+| **Purge** | **梦神破甲** template (follows the package version, currently 1.1.22) + **83 host patches with bilingual labels**, green = applied / red = failed / gray = skipped, plus **sealed-asar handoff** (rename app.asar aside + relaunch) - without it the patched files are never loaded |
 | **Rollback** | Auto snapshot before every write; one-click factory restore from the official asar; auto-rollback on failure |
 | **Payloads** | 27+ models detected live (multi-select → smart match), 12 techniques, text / Base64 / ROT13 variants, 7 binary `break` actions |
 | **梦神装甲 (armor)** | 6 multi-selectable packs, paged by pack, real skill names attached, cracked models included; issue to dsh / mengbot / autokill. **A matching nav item (icon + name) sits at the bottom of the DSH sidebar and jumps back to this console.** |

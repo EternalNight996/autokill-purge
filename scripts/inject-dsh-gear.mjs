@@ -62,7 +62,7 @@ const block = [
   IND + MARK_S.replace(IND, ''), // 统一缩进 6 空格
   IND + '## 梦神装甲（按任务选用；动手前先 purge_search 查，不凭记忆编命令）',
   '',
-  IND + `本次装配：${chosen.map((p) => p.name).join('、')}。任务只对上一两类能力时用对应的那套；跨度大的用红队全装。`,
+  IND + `本次装配：${chosen.map((p) => p.name).join('、')}。任务只对上一两类能力时用对应的那套；跨度大的用梦神攻装。`,
   '',
   ...body.split('\n').map((l) => (l.trim() === '' ? '' : IND + l)),
   IND + '### 三条纪律',
