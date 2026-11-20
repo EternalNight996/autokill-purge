@@ -1,8 +1,11 @@
-<p align="center"><img src="assets/autokill-purge.png" width="96" height="96" alt="autokill-purge icon" /></p>
+<p align="center"><img src="assets/autokill-purge.png" width="92" height="92" alt="autokill-purge logo" /></p>
 
 <h1 align="center">🍊 autokill-purge · Mengshen Armor Break</h1>
 
-<p align="center"><b>A jailbreak console for three hosts (DSH / MengBot / AutoKill): patch visibility, payload generation, gear dispatch, one-click install/uninstall, backup &amp; restore</b></p>
+<p align="center"><b>A jailbreak console for three hosts (DSH / MengBot / AutoKill) — 83 host patches made visible, payload generation, gear dispatch, backup &amp; restore, one-click install/uninstall</b><br/>
+<sub>It removes the host's own gates: prompt · approval · sandbox · asar landing</sub></p>
+
+<p align="center"><img src="docs/shots-ux2/hero-breach-1280.png" width="100%" alt="Breach console in real use: DSH loaded from resources/app (asar moved aside), 78/83 patches applied, plugin 0.3.5, memory vault 0.52.0" /></p>
 
 <p align="center">
   <img src="https://img.shields.io/npm/v/autokill-purge?style=flat" alt="npm" />
@@ -11,14 +14,12 @@
   <img src="https://img.shields.io/badge/node-%E2%89%A522-3c873a" alt="node" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license" />
   <img src="https://img.shields.io/badge/hosts-DSH%20%C2%B7%20MengBot%20%C2%B7%20AutoKill-8957e5" alt="hosts" />
+  <img src="https://img.shields.io/badge/patches-79%2F83-2ea043" alt="patches" />
 </p>
 
-<p align="center">
-  <img src="docs/shots-ux2/theme2-ops.png" width="49%" alt="breach page" />
-  <img src="docs/shots-ux2/memory-full.png" width="49%" alt="memory vault" />
-</p>
+[简体中文（默认）](README.md) · **English**
 
-**简体中文（默认）** · [English](README.en.md)
+> The screenshot above is the real thing: DSH `0.2.2-rc.5` loaded from `resources/app` (asar moved aside), **78/83 applied** (the panel counts on the web surface; 79 including the desktop-shell rows), plugin `0.3.5`, memory vault `0.52.0`.
 
 ## ⚡ Install in one line
 

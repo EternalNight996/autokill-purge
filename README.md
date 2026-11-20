@@ -1,8 +1,11 @@
-<p align="center"><img src="assets/autokill-purge.png" width="96" height="96" alt="autokill-purge icon" /></p>
+<p align="center"><img src="assets/autokill-purge.png" width="92" height="92" alt="autokill-purge logo" /></p>
 
 <h1 align="center">🍊 autokill-purge · 梦神破甲</h1>
 
-<p align="center"><b>三宿主（DSH / MengBot / AutoKill）的破甲控制台 —— 补丁可视化、载荷生成、装备发放、一键装/卸、备份还原</b></p>
+<p align="center"><b>三宿主（DSH / MengBot / AutoKill）的破甲控制台 —— 83 条宿主补丁可视化 · 载荷生成 · 装备发放 · 备份还原 · 一键装/卸</b><br/>
+<sub>拆掉宿主自己的闸门：提示词 · 审批 · 沙箱 · asar 落地</sub></p>
+
+<p align="center"><img src="docs/shots-ux2/hero-breach-1280.png" width="100%" alt="破甲台实际界面：DSH 已从 resources/app 载入（asar 已让位），78/83 已注入，插件 0.3.5，记忆库 0.52.0" /></p>
 
 <p align="center">
   <img src="https://img.shields.io/npm/v/autokill-purge?style=flat" alt="npm" />
@@ -11,14 +14,12 @@
   <img src="https://img.shields.io/badge/node-%E2%89%A522-3c873a" alt="node" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license" />
   <img src="https://img.shields.io/badge/hosts-DSH%20%C2%B7%20MengBot%20%C2%B7%20AutoKill-8957e5" alt="hosts" />
+  <img src="https://img.shields.io/badge/patches-79%2F83-2ea043" alt="patches" />
 </p>
 
-<p align="center">
-  <img src="docs/shots-ux2/theme2-ops.png" width="49%" alt="破甲页" />
-  <img src="docs/shots-ux2/memory-full.png" width="49%" alt="记忆库" />
-</p>
+**简体中文（默认）** · [English](README.en.md)
 
-[English](README.en.md) · **简体中文（默认）**
+> 上图就是当前实机：DSH `0.2.2-rc.5` 已从 `resources/app` 载入（asar 已让位），**78/83 已注入**（面板按 web 口径计；把桌面壳那几条算上为 79），插件 `0.3.5`、记忆库 `0.52.0`。
 
 ## ⚡ 一行装好
 
