@@ -1639,3 +1639,6 @@ main {
 .prog-bar { height: 8px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
 .prog-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg,#34d399,#22d3ee); transition: width .35s ease; }
 .prog-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--muted, #8b93a7); }
+
+/* 顶栏版本号：一眼看出加载的是不是新构建 */
+.ver { font-size: 11px; line-height: 1; padding: 4px 8px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); color: var(--muted, #8b93a7); font-variant-numeric: tabular-nums; white-space: nowrap; }

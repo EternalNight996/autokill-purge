@@ -3123,6 +3123,8 @@ async function handleApi(req, res, url, state) {
 // ---- server -------------------------------------------------------------------
 const server = createServer(async (req, res) => {
   logbus.requestLogger(req, res);
+  // 每个响应都带版本号：前端顶栏、curl -I、排障都能直接看到当前跑的是哪一版
+  try { res.setHeader('x-autokill-version', VERSION); } catch { /* 已发送头则忽略 */ }
   const url = new URL(req.url, 'http://127.0.0.1');
   try {
     // 内嵌 memory-eternal 面板（iframe 用 /embed/memory/；页面内部 API 用 /memory-eternal/）

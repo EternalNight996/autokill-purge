@@ -1230,6 +1230,14 @@ async function boot() {
   try {
     const ping = await request("/api/ping").catch(() => null);
     if (ping && ping.version) S.version = ping.version;
+    // 顶栏版本号：确认浏览器加载的是哪一版（缓存排查时一眼可辨）
+    try {
+      const verEl = document.getElementById("appVersion");
+      if (verEl && S.version) {
+        verEl.textContent = "v" + S.version;
+        verEl.title = "控制台版本 " + S.version;
+      }
+    } catch { /* 老页面没有这个节点就跳过 */ }
     const data = await request("/api/state");
     applyState(data);
     // 业主身份是程序内置的（lib/owner.mjs → /api/state.deploy.owner）：页面标题与页头都跟着它走
