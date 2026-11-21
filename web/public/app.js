@@ -1873,7 +1873,8 @@ async function revertHostPatches() {
 /** 当前破甲方式的「一键卸载」动作；不改宿主的方式（载荷/入库）返回 null */
 function uninstallAction(mode) {
   const m = DELIVERY_MODES.find((x) => x.id === mode) || {};
-  const label = "一键卸载" + (m.short || "注入");
+  // 补丁层与「一键注入」成对：就叫「一键卸载」，不挂后缀；其它方式保留后缀区分
+  const label = mode === "host-patch" ? "一键卸载" : ("一键卸载" + (m.short || "注入"));
   if (mode === "ak-patch") return { label, run: revertDreamBreak };
   if (mode === "host-patch") return { label, run: revertHostPatches };
   if (mode === "host-prompt") return { label, run: uninjectPrompt };
@@ -1996,7 +1997,8 @@ function buildButtonLabel(mode) {
     if (S.hostTarget === "autokill") return "生成并注入 AutoKill";
     return "生成并注入宿主";
   }
-  return "应用补丁";
+  // 普通模式与技术模式的按钮口径对齐：补丁层就是「一键注入」，不再叫「应用补丁」
+  return "一键注入";
 }
 
 /** 破甲方式与宿主对齐：宿主不支持当前方式时回退到载荷（补丁层只属于 DSH，梦神破甲只属于 AutoKill） */
@@ -3132,9 +3134,9 @@ async function applyDelivery(variants) {
       patches = pending;
     }
     const d = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply", patches } });
-    if (!d || d.ok === false) throw payloadError(d, "应用补丁失败");
+    if (!d || d.ok === false) throw payloadError(d, "注入失败");
     const r = d.result || {};
-    const base = `已应用宿主补丁 ${r.selected || 0}/${r.total || 0} 条（新增 ${r.applied || 0}，已是新版 ${r.already || 0}）`;
+    const base = `已注入宿主补丁 ${r.selected || 0}/${r.total || 0} 条（新增 ${r.applied || 0}，已是新版 ${r.already || 0}）`;
     // 落地已派发：立即起进度条，宿主约 3 秒后重启
     if (d.scheduled) {
       startProgressPolling();
@@ -5171,7 +5173,7 @@ function renderBreach() {
         <div style="margin-bottom:10px">${deliverySelectHtml("bDelivery", b)}</div>
         ${equipInlineBlock("b")}
         <div class="actions">
-          <button class="primary" id="bBuild" type="submit"${b.delivery === "host-patch" ? ' title="写完补丁会顺带落地（挪走 app.asar）并重启桌面宿主——这步会断当前会话"' : ""} ${b.building ? 'disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : (b.delivery === "payload" ? "生成载荷" : "生成并" + (b.delivery === "memory" ? "入库" : (b.delivery === "host-prompt" ? "注入宿主" : "应用补丁")))}</button>
+          <button class="primary" id="bBuild" type="submit"${b.delivery === "host-patch" ? ' title="写完补丁会顺带落地（挪走 app.asar）并重启桌面宿主——这步会断当前会话"' : ""} ${b.building ? 'disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : (b.delivery === "payload" ? "生成载荷" : "生成并" + (b.delivery === "memory" ? "入库" : (b.delivery === "host-prompt" ? "注入宿主" : "一键注入")))}</button>
           <span class="muted">不调用任何模型；只产出可复制载荷与建议。任务为空时不会发请求。角色与输出要求在「生成策略」里。</span>
         </div>
       </form>
