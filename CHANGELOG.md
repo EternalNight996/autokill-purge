@@ -2,6 +2,15 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.25-beta.4] — 2026-11-21（修复：DSH 一键卸载卸不干净）
+
+### Fixed
+- **一键卸载只卸一半**：`/api/host/uninstall` 的 profile 步骤与预设步骤用了未导入的 `writeFileSync`，运行时抛 `writeFileSync is not defined`，被 try/catch 吞掉 → `package.json` 的 `dependencies` / `dsh.profile.bundles`、`node_modules/autokill-purge-plugin`、红队预设里的 `redteam-tools` 行全部残留，DSH 重启后插件照旧加载。已补 import。
+- 卸载改为**自检式返回**：改完重读 `package.json`，`depLeft` / `bundleLeft` / `dirLeft` 任一残留即该步 `ok:false`，不再“外层 200 就算成功”。
+- `asar` 步骤把 `no_aside` / `asar_present` 视作已完成（之前已放回会被判失败，导致整体 `uninstall.ok=false`）。
+
+### Verified
+- 现在跑一次卸载：`asar / patches / instructions / prompt / profile / preset` 六步全绿，`uninstall.ok=true`；`loadProfileDirectory` 的 layers 里已没有 `autokill-purge-plugin`。
 ## [1.1.25-beta.3] — 2026-11-21（记忆库跟随 v0.52.0 重发版 · 日志抽屉 · 桌面壳转 GUI）
 
 ### Changed

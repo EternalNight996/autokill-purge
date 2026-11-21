@@ -7,7 +7,7 @@
 import { createServer } from 'node:http';
 import * as logbus from './logbus.mjs';
 import { readFile, writeFile, mkdir, rename, rm, copyFile } from 'node:fs/promises';
-import { existsSync, statSync, readFileSync } from 'node:fs';
+import { existsSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2291,7 +2291,12 @@ async function handleApi(req, res, url, state) {
     const steps = [];
     const home = process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
     // 1) 落地过的 asar 放回
-    try { const r = await restoreHostAsar(); steps.push({ id: 'asar', ok: r.ok !== false, ...r }); }
+    try {
+      const r = await restoreHostAsar();
+      // no_aside 说明没落地过（或已经放回），对卸载来说属于「已完成」，不算失败
+      const okay = r.ok !== false || r.error === 'no_aside' || r.error === 'asar_present';
+      steps.push({ ...r, id: 'asar', ok: okay });
+    }
     catch (e) { steps.push({ id: 'asar', ok: false, error: publicError(e) }); }
     // 2) 补丁按 asar 原件还原
     try { const r = await factoryRestore(); steps.push({ id: 'patches', ok: true, restored: r.restored, skipped: r.skipped }); }
@@ -2320,7 +2325,15 @@ async function handleApi(req, res, url, state) {
         if (changed) writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
       }
       await rm(join(prof, 'node_modules', 'autokill-purge-plugin'), { recursive: true, force: true });
-      steps.push({ id: 'profile', ok: true, changed });
+      // 自检：依赖 / bundle / node_modules 三处都要干净，否则报失败（避免“点成功但没卸掉”）
+      const after = existsSync(pkgPath) ? JSON.parse(readFileSync(pkgPath, 'utf8')) : {};
+      let depLeft = false;
+      for (const k of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+        if (after[k] && Object.prototype.hasOwnProperty.call(after[k], 'autokill-purge-plugin')) depLeft = true;
+      }
+      const bundleLeft = !!((after.dsh && after.dsh.profile && Array.isArray(after.dsh.profile.bundles)) && after.dsh.profile.bundles.includes('autokill-purge-plugin'));
+      const dirLeft = existsSync(join(prof, 'node_modules', 'autokill-purge-plugin'));
+      steps.push({ id: 'profile', ok: !depLeft && !bundleLeft && !dirLeft, changed, pluginRemoved: !depLeft && !bundleLeft && !dirLeft, detail: { depLeft, bundleLeft, dirLeft } });
     } catch (e) { steps.push({ id: 'profile', ok: false, error: publicError(e) }); }
     // 6) 红队预设里的工具行（避免留下指向已删插件的坏行）
     try {
