@@ -1556,30 +1556,52 @@ function simpleSteps() {
 
 /* 吃豆人式进度：注入/卸载时召唤一只小怪，沿轨道一路吃豆，位置=进度；吃完放大消失。
    2D canvas 实现（零依赖、离线可用、60fps 开销可忽略），不用 three.js。 */
+/* 注入/卸载的视觉爆炸 + 环形进度 HUD（零依赖 canvas）
+   前 1.5s：白闪 → 三层冲击波 → 28 道光柱 → 180 块碎片 → 中心大字
+   之后：环形进度 + 大数字 + 阶段文案，跟着真实 percent 走 */
 const armorEater = {
-  cv: null, ctx: null, raf: 0, t0: 0, pct: 0, done: false, mode: "inject", fin: 0,
+  cv: null, ctx: null, raf: 0, timer: 0, t0: 0, pct: 0, done: false, mode: 'inject',
+  shards: null, rays: null, frames: 0,
   start(mode) {
     try {
       this.stop();
-      this.mode = mode === "uninstall" ? "uninstall" : "inject";
-      this.pct = 0; this.done = false; this.fin = 0;
-      const cv = document.createElement("canvas");
-      cv.className = "armor-eater";
+      this.mode = mode === 'uninstall' ? 'uninstall' : 'inject';
+      this.pct = 0; this.done = false; this.frames = 0;
+      const cv = document.createElement('canvas');
+      cv.className = 'armor-eater';
       cv.width = window.innerWidth;
       cv.height = window.innerHeight;
       document.body.appendChild(cv);
       this.cv = cv;
-      this.ctx = cv.getContext("2d");
+      this.ctx = cv.getContext('2d');
       this.t0 = performance.now();
       this.lastFrameAt = this.t0;
+      // 爆炸素材：一次生成，之后只按时间推进
+      const cx = cv.width / 2, cy = cv.height / 2;
+      this.shards = Array.from({ length: 180 }, () => {
+        const a = Math.random() * Math.PI * 2;
+        const sp = 2 + Math.random() * 16;
+        return {
+          a, sp, size: 3 + Math.random() * 9,
+          rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 0.5,
+          hue: 18 + Math.random() * 30, w: Math.random() * 0.5 + 0.5,
+        };
+      });
+      this.rays = Array.from({ length: 28 }, (_, k) => ({
+        a: (k / 28) * Math.PI * 2 + Math.random() * 0.06,
+        len: 0.25 + Math.random() * 0.55,
+        w: 1 + Math.random() * 3,
+      }));
+      try {
+        document.body.classList.add('armor-shake');
+        setTimeout(() => { try { document.body.classList.remove('armor-shake'); } catch { /* ignore */ } }, 520);
+      } catch { /* ignore */ }
       const loop = (t) => {
-        // 单帧异常不能中断 rAF 链，否则动画会整个停住（之前就是这个坑）
         this.lastFrameAt = performance.now();
         try { this.draw(t); } catch { /* keep alive */ }
         this.raf = requestAnimationFrame(loop);
       };
       this.raf = requestAnimationFrame(loop);
-      // 兜底：页面不可见 / rAF 被暂停时（Electron 后台、headless）也要继续画
       this.timer = setInterval(() => {
         if (performance.now() - this.lastFrameAt > 300) {
           try { this.draw(performance.now()); } catch { /* ignore */ }
@@ -1592,111 +1614,133 @@ const armorEater = {
     if (done) this.done = true;
   },
   draw(t) {
-    this.frames = (this.frames || 0) + 1; // 自检：rAF 是否真的在跑
+    this.frames += 1;
     const ctx = this.ctx, cv = this.cv;
     if (!ctx || !cv) return;
     const W = cv.width, H = cv.height;
+    const cx = W / 2, cy = H / 2;
+    const e = (t - this.t0) / 1000;           // 已过秒数
     const p = Math.max(0, Math.min(100, this.pct));
-    const dark = this.mode === "uninstall";
+    const dark = this.mode === 'uninstall';
+    const hot = dark ? '255,90,50' : '255,150,40';
     ctx.clearRect(0, 0, W, H);
-    // 半透明压暗，让怪物跳出来
-    ctx.fillStyle = "rgba(6,8,12,.55)";
+
+    // 背景压暗（径向），让爆炸有对比
+    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.8);
+    bg.addColorStop(0, 'rgba(10,8,6,.72)');
+    bg.addColorStop(1, 'rgba(4,6,10,.86)');
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
-    // 轨道
-    // 满屏波浪路径：怪物沿曲线跑（不是固定在底部直线），豆子撒在路径上
-    const pathAt = (tt) => ({
-      x: W * (0.06 + 0.88 * tt),
-      y: H * (0.5 + Math.sin(tt * Math.PI * 3.2) * 0.22),
-    });
-    ctx.beginPath();
-    for (let i = 0; i <= 80; i += 1) {
-      const pt = pathAt(i / 80);
-      if (i) ctx.lineTo(pt.x, pt.y); else ctx.moveTo(pt.x, pt.y);
+
+    // 1) 白闪（0 ~ 0.14s）
+    if (e < 0.14) {
+      ctx.fillStyle = 'rgba(255,245,230,' + (0.9 * (1 - e / 0.14)).toFixed(3) + ')';
+      ctx.fillRect(0, 0, W, H);
     }
-    ctx.strokeStyle = dark ? "rgba(255,120,90,.18)" : "rgba(255,150,40,.18)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    // 路径流光：沿曲线跑的高亮光点（让"在动"一眼可见）
-    const tsec0 = (t - this.t0) / 1000;
-    for (let k = 0; k < 6; k += 1) {
-      const tt = ((tsec0 * 0.12) + k / 6) % 1;
-      const pt = pathAt(tt);
-      const g = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, 14);
-      g.addColorStop(0, dark ? "rgba(255,150,120,.65)" : "rgba(255,190,90,.7)");
-      g.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = g;
+
+    // 2) 三层冲击波（错峰扩散）
+    const rings = [[0.0, 1.0, 10], [0.06, 0.78, 7], [0.12, 0.55, 4]];
+    for (const [delay, speed, lw] of rings) {
+      const rt = e - delay;
+      if (rt <= 0 || rt > 1.5) continue;
+      const k = Math.min(1, rt / 1.2);
+      const r = k * Math.max(W, H) * 0.72 * speed;
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, 14, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // 豆子 18 颗，按进度被吃
-    const beans = 18;
-    const eaten = Math.round((p / 100) * beans);
-    for (let i = 0; i < beans; i += 1) {
-      if (i < eaten) continue;
-      const pt = pathAt(i / (beans - 1));
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
-      ctx.fillStyle = dark ? "rgba(255,140,110,.85)" : "rgba(255,190,90,.9)";
-      ctx.fill();
-    }
-    // 怪物位置：注入沿路径正向，卸载反向
-    const prog = this.done ? 1 : p / 100;
-    const at = dark ? pathAt(1 - prog) : pathAt(prog);
-    const ahead = dark ? pathAt(Math.max(0, 1 - prog - 0.01)) : pathAt(Math.min(1, prog + 0.01));
-    const dir = (ahead.x - at.x) >= 0 ? 1 : -1;
-    const tsec = (t - this.t0) / 1000;
-    const mouth = 0.12 + Math.abs(Math.sin(tsec * 12)) * 0.38;
-    const scale = this.done ? 1 + Math.min(1, this.fin / 700) * 0.6 : 1;
-    const R = 22 * scale;
-    ctx.save();
-    ctx.translate(at.x, at.y);
-    ctx.scale(dir, 1);
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.arc(0, 0, R, mouth * Math.PI, (2 - mouth) * Math.PI);
-    ctx.closePath();
-    ctx.fillStyle = dark ? "#ff6a3d" : "#ffa01e";
-    ctx.fill();
-    // 眼睛
-    ctx.beginPath();
-    ctx.arc(R * 0.22, -R * 0.45, R * 0.16, 0, Math.PI * 2);
-    ctx.fillStyle = "#101418";
-    ctx.fill();
-    ctx.restore();
-    // 等待期脉冲：请求还没回来时也给动态反馈（呼吸圈 + 旋转弧）
-    if (!this.done && p < 1) {
-      const pulse = 0.5 + Math.sin(tsec * 4) * 0.5;
-      ctx.beginPath();
-      ctx.arc(at.x, at.y, R * (1.6 + pulse * 0.8), 0, Math.PI * 2);
-      ctx.strokeStyle = dark ? `rgba(255,120,90,${0.35 - pulse * 0.2})` : `rgba(255,160,40,${0.35 - pulse * 0.2})`;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      const a0 = tsec * 5;
-      ctx.beginPath();
-      ctx.arc(at.x, at.y, R * 1.95, a0, a0 + Math.PI * 0.9);
-      ctx.strokeStyle = dark ? "rgba(255,140,110,.6)" : "rgba(255,190,90,.65)";
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(' + hot + ',' + (Math.max(0, 0.95 - k)).toFixed(3) + ')';
+      ctx.lineWidth = lw * (1 - k) + 0.8;
       ctx.stroke();
     }
-    // 百分比 + 阶段（固定在底部，不跟路径重叠）
-    ctx.font = "600 28px ui-monospace, Consolas, monospace";
-    ctx.textAlign = "center";
-    ctx.fillStyle = dark ? "rgba(255,150,120,.95)" : "rgba(255,180,80,.95)";
-    ctx.fillText(Math.round(p) + "%", W / 2, H - 96);
-    const note = (S && S.host && S.host.progress && S.host.progress.note)
-      || (dark ? "正在卸载…" : "正在写入补丁…");
-    ctx.font = "500 13px system-ui, 'Microsoft YaHei', sans-serif";
-    ctx.fillStyle = "rgba(232,238,246,.62)";
-    ctx.fillText(String(note).slice(0, 60), W / 2, H - 64);
-    // 完成：放大淡出
+
+    // 3) 径向光柱
+    if (e < 0.9) {
+      const fade = Math.max(0, 1 - e / 0.9);
+      for (const ray of this.rays) {
+        const len = Math.max(W, H) * ray.len * (0.35 + e * 0.9);
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(ray.a) * len, cy + Math.sin(ray.a) * len);
+        ctx.strokeStyle = 'rgba(' + hot + ',' + (0.5 * fade).toFixed(3) + ')';
+        ctx.lineWidth = ray.w * fade + 0.4;
+        ctx.stroke();
+      }
+    }
+
+    // 4) 碎片（带旋转与重力）
+    if (this.shards && e < 1.9) {
+      for (const s of this.shards) {
+        const travel = s.sp * e * 34;
+        const x = cx + Math.cos(s.a) * travel;
+        const y = cy + Math.sin(s.a) * travel + 0.5 * 260 * e * e;
+        const alpha = Math.max(0, 1 - e / 1.9);
+        if (alpha <= 0) continue;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(s.rot + s.vr * e * 10);
+        ctx.fillStyle = 'rgba(' + hot + ',' + (alpha * 0.95).toFixed(3) + ')';
+        ctx.fillRect(-s.size / 2, -s.size / 4, s.size, s.size * 0.5 * s.w);
+        ctx.restore();
+      }
+    }
+
+    // 5) 中心大字
+    if (e < 1.1) {
+      const k = Math.min(1, e / 0.16);
+      const sc = 1.7 - 0.7 * k;
+      const label = dark ? 'PURGE' : 'INJECT';
+      ctx.save();
+      ctx.translate(cx, cy - 6);
+      ctx.scale(sc, sc);
+      ctx.font = '800 46px system-ui, "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(' + hot + ',' + Math.max(0, 1 - e / 1.05).toFixed(3) + ')';
+      ctx.fillText(label, 0, 0);
+      ctx.restore();
+    }
+
+    // 6) 环形进度 HUD（0.85s 后淡入）
+    const hudAlpha = Math.min(1, Math.max(0, (e - 0.85) / 0.35));
+    if (hudAlpha > 0 && !this.done) {
+      const R = Math.min(W, H) * 0.11 + 46;
+      ctx.save();
+      ctx.globalAlpha = hudAlpha;
+      ctx.lineWidth = 9;
+      ctx.strokeStyle = 'rgba(255,255,255,.10)';
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+      const a0 = -Math.PI / 2;
+      const a1 = a0 + (p / 100) * Math.PI * 2;
+      ctx.strokeStyle = 'rgba(' + hot + ',.95)';
+      ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.arc(cx, cy, R, a0, a1); ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '700 40px ui-monospace, Consolas, monospace';
+      ctx.fillStyle = 'rgba(255,240,225,.96)';
+      ctx.fillText(Math.round(p) + '%', cx, cy - 4);
+      const note = (S && S.host && S.host.progress && S.host.progress.note)
+        || (dark ? '正在卸载…' : '正在写入补丁…');
+      ctx.font = '500 13px system-ui, "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = 'rgba(232,238,246,.7)';
+      ctx.fillText(String(note).slice(0, 40), cx, cy + R * 0.55);
+      ctx.restore();
+    }
+
+    // 7) 完成：一圈爆闪后收尾
     if (this.done) {
-      this.fin += 16;
-      if (this.fin > 900) this.stop();
+      const k = Math.min(1, this.fin = (this.fin || 0) + 0.02);
+      ctx.beginPath();
+      ctx.arc(cx, cy, k * Math.min(W, H) * 0.7, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(' + hot + ',' + (0.9 * (1 - k)).toFixed(3) + ')';
+      ctx.lineWidth = 14 * (1 - k) + 1;
+      ctx.stroke();
+      if (k >= 1) this.stop();
     }
   },
   stop() {
     if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
     if (this.timer) { clearInterval(this.timer); this.timer = 0; }
+    try { document.body.classList.remove('armor-shake'); } catch { /* ignore */ }
     if (this.cv) { try { this.cv.remove(); } catch { /* ignore */ } this.cv = null; this.ctx = null; }
   },
 };

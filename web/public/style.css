@@ -1677,3 +1677,12 @@ body.armor-enter .topbar { animation: armor-topbar .9s ease; }
   animation: prog-indet 900ms linear infinite;
 }
 @keyframes prog-indet { to { background-position: 24px 0; } }
+
+/* 注入/卸载时的屏幕震动（视觉爆炸的一部分） */
+body.armor-shake { animation: armor-shake 460ms cubic-bezier(.36,.07,.19,.97); }
+@keyframes armor-shake {
+  10%, 90% { transform: translate(-2px, 1px); }
+  20%, 80% { transform: translate(3px, -2px); }
+  30%, 50%, 70% { transform: translate(-5px, 2px); }
+  40%, 60% { transform: translate(6px, -1px); }
+}
