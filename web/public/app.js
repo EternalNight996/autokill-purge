@@ -1851,17 +1851,23 @@ async function uninjectPrompt() {
   } catch (e) { toastError(simpleReason(e)); }
 }
 
-/** 补丁层卸载：按 app.asar 原件把被改的宿主文件逐份还原（不靠快照新旧），当前状态先另存一份 */
+/** 补丁层卸载：走完整卸载（还原宿主 + 清解包残留 + 移除插件 + 独立 runner 重启）。
+ *  以前这里只调 /api/host/restore{factory}：只还文件、不删插件、没有进度、也没有重启 ——
+ *  用户看到的就是「点了没反应，重启 DSH 插件还在」。 */
 async function revertHostPatches() {
-  if (typeof window !== "undefined" && !window.confirm("撤回宿主补丁：按官方 app.asar 原件逐份还原被改的文件（落地过的会把 asar 放回）。当前状态会先另存一份，可再回滚。继续？")) return;
+  if (typeof window !== "undefined" && !window.confirm("一键卸载：按官方 app.asar 原件还原宿主文件，清掉解包残留，并把 autokill-purge 插件从 profile 移除，然后重启宿主。当前状态会先另存一份快照。继续？")) return;
+  const btn = document.getElementById("sUninstall");
+  const oldLabel = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "卸载中…"; }
   try {
-    const d = await request("/api/host/restore", { method: "POST", body: { confirm: true, mode: "factory" } });
-    if (!d || d.ok === false) throw payloadError(d, "撤回失败");
-    const asarNote = d.asar && d.asar.restored ? "，app.asar 已放回" : "";
-    const restartNote = !d.restart ? "" : (d.restart.ok ? "，宿主已重启" : "，但宿主没拉起来（请手动打开 DeepSeek Harness）");
-    toast(`已撤回宿主补丁层：还原 ${fmtNum(d.restored)} 个文件（跳过 ${fmtNum(d.skipped)} 个本来就一致）${asarNote}${restartNote}；现在跑的是原版 dsh`);
+    const d = await request("/api/host/uninstall", { method: "POST", body: { confirm: true } });
+    if (!d || d.ok === false) throw payloadError(d, "卸载失败");
+    startProgressPolling();
+    const u = d.uninstall || {};
+    toast(`已下发：约 3 秒后结束宿主并完成卸载（${(u.steps || []).length} 个步骤，进度见下方进度条）`);
     loadHostStatus();
   } catch (e) { toastError(simpleReason(e)); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = oldLabel; } renderPage(); }
 }
 
 /** 当前破甲方式的「一键卸载」动作；不改宿主的方式（载荷/入库）返回 null */
@@ -2291,6 +2297,16 @@ function renderSimpleOperation() {
         <button class="primary s-generate" id="sBuild" type="submit"${b.building ? ' disabled aria-busy="true"' : ""}>${b.building ? "处理中…" : esc(buildButtonLabel(mode))}</button>
         ${(() => { const un = uninstallAction(mode); return un ? `<button type="button" class="secondary danger" id="sUninstall">${esc(un.label)}</button>` : ""; })()}
       </div>
+      ${(() => {
+        const prog = S.host && S.host.progress;
+        if (!prog) return "";
+        const pct = Math.max(0, Math.min(100, Number(prog.percent) || 0));
+        const label = prog.done ? (prog.step === "failed" ? "失败" : "完成") : (prog.note || prog.step || "处理中");
+        return `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}">
+          <div class="prog-bar"><i style="width:${Math.max(2, pct)}%"></i></div>
+          <div class="prog-meta"><span>${Math.round(pct)}% · ${esc(label)}</span>${prog.done ? "" : '<span class="mini">进行中…</span>'}</div>
+        </div>`;
+      })()}
       ${b.deliveryResult && b.deliveryResult.message ? `<p class="s-result ok">✓ ${esc(b.deliveryResult.message)}</p>` : ""}
       ${b.deliveryResult && b.deliveryResult.error ? `<p class="s-result bad">✗ ${esc(b.deliveryResult.error)}</p>` : ""}
     </form>
@@ -3119,6 +3135,11 @@ async function applyDelivery(variants) {
     if (!d || d.ok === false) throw payloadError(d, "应用补丁失败");
     const r = d.result || {};
     const base = `已应用宿主补丁 ${r.selected || 0}/${r.total || 0} 条（新增 ${r.applied || 0}，已是新版 ${r.already || 0}）`;
+    // 落地已派发：立即起进度条，宿主约 3 秒后重启
+    if (d.scheduled) {
+      startProgressPolling();
+      return { message: `${base}；已下发：约 ${Math.round((d.restartInMs || 2500) / 1000)} 秒后结束并重启宿主，补丁随即生效（进度见下方进度条）` };
+    }
     if (d.landed) return { message: `${base}，asar 已让位、宿主已重启：补丁已生效` };
     if (d.handoff && d.handoff.ok === false) {
       return { message: `${base}，但落地失败（${d.handoff.note || d.handoff.error || "原因未知"}）：补丁写在 resources/app，桌面壳仍读 app.asar` };
