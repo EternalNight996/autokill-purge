@@ -5,6 +5,7 @@
 // - Memory: pure HTTP proxy to memory-eternal; unreachable -> 503 semantics, never 500.
 // - break: runs the break kernel in-process (same code as the CLI) behind a whitelist.
 import { createServer } from 'node:http';
+import * as logbus from './logbus.mjs';
 import { readFile, writeFile, mkdir, rename, rm, copyFile } from 'node:fs/promises';
 import { existsSync, statSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -31,6 +32,12 @@ import { renderGearMarkdown, renderGearSyncBlock } from './stage-hints.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
 const DATA_DIR = join(ROOT, 'data');
+
+// ---- UI 级系统日志：内存环形缓冲 + 按天落盘 + SSE ----
+const LOG_DIR = join(DATA_DIR, 'logs');
+logbus.attach({ dir: LOG_DIR, keepDays: Number(process.env.PURGE_LOG_KEEP_DAYS || 14) });
+logbus.mirrorStdio();
+logbus.info('boot', 'console start', { root: ROOT, node: process.version, pid: process.pid, dataDir: DATA_DIR });
 const STATE_FILE = join(DATA_DIR, 'state.json');
 const CATALOG_FILE = join(HERE, 'catalog.json');
 const PORT = Number(process.env.PURGE_WEB_PORT || 8792);
@@ -1448,6 +1455,47 @@ async function handleApi(req, res, url, state) {
   }
 
   if (p === '/api/ping' && method === 'GET') return send(res, 200, { ok: true, version: VERSION });
+
+  // ---- UI 级系统日志（级别过滤 / 搜索 / 标签 / 实时 / 暂停 / 导出）----
+  if (p === '/api/logs' && method === 'GET') {
+    const q = url.searchParams;
+    return send(res, 200, {
+      ok: true,
+      stats: logbus.stats(),
+      tags: logbus.tags(),
+      files: logbus.fileSizeInfo(),
+      entries: logbus.query({
+        since: Number(q.get('since') || 0),
+        limit: Math.min(2000, Number(q.get('limit') || 300)),
+        level: String(q.get('level') || ''),
+        q: String(q.get('q') || ''),
+        tag: String(q.get('tag') || ''),
+      }),
+    });
+  }
+  if (p === '/api/logs/stream' && method === 'GET') {
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+    res.write(': connected ' + Date.now() + '\n\n');
+    const off = logbus.subscribe((e) => { try { res.write('data: ' + JSON.stringify(e) + '\n\n'); } catch { /* 断线自己会 close */ } });
+    const beat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* ignore */ } }, 15000);
+    const bye = () => { clearInterval(beat); off(); try { res.end(); } catch { /* ignore */ } };
+    req.on('close', bye);
+    req.on('error', bye);
+    return undefined;
+  }
+  if (p === '/api/logs/clear' && method === 'POST') {
+    const body = await bodyOf(req);
+    if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required' });
+    const r = logbus.clear();
+    logbus.info('logs', 'buffer cleared', r);
+    return send(res, 200, { ok: true, ...r });
+  }
+  if (p === '/api/logs/export' && method === 'GET') {
+    const text = logbus.exportText({ limit: Math.min(5000, Number(url.searchParams.get('limit') || 3000)) });
+    res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'content-disposition': 'attachment; filename="autokill-purge-logs.log"' });
+    return res.end(text);
+  }
+
 
   if (p === '/api/state' && method === 'GET') {
     const live = await liveModels(false);
@@ -2929,6 +2977,7 @@ async function handleApi(req, res, url, state) {
 
 // ---- server -------------------------------------------------------------------
 const server = createServer(async (req, res) => {
+  logbus.requestLogger(req, res);
   const url = new URL(req.url, 'http://127.0.0.1');
   try {
     // 内嵌 memory-eternal 面板（iframe 用 /embed/memory/；页面内部 API 用 /memory-eternal/）
@@ -2940,13 +2989,16 @@ const server = createServer(async (req, res) => {
     }
     if (!url.pathname.startsWith('/api/')) return await serveStatic(res, url.pathname);
     const state = await readState();
-    const open = url.pathname === '/api/ping' || url.pathname === '/api/agreement';
+    const open = url.pathname === '/api/ping' || url.pathname === '/api/agreement' || url.pathname.startsWith('/api/logs');
     if (!signed(state) && !open) return send(res, 403, { ok: false, error: 'agreement' });
     return await handleApi(req, res, url, state);
   } catch (e) {
     return send(res, 500, { ok: false, error: publicError(e) });
   }
 });
+
+process.on('uncaughtException', (e) => { logbus.error('uncaught', String((e && e.stack) || e)); });
+process.on('unhandledRejection', (e) => { logbus.error('unhandled', String((e && e.stack) || e)); });
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log('autokill-purge web: http://127.0.0.1:' + PORT);

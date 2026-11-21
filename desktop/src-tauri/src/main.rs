@@ -1,3 +1,6 @@
+// release 走 Windows GUI 子系统：不弹控制台黑框（debug 保留控制台方便看 panic）
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 // 梦神破甲 · autokill-purge 桌面壳（Tauri 2）
 //
 // 职责很薄：把一个**零依赖 Node 服务**拉起来，然后让 WebView 指向它。
@@ -116,12 +119,23 @@ fn spawn_server(root: &PathBuf, port: u16) -> Option<Child> {
         .current_dir(root)
         .env("PURGE_WEB_PORT", port.to_string())
         .env("PURGE_ROOT", root.to_string_lossy().to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdin(Stdio::null());
     #[cfg(windows)]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    // node 的 stdout/stderr 落文件（app\data\logs\node-<pid>.log）：桌面壳崩了也能查
+    let log_dir = root.join("data").join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join(format!("node-{}.log", std::process::id()));
+    match std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+        Ok(f) => {
+            match f.try_clone() {
+                Ok(f2) => { cmd.stdout(Stdio::from(f)); cmd.stderr(Stdio::from(f2)); }
+                Err(_) => { cmd.stdout(Stdio::from(f)); }
+            }
+        }
+        Err(_) => { cmd.stdout(Stdio::null()); cmd.stderr(Stdio::null()); }
     }
     cmd.spawn().ok()
 }
