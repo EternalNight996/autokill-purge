@@ -382,6 +382,8 @@ export async function hostStatus(dataDir) {
   }
   // app.asar 还在 = 桌面壳仍从 asar 里加载 dsh，resources/app 里的补丁一条都不生效
   const desktopSealed = desktopSealedNow(c);
+  // 文件布局之外再看一眼真实进程：asar 已让位但宿主没重启时，进程里还是旧代码
+  const processLoadedFrom = await detectHostLoadSource();
   const patches = (c.ALL_PATCHES || []).map((p) => {
     const tone = patchTone(statusMap[p.id] || 'unknown');
     return {
@@ -416,8 +418,9 @@ export async function hostStatus(dataDir) {
     hosts: hosts,
     primaryHost: primary,
     desktopSealed: desktopSealed,
-    // false = 补丁写进去了但不会被加载（asar 还没挪走）：界面必须提示「落地并重启宿主」
-    effective: !desktopSealed,
+    processLoadedFrom: processLoadedFrom,
+    // false = 补丁写进去了但不会被加载（asar 还没挪走，或挪走了但宿主没重启）：界面必须提示「落地并重启宿主」
+    effective: !desktopSealed && processLoadedFrom !== 'asar',
     dshHome: st.dsh_home,
     overridePath: st.override_path,
     overrideStatus: st.override_status,
@@ -732,6 +735,39 @@ function asidePathFor(asar) {
   return asar + '.dshpurge-aside';
 }
 
+// ---- 实际载入来源：文件布局 ≠ 当前进程加载的东西 --------------------------------
+//
+// `desktopSealed` 只说明「asar 还在不在」；真正决定补丁是否被加载的是**当前跑着的进程**。
+// 落地把 asar 挪走后，如果宿主没重启（或重启失败），进程里仍是旧 asar 的代码 ——
+// 这时 UI 说「已生效」就是误导。这里直接读进程命令行：含 app.asar → asar，含 resources/app → app。
+let loadSourceCache = { at: 0, value: null };
+const LOAD_SOURCE_TTL_MS = 5000;
+
+async function detectHostLoadSource() {
+  if (loadSourceCache.value && Date.now() - loadSourceCache.at < LOAD_SOURCE_TTL_MS) return loadSourceCache.value;
+  const value = await new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+        "(Get-CimInstance Win32_Process -Filter \"Name='DeepSeek Harness.exe'\" | Select-Object -ExpandProperty CommandLine) -join '`n'"], { windowsHide: true });
+      let buf = '';
+      child.stdout.on('data', (d) => { buf += d; });
+      child.on('error', () => finish('unknown'));
+      child.on('close', () => {
+        const t = String(buf || '').toLowerCase();
+        if (!t.trim()) return finish('not-running');
+        if (t.includes('app.asar')) return finish('asar');
+        if (t.includes('resources\\app') || t.includes('resources/app')) return finish('app');
+        return finish('unknown');
+      });
+      setTimeout(() => { try { child.kill(); } catch { /* ignore */ } finish('unknown'); }, 5000);
+    } catch { finish('unknown'); }
+  });
+  loadSourceCache = { at: Date.now(), value };
+  return value;
+}
+
 /** 只读：现在到底是不是「补丁写了但不生效」的状态 */
 export async function hostHandoffStatus() {
   const c = await core();
@@ -745,10 +781,13 @@ export async function hostHandoffStatus() {
     const aside = asidePathFor(asarPath);
     const appDir = join(dirname(asarPath), 'app');
     const asideExists = !!(aside && existsSync(aside));
+    const processLoadedFrom = await detectHostLoadSource();
     return {
       ok: true,
       sealed: sealed,                 // true = 需要落地
-      effective: !sealed,             // false = 桌面壳读的是 asar，补丁不生效
+      effective: !sealed && processLoadedFrom !== 'asar',  // false = 桌面壳读的是 asar，补丁不生效
+      // 文件布局与真实进程分开报：asar 让位了但进程没重启时，这里会是 'asar'（还没真正生效）
+      processLoadedFrom: processLoadedFrom,
       exe: handoff?.exe || (existsSync(DESKTOP_EXE_GUESS) ? DESKTOP_EXE_GUESS : null),
       asar: asarExists ? asarPath : null,
       asarPath: asarPath,             // 落地后这里指向已不存在的路径，仅作定位用

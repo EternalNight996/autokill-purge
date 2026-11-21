@@ -1576,7 +1576,7 @@ async function simpleHostAction(kind) {
       const u = data.uninstall || {};
       const freed = u.freedMB ? `已清 ${u.freedMB} MB 残留，` : "";
       const bad = (u.errors || []).length;
-      h.message = `卸载完成：${freed}${u.applied ? "宿主已还原，" : ""}${(u.stripped || []).length} 个步骤已走${bad ? "，有 " + bad + " 条警告" : ""}。重启 dsh 生效。`;
+      h.message = `卸载完成：${freed}${u.applied ? "宿主已按 asar 原件还原，" : ""}${(u.stripped || []).length} 个步骤已走${bad ? "，有 " + bad + " 条警告" : ""}。${u.restarted ? "宿主已重新拉起。" : "宿主若在运行，重启后确认。"}`;
     }
     toast(kind === "apply" ? "注入完成" : kind === "handoff" ? "已落地并重启宿主" : "卸载完成");
     h.lastResult = { kind: kind, ok: true, at: Date.now() };
@@ -1906,7 +1906,7 @@ function renderOpsFold() {
 function renderSimplePatchPicker() {
   const d = S.host.data;
   if (!d || d.available === false) {
-    return `<p class="hint">宿主补丁不可用：${esc((d && d.reason) || "本机未安装 dsh-purge")}</p>`;
+    return `<p class="hint">宿主补丁不可用：${esc((d && d.reason) || "补丁引擎缺失（web/patch-engine/vendor/core.js）")}</p>`;
   }
   const list = Array.isArray(d.patches) ? d.patches : [];
   const applied = list.filter((p) => p.status === "applied").length;
@@ -3094,7 +3094,8 @@ async function applyDelivery(variants) {
     if (d.handoff && d.handoff.ok === false) {
       return { message: `${base}，但落地失败（${d.handoff.note || d.handoff.error || "原因未知"}）：补丁写在 resources/app，桌面壳仍读 app.asar` };
     }
-    return { message: `${base}，重启 dsh 生效` };
+    if (d.handoffRequired) return { message: `${base}，但还没落地：桌面壳读的是 app.asar，点「落地并重启宿主」后才生效` };
+    return { message: `${base}，补丁已在当前加载的宿主里，重启 dsh 即生效` };
   }
   return null;
 }
@@ -3708,7 +3709,12 @@ function resultName(id) {
    ① 选模型（实时优先，没识别到就展开获取）→ ② 选方案 → ③ 一键注入/卸载/还原 → ④ 补丁清单（可收缩）→ ⑤ 生成载荷 */
 function flowToneBadge(p) {
   const tone = p.tone || (p.status === "applied" ? "ok" : p.status === "pending" ? "wait" : p.status === "missing_file" ? "fail" : "skip");
-  const label = p.statusZh || (tone === "ok" ? "已注入" : tone === "wait" ? "待注入" : tone === "fail" ? "失败" : "已跳过");
+  const sealed = !!(S.host.data && S.host.data.desktopSealed);
+  let label = p.statusZh || (tone === "ok" ? "已注入" : tone === "wait" ? "待注入" : tone === "fail" ? "失败" : "已跳过");
+  // 文件写了 ≠ 宿主在用：app.asar 还在时桌面壳读的是 asar，这些字节一个都不会被加载。
+  // 只在 sealed 时改口径，落地后照旧说「已注入」。
+  if (sealed && tone === "ok") label = "已写入 · 未生效";
+  else if (sealed && tone === "wait") label = "待写入";
   return `<span class="patch-state tone-${esc(tone)}">${esc(label)}</span>`;
 }
 
@@ -3812,7 +3818,7 @@ function renderFlowApplyStep() {
   const d = h.data;
   if (!d) return `<section class="section"><h2><span class="num">3</span>注入 / 卸载 / 还原</h2>${spinner("检查宿主状态…")}</section>`;
   if (d.available === false) {
-    return `<section class="section"><h2><span class="num">3</span>注入 / 卸载 / 还原</h2>${alertBox("这台机器的宿主侧用不了", (d && d.reason) || "本机没装 dsh-purge；破甲内容仍能生成。")}</section>`;
+    return `<section class="section"><h2><span class="num">3</span>注入 / 卸载 / 还原</h2>${alertBox("这台机器的宿主侧用不了", (d && d.reason) || "补丁引擎缺失：跑 node scripts/vendor-dsh-engine.mjs 把引擎 vendor 到 web/patch-engine/vendor（本仓库自带，不依赖外部 dsh-purge）。破甲内容仍能生成。")}</section>`;
   }
   const c = d.counts || {};
   const snaps = Array.isArray(d.snapshots) ? d.snapshots : [];
@@ -3858,7 +3864,9 @@ function renderFlowApplyStep() {
   };
   return `<section class="section" aria-labelledby="f-apply-h">
     <h2 id="f-apply-h"><span class="num">3</span>注入 / 卸载 / 还原
-      <span class="count">${fmtNum(c.applied || 0)}/${fmtNum(c.total || 0)} 已注入${c.failed ? ` · ${c.failed} 失败` : ""} · 备份 ${snaps.length}</span></h2>
+      <span class="count">${d.desktopSealed
+        ? `${fmtNum(c.applied || 0)}/${fmtNum(c.total || 0)} 已写入 · ${fmtNum(c.pending || 0)} 待写入 · 未生效（宿主读 app.asar）${c.failed ? ` · ${c.failed} 失败` : ""}${c.na ? ` · ${c.na} 跳过` : ""}`
+        : `${fmtNum(c.applied || 0)}/${fmtNum(c.total || 0)} 已注入并生效${c.failed ? ` · ${c.failed} 失败` : ""}`} · 备份 ${snaps.length}</span></h2>
     <div class="actions">
       <button type="button" class="primary ${btnTone("apply")}" data-simple-host="apply" title="写完补丁会顺带落地（挪走 app.asar）并重启桌面宿主——这步会断当前会话"${busy ? " disabled" : ""}>${toneText("apply", "一键注入")}</button>
       <button type="button" class="ghost ${btnTone("uninstall")}" data-simple-host="uninstall" title="按 app.asar 原件还原宿主文件，并清掉插件、注入块与 5 GB 级解包残留"${busy ? " disabled" : ""}>${toneText("uninstall", "一键卸载")}</button>
@@ -4087,7 +4095,9 @@ function renderFlowPatchList() {
   return `<section class="section">
     <details class="grp" data-group="flow:patches">
       <summary><span class="grp-title">补丁清单</span>
-        <span class="grp-hint">${fmtNum(c.applied || 0)} 已注入${c.failed ? ` · ${c.failed} 失败` : ""}${c.na ? ` · ${c.na} 跳过` : ""} · 共 ${fmtNum(c.total || 0)} 处</span></summary>
+        <span class="grp-hint">${d.desktopSealed
+          ? `${fmtNum(c.applied || 0)} 已写入 · ${fmtNum(c.pending || 0)} 待写入 · 未生效（宿主读 app.asar）${c.failed ? ` · ${c.failed} 失败` : ""}`
+          : `${fmtNum(c.applied || 0)} 已注入${c.failed ? ` · ${c.failed} 失败` : ""}${c.na ? ` · ${c.na} 跳过` : ""}`} · 共 ${fmtNum(c.total || 0)} 处</span></summary>
       <div class="grp-body">
         <div class="table-wrap" tabindex="0" role="region" aria-label="补丁清单">
           <table class="min"><thead><tr><th>补丁</th><th>原文</th><th>层</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>
@@ -4455,6 +4465,7 @@ function renderFlowExtraPanels() {
 }
 
 function hostStatusBadge(status) {
+  if (status === "written") return badge("已写入 · 未生效", "");
   if (status === "applied") return badge("已应用", "accent");
   if (status === "pending") return badge("待应用", "");
   if (status === "na") return badge("不适用", "");
@@ -4464,6 +4475,8 @@ function hostStatusBadge(status) {
 
 function hostCountsLine(d) {
   const c = d.counts || {};
+  // 密封包：文件写了但宿主读的是 asar，说「已应用」会让人以为生效了
+  if (d.desktopSealed) return `${c.applied || 0}/${c.total || 0} 已写入 · ${c.pending || 0} 待写入 · ${c.na || 0} 不适用 · 未生效（宿主读 app.asar）`;
   return `${c.applied || 0}/${c.total || 0} 已应用 · ${c.pending || 0} 待应用 · ${c.na || 0} 不适用`;
 }
 
@@ -4472,6 +4485,7 @@ function hostBadge() {
   if (!d) return badge("宿主破甲 · 检查中", "");
   if (d.available === false) return badge("宿主破甲 · 不可用", "");
   const c = d.counts || {};
+  if (d.desktopSealed) return badge(`宿主破甲 ${c.applied || 0}/${c.total || 0} · 未生效`, "");
   return badge(`宿主破甲 ${c.applied || 0}/${c.total || 0}`, c.pending ? "" : "accent");
 }
 
@@ -4721,7 +4735,7 @@ function renderHostSection() {
       <td class="mono">#${esc(String(p.id))}</td>
       <td>${esc(p.name)}</td>
       <td class="muted">${esc(p.layer || "")}</td>
-      <td>${hostStatusBadge(p.status)}</td>
+      <td>${hostStatusBadge(d.desktopSealed && p.status === "applied" ? "written" : p.status)}</td>
     </tr>`).join("");
   const msg = h.message ? (h.error ? alertBox(h.message, "") : okBox(h.message)) : "";
 
@@ -4769,12 +4783,12 @@ function renderHostSection() {
       <button type="button" class="ghost" data-host-action="restore"${snaps.length ? "" : " disabled"}>撤销上一次</button>
       <button type="button" class="ghost" data-host-action="factory">恢复出厂</button>
       <button type="button" class="ghost" data-host-action="apply">应用选中补丁</button>
-      <span class="hint">改宿主都要重启 dsh 才生效；每次写入前会先自动备份一份。</span>
+      <span class="hint">改宿主都要重启 dsh 才生效；若桌面壳仍读 app.asar（顶部有提示），要先「落地并重启宿主」——单重启没用。每次写入前会先自动备份一份。</span>
     </div>
     ${msg}
     ${invRows ? `<div class="card" style="margin-top:10px">${invRows}</div>` : ""}
     <p class="small muted" style="margin-top:8px">「恢复出厂」用官方 app.asar 原件覆盖被改文件（不依赖 .bak，本机实测 .bak 为 0）；「撤销上一次」用最近一份快照覆盖。</p>
-    <details class="s-fold" style="margin-top:10px"><summary>补丁清单 ${patchList.length} 条（已应用 ${appliedCount}）· 勾选后可只应用选中的</summary>
+    <details class="s-fold" style="margin-top:10px"><summary>补丁清单 ${patchList.length} 条（${d.desktopSealed ? "已写入" : "已应用"} ${appliedCount}${d.desktopSealed ? " · 未生效" : ""}）· 勾选后可只应用选中的</summary>
       <div class="table-wrap" tabindex="0" role="region" aria-label="宿主补丁清单">
         <table class="min"><thead><tr><th>选</th><th>#</th><th>补丁</th><th>层</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>
       </div>
@@ -4879,8 +4893,8 @@ async function hostAction(kind) {
     restore: "用最近一份快照覆盖宿主文件？覆盖前会自动再备份一份。改完要重启 dsh 才生效。",
     factory: "用官方 app.asar 原件覆盖被改的宿主文件？覆盖前会自动备份现在。改完要重启 dsh 才生效。",
     apply: pickedPatches.length
-      ? `只应用勾选的 ${pickedPatches.length} 条补丁？会改宿主文件，需要重启 dsh 才生效。还原只能整份还原（补丁共用 .bak）。`
-      : "一条都没勾 → 会应用全部 83 条补丁？会改宿主文件，需要重启 dsh 才生效。",
+      ? `只应用勾选的 ${pickedPatches.length} 条补丁？会改宿主文件；桌面壳仍读 app.asar 时，要落地并重启宿主才生效（单重启没用）。还原只能整份还原（补丁共用 .bak）。`
+      : "一条都没勾 → 会应用全部 83 条补丁？会改宿主文件；桌面壳仍读 app.asar 时，要落地并重启宿主才生效（单重启没用）。",
   }[kind];
   if (confirmText && !window.confirm(confirmText)) return;
   h.busy = true;
@@ -4896,7 +4910,9 @@ async function hostAction(kind) {
     } else if (kind === "restore") {
       data = await request("/api/host/restore", { method: "POST", body: { confirm: true, mode: "snapshot" } });
       if (!data || data.ok === false) throw payloadError(data, "恢复失败");
-      h.message = `已按快照 ${data.restored.id} 覆盖 ${fmtNum(data.restored.restored)} 个文件；覆盖前的状态另存为 ${data.guardSnapshot}。重启 dsh 生效。`;
+      h.message = `已按快照 ${data.restored.id} 覆盖 ${fmtNum(data.restored.restored)} 个文件；覆盖前的状态另存为 ${data.guardSnapshot}。${S.host.data && S.host.data.desktopSealed
+        ? "宿主仍从 app.asar 加载：需「落地并重启宿主」才会用上这份内容。"
+        : "重启 dsh 生效。"}`;
     } else if (kind === "factory") {
       data = await request("/api/host/factory", { method: "POST", body: { confirm: true } });
       if (!data || data.ok === false) throw payloadError(data, "恢复出厂失败");
@@ -4905,7 +4921,11 @@ async function hostAction(kind) {
       data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply", patches: pickedPatches } });
       if (!data || data.ok === false) throw payloadError(data, "应用失败");
       const r = data.result || {};
-      h.message = `已应用选中 ${fmtNum(r.selected || 0)}/${fmtNum(r.total || 0)} 条：新增 ${fmtNum(r.applied)} 个（${fmtNum(r.already)} 个本来就是最新）。${data.landed ? "asar 已让位、宿主已重启，补丁已生效。" : (r.restartRequired ? "重启 dsh 生效。" : "")}`;
+      h.message = `已应用选中 ${fmtNum(r.selected || 0)}/${fmtNum(r.total || 0)} 条：新增 ${fmtNum(r.applied)} 个（${fmtNum(r.already)} 个本来就是最新）。${data.landed
+        ? "asar 已让位、宿主已重启，补丁已生效。"
+        : (data.handoffRequired
+          ? "已写入 resources/app，但桌面壳仍读 app.asar —— 需点「落地并重启宿主」才生效（重启 dsh 没用）。"
+          : "补丁已在当前加载的宿主里，重启 dsh 即生效。")}`;
     }
     toast("完成");
     await loadHostStatus(true);
@@ -7956,8 +7976,14 @@ function railNoteHtml(text) {
 function railHostBadge(d) {
   const host = d.host || {};
   if (d.hostId === "dsh") {
-    if (host.effective) return { cls: "ok", text: "补丁生效中" };
-    return { cls: "", text: host.desktopSealed ? "未落地" : "待确认" };
+    if (host.effective) return host.processLoadedFrom === "not-running"
+      ? { cls: "ok", text: "已落地 · 宿主未运行" }
+      : { cls: "ok", text: "补丁生效中" };
+    // 别把「文件写了」说成「生效」：asar 还在时桌面壳读的是 asar，一条补丁都没被加载。
+    if (host.desktopSealed) return { cls: "warn", text: "已写入 · 未生效" };
+    // asar 已让位但进程还是旧 asar：落地做完了，只差宿主重启
+    if (host.processLoadedFrom === "asar") return { cls: "warn", text: "已落地 · 等宿主重启" };
+    return { cls: "", text: "待确认" };
   }
   return { cls: host.running ? "ok" : "", text: host.running ? "运行中" : "未运行" };
 }
@@ -8012,6 +8038,7 @@ function renderInjectRail() {
   const pending = p.pending || 0;
   const failed = p.failed || 0;
   const na = p.na || 0;
+  const sealed = !!(host && host.desktopSealed);
   const layers = Object.keys(p.byLayer || {});
   const layerRows = layers.map((l) => {
     const all = p.byLayer[l] || 0;
@@ -8024,7 +8051,8 @@ function renderInjectRail() {
   }).join("");
   const patchItems = (p.items || []).slice(0, 8).map((x) => {
     const bad = !x.applied && /fail|missing|error|失效/i.test(String(x.current || ""));
-    return '<li><span>' + esc(x.label || x.id) + '</span><em class="mini' + (bad ? " bad" : "") + '">' + (x.applied ? "已应用" : esc(x.current || "未应用")) + '</em></li>';
+    const on = x.applied ? (sealed ? "已写入" : "已应用") : (sealed ? "未写入" : "未应用");
+    return '<li><span>' + esc(x.label || x.id) + '</span><em class="mini' + (bad ? " bad" : "") + '">' + on + '</em></li>';
   }).join("");
   const plugRows = (pl.installed || []).map((x) =>
     '<div class="rail-plug"><span class="mono">' + esc(String(x.name).replace("autokill-purge-plugin", "autokill 插件")) + '</span><em>' +
@@ -8042,9 +8070,10 @@ function renderInjectRail() {
       + railStatsHtml(p.stats)
       + '</div>'
     : '<div class="rail-card">'
-      + '  <h3>' + esc(p.name || "宿主补丁") + ' <span class="mini">' + fmtNum(applied) + '/' + fmtNum(total) + ' ' + esc(p.unit || "") + '</span></h3>'
+      + '  <h3>' + esc(p.name || "宿主补丁") + ' <span class="mini">' + fmtNum(applied) + '/' + fmtNum(total) + ' ' + esc(p.unit || "") + (sealed ? ' · 未生效' : '') + '</span></h3>'
       + '  <div class="rail-bar"><i class="ok" style="width:' + railPct(applied, total) + '%"></i><i class="wait" style="width:' + railPct(pending, total) + '%"></i><i class="fail" style="width:' + railPct(failed, total) + '%"></i><i class="na" style="width:' + railPct(na, total) + '%"></i></div>'
-      + '  <div class="rail-kv"><span>已应用 / 待应用</span><span class="rail-num">' + fmtNum(applied) + ' / ' + fmtNum(pending) + '</span></div>'
+      + '  <div class="rail-kv"><span>' + (sealed ? '已写入 / 待写入' : '已应用 / 待应用') + '</span><span class="rail-num">' + fmtNum(applied) + ' / ' + fmtNum(pending) + '</span></div>'
+      + (sealed ? '  <div class="rail-kv"><span>生效</span><span class="rail-err mini">否 · 宿主读 app.asar，需「落地并重启宿主」</span></div>' : "")
       + (failed || na ? '  <div class="rail-kv"><span>失败 / 跳过</span><span class="rail-num">' + fmtNum(failed) + ' / ' + fmtNum(na) + '</span></div>' : "")
       + (layerRows ? '  <ul class="rail-list">' + layerRows + '</ul>' : "")
       + (patchItems ? '  <ul class="rail-list">' + patchItems + '</ul>' : "")

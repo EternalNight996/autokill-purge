@@ -2454,7 +2454,7 @@ async function handleApi(req, res, url, state) {
     }
     const errors = steps.filter((s) => s.ok === false);
     const freedMB = steps.find((s) => s.id === 'leftovers')?.freedMB || 0;
-    return send(res, 200, { ok: true, uninstall: { ok: errors.length === 0, applied: true, stripped: steps.map((s) => s.id), errors, steps, freedMB }, guardSnapshot: guard.id, restartRequired: true });
+    return send(res, 200, { ok: true, uninstall: { ok: errors.length === 0, applied: true, stripped: steps.map((s) => s.id), errors, steps, freedMB, restarted: wasLanded }, guardSnapshot: guard.id, restartRequired: !wasLanded });
   }
 
   // ---- 规则集 / 出口白名单 / 技能（原版面板另外三栏） -------------------------------

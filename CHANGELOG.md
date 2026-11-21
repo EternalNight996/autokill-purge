@@ -25,10 +25,20 @@
 - 卸载顺序修正：**已落地时先 `stopDesktopHost()`**（宿主正从 `resources/app` 加载，不退出就删不掉解包目录，也会出现"卸载完了补丁还在内存里"）→ 放回 asar → 按原件还原 → 清残留 → `restartDesktopHost()` 把桌面拉回来。新增导出 `stopDesktopHost()`。
 - 插件侧同步：`plugin/vendor/lib/uninstall.js` 的 `uninstallPurge()` 收尾调 `cleanHostLeftovers()`（`process.resourcesPath` 下的 prev 副本 / asar 让位副本 / 开机自启；不碰正在加载的 `resources/app`），删不掉只记警告不回滚卸载。
 
+### Fixed — 状态口径与实际一致（不再把「文件写了」说成「生效了」）
+- 破甲页顶部计数、补丁清单摘要、旧版注入面板计数/徽标、右侧栏徽标：密封状态下统一改成 **「已写入 · 未生效」**，落地后才说「已注入 / 已生效」。涉及 `hostCountsLine()`、`hostBadge()`、`hostStatusBadge()`、`flowToneBadge()`、`renderFlowApplyStep()`、`renderFlowPatchList()`、`railHostBadge()`。
+- **新增真实载入来源 `processLoadedFrom`**：`detectHostLoadSource()` 直接读桌面宿主进程命令行（含 `app.asar` → `asar`；含 `resources/app` → `app`；无进程 → `not-running`），5s 缓存。`effective` 现在 = `!sealed && processLoadedFrom !== 'asar'` —— asar 让位了但宿主没重启时，不会再谎报「生效中」。
+- 右侧栏「载入自」改用真实进程：`app.asar（未生效）` / `app.asar（已让位，等宿主重启）` / `resources/app（生效）` / `未运行`。
+- 修正一批「重启 dsh 生效」的误导文案（密封时单重启无效）：详细面板应用/快照恢复、简化流程应用结果、确认弹窗、旧面板提示，统一改为「桌面壳仍读 app.asar 时需落地并重启宿主」。
+- 卸载结果改为读后端的 `restarted`，不再统一写「重启 dsh 生效」。
+- 引擎缺失时的文案不再说「本机没装 dsh-purge」（引擎已内化），改为指向 `node scripts/vendor-dsh-engine.mjs`。
+
 ### Verified
 - `node test/host-restore.mjs` → 11/11；`test/ops-acceptance.mjs` → 40/40（只读）；`test/rail-host.mjs` → 15/15；`test/client-nav.mjs` → 17/17；`test/ui-error-red.mjs` → 24/24；`test/ops-reapply.mjs` → 80 PASS / 4 FAIL（4 条都断言"本机已落地"，当前机器是密封状态，环境不符，非本次改动引入）。
 - 实机：`GET /api/host/leftovers` 报 `count=15 totalMB=4976.9`；已手工回收 10 份 `app.dshpurge-prev*`（释放 4.48 GB，耗时 71.6s），回收后接口剩 `extracted-app + startup + 3×runtime = 498.5 MB`。
 - `POST /api/host/apply {land:false}` → `applied=61 already=13`，两份宿主 `pending=0 / hostWritten=true`，`pendingHandoff=true`。
+- 状态口径实测（本机密封态）：`/api/host/status` → `sealed=true effective=false processLoadedFrom=asar counts={applied:78,pending:0,na:5}`；`/api/host/handoff` 同源一致；`/api/inject/summary?host=dsh` 的「载入自」= `app.asar（未生效）`。
+- `test/rail-host.mjs` 15/15、`test/ui-error-red.mjs` 24/24、`test/client-nav.mjs` 17/17 在改完文案后复跑通过。
 
 ### Known
 - 落地（挪 asar + 重启宿主）仍未在本会话内实跑：它会结束当前 DSH 会话，按约定留给「一键注入」按钮触发。按钮此刻已可点（不再 disabled），失败时会把 `handoff.note` 原样显示在按钮下方。

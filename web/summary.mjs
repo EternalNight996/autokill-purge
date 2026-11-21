@@ -207,6 +207,16 @@ async function dshPayload(out, dataDir) {
     dshVersion = JSON.parse(readFileSync(join(resDir, 'app', 'dsh', 'package.json'), 'utf8')).version || null;
   } catch { dshVersion = null; }
 
+  // 「载入自」要报真实进程加载的来源，而不是文件布局：asar 让位了但宿主没重启时，
+  // 文件看是 resources/app，进程里其实还是旧 asar —— 那种情况说「生效」就是误导。
+  const loadFrom = st.processLoadedFrom
+    || (st.desktopSealed ? 'asar' : 'app');
+  const loadFromText = loadFrom === 'asar'
+    ? (st.desktopSealed ? 'app.asar（未生效）' : 'app.asar（已让位，等宿主重启）')
+    : loadFrom === 'app' ? 'resources/app（生效）'
+      : loadFrom === 'not-running' ? '未运行'
+        : '未知';
+
   out.host = {
     id: 'dsh',
     name: 'DSH',
@@ -217,12 +227,13 @@ async function dshPayload(out, dataDir) {
       { k: '主机', v: os.hostname() },
       { k: 'IP', v: localIPv4() || '无外网卡' },
       { k: 'DSH', v: dshVersion || '-' },
-      { k: '载入自', v: st.desktopSealed ? 'app.asar（未生效）' : 'resources/app（生效）' },
+      { k: '载入自', v: loadFromText },
       { k: '宿主根', v: (st.primaryHost && st.primaryHost.aiBase) || '—' },
     ]),
     surface: st.surface,
     dshHome: st.dshHome,
     desktopSealed: !!st.desktopSealed,
+    processLoadedFrom: loadFrom,
     effective: !!st.effective,
     baseline: st.baseline || null,
     hosts: (st.hosts || []).map((h) => ({ aiBase: h.aiBase, kind: h.kind, applied: h.applied, pending: h.pending, failed: h.failed, na: h.na, hostWritten: h.hostWritten })),
