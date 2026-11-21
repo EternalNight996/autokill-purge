@@ -455,7 +455,8 @@ function okBox(message, hint = "") {
 
 /** 软失败：注入/插件安装/记忆服务这类「第二次就成」的失败，用黄色提示 + 明确让用户再点一次 */
 function softFailBox(message, hint) {
-  const text = String(message || "");
+  const raw = String(message || "");
+  const text = raw.replace(/^[✓✔]\s*/, "");
   const soft = /失败|未完成|unreachable|回滚|超时|not ready/i.test(text);
   if (!soft) return okBox(text);
   return `<div class="alert warn" role="alert"><strong>${esc(text)}</strong><span class="hint">${
@@ -2403,7 +2404,7 @@ function renderSimpleOperation() {
           <div class="prog-meta"><span>${Math.round(pct)}% · ${esc(label)}</span>${prog.done ? "" : '<span class="mini">进行中…</span>'}</div>
         </div>`;
       })()}
-      ${b.deliveryResult && b.deliveryResult.message ? `<p class="s-result ok">✓ ${esc(b.deliveryResult.message)}</p>` : ""}
+      ${b.deliveryResult && b.deliveryResult.message ? softFailBox(b.deliveryResult.message) : ""}
       ${b.deliveryResult && b.deliveryResult.error ? `<p class="s-result bad">✗ ${esc(b.deliveryResult.error)}</p>` : ""}
     </form>
   </section>`;
