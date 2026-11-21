@@ -1556,17 +1556,19 @@ function simpleSteps() {
 
 /* 吃豆人式进度：注入/卸载时召唤一只小怪，沿轨道一路吃豆，位置=进度；吃完放大消失。
    2D canvas 实现（零依赖、离线可用、60fps 开销可忽略），不用 three.js。 */
-/* 注入/卸载的视觉爆炸 + 环形进度 HUD（零依赖 canvas）
-   前 1.5s：白闪 → 三层冲击波 → 28 道光柱 → 180 块碎片 → 中心大字
-   之后：环形进度 + 大数字 + 阶段文案，跟着真实 percent 走 */
+/* 注入/卸载：黑洞吸收 + 数据流吸入（零依赖 canvas）
+   · 中心黑洞：事件视界 + 光子环 + 三圈旋转吸积盘
+   · 四周 0/1/十六进制/补丁字符沿螺旋轨道被吸入，越近越快
+   · 外环 = 进度，中央百分比，下方阶段文案
+   · 虚拟进度：真实 percent 到达前平滑爬升（≤92%），真实值更大时接管 */
 const armorEater = {
-  cv: null, ctx: null, raf: 0, timer: 0, t0: 0, pct: 0, done: false, mode: 'inject',
-  shards: null, rays: null, frames: 0,
+  cv: null, ctx: null, raf: 0, timer: 0, t0: 0, pct: 0, virtual: 0, done: false, mode: 'inject',
+  bits: null, frames: 0, last: 0,
   start(mode) {
     try {
       this.stop();
       this.mode = mode === 'uninstall' ? 'uninstall' : 'inject';
-      this.pct = 0; this.done = false; this.frames = 0;
+      this.pct = 0; this.virtual = 0; this.done = false; this.frames = 0; this.fin = 0;
       const cv = document.createElement('canvas');
       cv.className = 'armor-eater';
       cv.width = window.innerWidth;
@@ -1575,27 +1577,19 @@ const armorEater = {
       this.cv = cv;
       this.ctx = cv.getContext('2d');
       this.t0 = performance.now();
+      this.last = this.t0;
       this.lastFrameAt = this.t0;
-      // 爆炸素材：一次生成，之后只按时间推进
-      const cx = cv.width / 2, cy = cv.height / 2;
-      this.shards = Array.from({ length: 180 }, () => {
-        const a = Math.random() * Math.PI * 2;
-        const sp = 2 + Math.random() * 16;
+      const CH = ['0', '1', '0x', 'FF', '7E', '#', '$', '//', '{}', '<>', '§', '补', '丁', '注', '入', '1.1.7'];
+      this.bits = Array.from({ length: 78 }, () => {
+        const r = 0.45 + Math.random() * 1.0;
         return {
-          a, sp, size: 3 + Math.random() * 9,
-          rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 0.5,
-          hue: 18 + Math.random() * 30, w: Math.random() * 0.5 + 0.5,
+          r, a: Math.random() * Math.PI * 2,
+          sp: 0.18 + Math.random() * 0.42,
+          ch: CH[Math.floor(Math.random() * CH.length)],
+          size: 9 + Math.random() * 8,
+          hue: Math.random(),
         };
       });
-      this.rays = Array.from({ length: 28 }, (_, k) => ({
-        a: (k / 28) * Math.PI * 2 + Math.random() * 0.06,
-        len: 0.25 + Math.random() * 0.55,
-        w: 1 + Math.random() * 3,
-      }));
-      try {
-        document.body.classList.add('armor-shake');
-        setTimeout(() => { try { document.body.classList.remove('armor-shake'); } catch { /* ignore */ } }, 520);
-      } catch { /* ignore */ }
       const loop = (t) => {
         this.lastFrameAt = performance.now();
         try { this.draw(t); } catch { /* keep alive */ }
@@ -1617,122 +1611,134 @@ const armorEater = {
     this.frames += 1;
     const ctx = this.ctx, cv = this.cv;
     if (!ctx || !cv) return;
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - (this.last || now)) / 1000);
+    this.last = now;
     const W = cv.width, H = cv.height;
     const cx = W / 2, cy = H / 2;
-    const e = (t - this.t0) / 1000;           // 已过秒数
-    const p = Math.max(0, Math.min(100, this.pct));
     const dark = this.mode === 'uninstall';
-    const hot = dark ? '255,90,50' : '255,150,40';
-    ctx.clearRect(0, 0, W, H);
+    const hot = dark ? '255,110,70' : '255,168,60';
+    const cool = dark ? '120,190,255' : '120,210,255';
+    const e = (t - this.t0) / 1000;
 
-    // 背景压暗（径向），让爆炸有对比
-    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.8);
-    bg.addColorStop(0, 'rgba(10,8,6,.72)');
-    bg.addColorStop(1, 'rgba(4,6,10,.86)');
+    // 虚拟进度：越接近 92 越慢，真实值来了就取大的
+    if (!this.done && this.virtual < 92) {
+      const gap = 92 - this.virtual;
+      this.virtual = Math.min(92, this.virtual + dt * (gap > 40 ? 22 : gap > 15 ? 9 : 3));
+    }
+    const p = this.done ? 100 : Math.max(this.pct, this.virtual);
+
+    ctx.clearRect(0, 0, W, H);
+    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.75);
+    bg.addColorStop(0, 'rgba(8,10,14,.78)');
+    bg.addColorStop(1, 'rgba(3,5,9,.9)');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
-    // 1) 白闪（0 ~ 0.14s）
-    if (e < 0.14) {
-      ctx.fillStyle = 'rgba(255,245,230,' + (0.9 * (1 - e / 0.14)).toFixed(3) + ')';
-      ctx.fillRect(0, 0, W, H);
-    }
+    const maxR = Math.min(W, H) * 0.42;
+    const RBH = Math.min(W, H) * 0.055 + 26;   // 事件视界半径
+    const speed = 0.6 + (p / 100) * 1.9;       // 进度越高，吸入越快
 
-    // 2) 三层冲击波（错峰扩散）
-    const rings = [[0.0, 1.0, 10], [0.06, 0.78, 7], [0.12, 0.55, 4]];
-    for (const [delay, speed, lw] of rings) {
-      const rt = e - delay;
-      if (rt <= 0 || rt > 1.5) continue;
-      const k = Math.min(1, rt / 1.2);
-      const r = k * Math.max(W, H) * 0.72 * speed;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(' + hot + ',' + (Math.max(0, 0.95 - k)).toFixed(3) + ')';
-      ctx.lineWidth = lw * (1 - k) + 0.8;
-      ctx.stroke();
-    }
-
-    // 3) 径向光柱
-    if (e < 0.9) {
-      const fade = Math.max(0, 1 - e / 0.9);
-      for (const ray of this.rays) {
-        const len = Math.max(W, H) * ray.len * (0.35 + e * 0.9);
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(cx + Math.cos(ray.a) * len, cy + Math.sin(ray.a) * len);
-        ctx.strokeStyle = 'rgba(' + hot + ',' + (0.5 * fade).toFixed(3) + ')';
-        ctx.lineWidth = ray.w * fade + 0.4;
-        ctx.stroke();
-      }
-    }
-
-    // 4) 碎片（带旋转与重力）
-    if (this.shards && e < 1.9) {
-      for (const s of this.shards) {
-        const travel = s.sp * e * 34;
-        const x = cx + Math.cos(s.a) * travel;
-        const y = cy + Math.sin(s.a) * travel + 0.5 * 260 * e * e;
-        const alpha = Math.max(0, 1 - e / 1.9);
-        if (alpha <= 0) continue;
+    // 1) 数据流：沿螺旋轨道被吸入
+    if (this.bits) {
+      for (const b of this.bits) {
+        b.r -= dt * b.sp * speed * 0.55;
+        b.a += dt * (1.6 / Math.max(0.08, b.r)) * 0.55 * speed;
+        if (b.r < 0.035) {
+          b.r = 1.45;
+          b.a = Math.random() * Math.PI * 2;
+          b.ch = b.ch; // 保留字符，形成持续字符流
+        }
+        const x = cx + Math.cos(b.a) * b.r * maxR;
+        const y = cy + Math.sin(b.a) * b.r * maxR * 0.62;
+        const near = Math.max(0, Math.min(1, 1 - b.r / 1.45));
+        const alpha = 0.12 + near * 0.75;
         ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(s.rot + s.vr * e * 10);
-        ctx.fillStyle = 'rgba(' + hot + ',' + (alpha * 0.95).toFixed(3) + ')';
-        ctx.fillRect(-s.size / 2, -s.size / 4, s.size, s.size * 0.5 * s.w);
+        ctx.font = '600 ' + (b.size * (1 - near * 0.35)).toFixed(1) + 'px ui-monospace, Consolas, monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = b.hue > 0.5
+          ? 'rgba(' + cool + ',' + alpha.toFixed(3) + ')'
+          : 'rgba(' + hot + ',' + alpha.toFixed(3) + ')';
+        ctx.fillText(b.ch, x, y);
         ctx.restore();
       }
     }
 
-    // 5) 中心大字
-    if (e < 1.1) {
-      const k = Math.min(1, e / 0.16);
-      const sc = 1.7 - 0.7 * k;
-      const label = dark ? 'PURGE' : 'INJECT';
+    // 2) 吸积盘：三圈椭圆弧，反向旋转
+    for (let k = 0; k < 3; k += 1) {
+      const rr = RBH * (1.55 + k * 0.42);
+      const rot = e * (0.9 - k * 0.22) * (k % 2 ? -1 : 1);
       ctx.save();
-      ctx.translate(cx, cy - 6);
-      ctx.scale(sc, sc);
-      ctx.font = '800 46px system-ui, "Microsoft YaHei", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(' + hot + ',' + Math.max(0, 1 - e / 1.05).toFixed(3) + ')';
-      ctx.fillText(label, 0, 0);
-      ctx.restore();
-    }
-
-    // 6) 环形进度 HUD（0.85s 后淡入）
-    const hudAlpha = Math.min(1, Math.max(0, (e - 0.85) / 0.35));
-    if (hudAlpha > 0 && !this.done) {
-      const R = Math.min(W, H) * 0.11 + 46;
-      ctx.save();
-      ctx.globalAlpha = hudAlpha;
-      ctx.lineWidth = 9;
-      ctx.strokeStyle = 'rgba(255,255,255,.10)';
-      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
-      const a0 = -Math.PI / 2;
-      const a1 = a0 + (p / 100) * Math.PI * 2;
-      ctx.strokeStyle = 'rgba(' + hot + ',.95)';
-      ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.arc(cx, cy, R, a0, a1); ctx.stroke();
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.font = '700 40px ui-monospace, Consolas, monospace';
-      ctx.fillStyle = 'rgba(255,240,225,.96)';
-      ctx.fillText(Math.round(p) + '%', cx, cy - 4);
-      const note = (S && S.host && S.host.progress && S.host.progress.note)
-        || (dark ? '正在卸载…' : '正在写入补丁…');
-      ctx.font = '500 13px system-ui, "Microsoft YaHei", sans-serif';
-      ctx.fillStyle = 'rgba(232,238,246,.7)';
-      ctx.fillText(String(note).slice(0, 40), cx, cy + R * 0.55);
-      ctx.restore();
-    }
-
-    // 7) 完成：一圈爆闪后收尾
-    if (this.done) {
-      const k = Math.min(1, this.fin = (this.fin || 0) + 0.02);
+      ctx.translate(cx, cy);
+      ctx.rotate(rot);
       ctx.beginPath();
-      ctx.arc(cx, cy, k * Math.min(W, H) * 0.7, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(' + hot + ',' + (0.9 * (1 - k)).toFixed(3) + ')';
-      ctx.lineWidth = 14 * (1 - k) + 1;
+      ctx.ellipse(0, 0, rr, rr * 0.52, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(' + (k % 2 ? cool : hot) + ',' + (0.36 - k * 0.08).toFixed(3) + ')';
+      ctx.lineWidth = 2.4 - k * 0.6;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 3) 视界本体 + 光子环
+    const hole = ctx.createRadialGradient(cx, cy, RBH * 0.15, cx, cy, RBH);
+    hole.addColorStop(0, 'rgba(0,0,0,1)');
+    hole.addColorStop(0.72, 'rgba(2,3,6,1)');
+    hole.addColorStop(1, 'rgba(12,10,8,.98)');
+    ctx.beginPath();
+    ctx.arc(cx, cy, RBH, 0, Math.PI * 2);
+    ctx.fillStyle = hole;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, cy, RBH, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(' + hot + ',.9)';
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, RBH * 1.075, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.10 + Math.abs(Math.sin(e * 3)) * 0.16).toFixed(3) + ')';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    // 4) 外环进度 + 百分比
+    const RingR = maxR * 1.16;
+    ctx.beginPath();
+    ctx.arc(cx, cy, RingR, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,.07)';
+    ctx.lineWidth = 7;
+    ctx.stroke();
+    const a0 = -Math.PI / 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, RingR, a0, a0 + (p / 100) * Math.PI * 2);
+    ctx.strokeStyle = 'rgba(' + hot + ',.95)';
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 ' + Math.round(Math.min(W, H) * 0.05) + 'px ui-monospace, Consolas, monospace';
+    ctx.fillStyle = 'rgba(255,244,232,.97)';
+    ctx.fillText(Math.round(p) + '%', cx, cy - 2);
+
+    const note = (S && S.host && S.host.progress && S.host.progress.note)
+      || (dark ? '正在卸载…' : '正在写入补丁…');
+    ctx.font = '500 13px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(232,238,246,.66)';
+    ctx.fillText(String(note).slice(0, 42), cx, cy + RBH + 34);
+
+    // 5) 完成：视界收缩成一点 + 一圈外扩
+    if (this.done) {
+      this.fin = (this.fin || 0) + 0.03;
+      const k = Math.min(1, this.fin);
+      ctx.beginPath();
+      ctx.arc(cx, cy, RBH * (1 - k) + 2, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,.9)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx, cy, maxR * (0.3 + k * 0.9), 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(' + hot + ',' + (0.8 * (1 - k)).toFixed(3) + ')';
+      ctx.lineWidth = 10 * (1 - k) + 1;
       ctx.stroke();
       if (k >= 1) this.stop();
     }
@@ -1740,7 +1746,6 @@ const armorEater = {
   stop() {
     if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
     if (this.timer) { clearInterval(this.timer); this.timer = 0; }
-    try { document.body.classList.remove('armor-shake'); } catch { /* ignore */ }
     if (this.cv) { try { this.cv.remove(); } catch { /* ignore */ } this.cv = null; this.ctx = null; }
   },
 };
