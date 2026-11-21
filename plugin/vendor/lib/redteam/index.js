@@ -6,7 +6,7 @@
  *   2. 随包技能落到 `$DSH_HOME/redteam/skills`，预设用 `dshHomePath` 指向它
  *   3. 已有用户预设时只修失效路径 / 旧包名，不整份覆盖
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -612,8 +612,43 @@ export function apply(ctx) {
       })
   }
 
+  // ---- 多装备预设：勾了几个装备，就把对应目录也注册进 DSH 模式下拉 ----
+  // 之前只注册 redteam 一个，磁盘上多出来的 recon / lateral 永远不出现在下拉里。
+  // 这里扫 .agent-presets/*，把非底座目录逐个 register；目录变化时自动重注册。
+  const extraReleases = []
+  const clearExtras = async () => {
+    while (extraReleases.length) {
+      const fn = extraReleases.pop()
+      try { await fn() } catch { /* ignore */ }
+    }
+  }
+  const registerExtras = async (registry) => {
+    await clearExtras()
+    const root = userPresetRoot()
+    let dirs = []
+    try {
+      dirs = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)
+    } catch { return }
+    for (const name of dirs) {
+      if (name === REDTEAM_PRESET_ID || name === 'liangshen' || name === 'unrestricted') continue
+      const dir = join(root, name)
+      if (!existsSync(join(dir, 'agent.cordis.yml'))) continue
+      try {
+        const def = readPresetDefinition(name, dir)
+        if (!Array.isArray(def.plugins) || !def.plugins.length) continue
+        extraReleases.push(await registry.register(def))
+        writeStatus({ ok: true, phase: 'extra-registered', extra: name, extraName: def.name })
+        ctx.logger?.info?.('redteam-mode: 额外预设已注册 %s（%s）', name, def.name || '')
+      } catch (error) {
+        ctx.logger?.warn?.('redteam-mode: extra preset %s failed: %s', name, error && error.message ? error.message : String(error))
+      }
+    }
+  }
+
   ctx.effect(() => {
     let tries = 0
+    let watcher = null
+    let pending = null
     const tick = () => {
       if (closed) return true
       tries += 1
@@ -623,6 +658,20 @@ export function apply(ctx) {
         return false
       }
       registerOnce(registry)
+      void registerExtras(registry)
+      // 装备同步进来后（新建目录）自动重注册，不必重启宿主
+      if (!watcher) {
+        try {
+          watcher = watch(userPresetRoot(), { persistent: false }, () => {
+            clearTimeout(pending)
+            pending = setTimeout(() => {
+              const reg = softRegistry()
+              if (reg) void registerExtras(reg)
+            }, 900)
+          })
+          if (typeof watcher.unref === 'function') watcher.unref()
+        } catch { /* 目录还不存在就下次 */ }
+      }
       return true
     }
     let timer
@@ -649,7 +698,10 @@ export function apply(ctx) {
       closed = true
       if (timer) clearInterval(timer)
       if (stop) clearTimeout(stop)
+      if (watcher) { try { watcher.close() } catch { /* ignore */ } }
+      if (pending) clearTimeout(pending)
       void undeclare()
+      void clearExtras()
     }
   }, 'autokill-purge-redteam: declare agent preset')
 

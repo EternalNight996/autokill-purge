@@ -313,7 +313,7 @@ const S = {
     delivery: "host-patch", // 破甲方式：host-patch（默认）/ payload / host-prompt / memory
     deliveryResult: null,
     botIds: [],              // MengBot 多选目标 bot（方案）
-    equipPresets: [],        // 破甲台「一并装备」多选的预设 id
+    equipPresets: ["redteam"], // 默认选中梦神攻装（可改）
     equipItemsMap: {},       // { presetId: [itemId...] } 每个预设下勾选的能力项
     withEquip: false,        // 生成时一并发放「装备」页当前那份装备（破甲 + 装备一次做完）
     advice: [],
