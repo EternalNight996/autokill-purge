@@ -1571,7 +1571,13 @@ async function simpleHostAction(kind) {
     let data;
     if (kind === "apply") {
       const plugins = h.withPlugin ? ["autokill-purge-plugin"] : [];
-      data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply", plugins } });
+      // 唯一一份补丁清单：勾了就只注入勾的；一个都不勾 = 只补还没写入的（与技术模式同一语义）
+      let picked = $$("#page [data-patch-pick]").filter((el) => el.checked).map((el) => el.dataset.patchPick);
+      if (!picked.length) {
+        const st = await request("/api/host/status").catch(() => null);
+        picked = ((st && st.patches) || []).filter((p) => p.status === "pending").map((p) => p.id);
+      }
+      data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply", plugins, patches: picked } });
       if (!data || data.ok === false) throw payloadError(data, "注入失败");
       const added = (data.result && data.result.applied) || 0;
       const already = (data.result && data.result.already) || 0;
@@ -1914,7 +1920,7 @@ function renderOpsFold() {
     const vsum = Array.isArray(b.variants) && b.variants.length
       ? `<p class="hint">最近一次已生成 ${b.variants.length} 条载荷；想查看载荷把破甲方式切到「载荷破甲」。</p>`
       : "";
-    body = note + vsum + renderSimplePatchPicker();
+    body = note + vsum;
   } else if (mode === "ak-patch") {
     const note = b.deliveryResult
       ? (b.deliveryResult.error ? alertBox("梦神破甲没成功", b.deliveryResult.error) : okBox(b.deliveryResult.message))
@@ -2379,6 +2385,7 @@ function renderSimpleBreach() {
   // 不再加大标题块：破甲台自带标题，重复的「破甲 / 破甲」只会占地方
   $("#page").innerHTML = `
     ${renderSimpleOperation()}
+    ${renderFlowPatchList()}
     ${renderOpsFold()}
     <details class="adv-fold"${S.simple.advOpen ? " open" : ""}><summary>高级：模型目录 / 任务类型与输出 / 就绪与二进制</summary>
       ${S.simple.advOpen
@@ -4159,12 +4166,18 @@ function renderFlowPatchList() {
   const d = S.host.data;
   if (!d || d.available === false) return "";
   const c = d.counts || {};
-  const rows = (d.patches || []).map((p) => `<tr>
+  // 唯一一份补丁清单（普通模式与技术模式共用）：带勾选，一键注入按这里的选择走。
+  // 已写入的不默认勾（重复写没意义），未写入的默认勾上；一个都不勾 = 只补未应用的。
+  const rows = (d.patches || []).map((p) => {
+    const checked = p.tone === "ok" ? "" : " checked";
+    return `<tr>
+      <td><input type="checkbox" data-patch-pick="${esc(String(p.id))}"${checked} aria-label="选择补丁 ${esc(String(p.id))}"></td>
       <td>${esc(p.nameZh || "（未收录中文）")}</td>
       <td class="mono small muted">${esc(p.name)}</td>
       <td class="muted small">${esc(p.layer || "")}</td>
       <td>${flowToneBadge(p)}</td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
   return `<section class="section">
     <details class="grp" data-group="flow:patches">
       <summary><span class="grp-title">补丁清单</span>
@@ -4173,7 +4186,7 @@ function renderFlowPatchList() {
           : `${fmtNum(c.applied || 0)} 已注入${c.failed ? ` · ${c.failed} 失败` : ""}${c.na ? ` · ${c.na} 跳过` : ""}`} · 共 ${fmtNum(c.total || 0)} 处</span></summary>
       <div class="grp-body">
         <div class="table-wrap" tabindex="0" role="region" aria-label="补丁清单">
-          <table class="min"><thead><tr><th>补丁</th><th>原文</th><th>层</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>
+          <table class="min"><thead><tr><th>选</th><th>补丁</th><th>原文</th><th>层</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>
         </div>
       </div>
     </details>
