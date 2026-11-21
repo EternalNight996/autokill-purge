@@ -8436,7 +8436,8 @@ function instructionsRailText(x) {
 function injectionRailText(inj) {
   if (!inj) return "—";
   if (!inj.ready) return "未写入（没有 prompt-inject.md）";
-  const tk = inj.estTokensPerRequest ? " · 约 " + fmtNum(inj.estTokensPerRequest) + " tokens/请求" : "";
+  // token 估算属于技术口径：普通模式不露，避免首屏出现技术字段
+  const tk = (inj.estTokensPerRequest && modeIsTechnical()) ? " · 约 " + fmtNum(inj.estTokensPerRequest) + " tokens/请求" : "";
   if (inj.effective) return "生效中 · 最近 " + inj.checked + " 个会话已注入" + tk;
   const older = inj.withInjection ? "，其中 " + inj.withInjection + " 个曾注入" : "";
   return "文件在 · 未生效（最近 " + inj.checked + " 个会话里没有 project_instructions" + older + "）" + tk;
