@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { ensureMemHome, memEnv } from '../scripts/mem-home.mjs';
 import { resolveMemRoot } from '../lib/mem-runtime.mjs';
 
-const DEFAULTS = { port: 7989, dbName: 'mem-purge', entryHash: '#/breach' };
+const DEFAULTS = { port: 17890, dbName: 'mem-purge', entryHash: '#/breach' };
 const NAME_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 
 function home() {

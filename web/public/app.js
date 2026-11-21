@@ -1006,8 +1006,8 @@ const THEMES = [
 const THEME_KEY = "ap.theme";
 const THEME_VER_KEY = "ap.themeVer";
 // 默认主题的「代」：换默认值时 +1，老浏览器里存着的旧选择会被一次性迁到新默认
-const THEME_DEFAULT_VER = "2";
-const DEFAULT_THEME = "matrix"; // 矩阵绿·扫描线（生化危机那套）
+const THEME_DEFAULT_VER = "3";
+const DEFAULT_THEME = "ops"; // 军工橙（默认皮肤）
 
 /* ---------------------------------------------------- 破甲台：宿主探测与方案 */
 async function loadHostInfo() {
@@ -1553,6 +1553,61 @@ function simpleSteps() {
   }).join("")}</ol>`;
 }
 
+/* 破甲台「一键注入」的炸裂特效：全屏 canvas，冲击波 + 220 粒子 + 闪光，1.7s 自毁（零依赖，不用 three.js） */
+function armorBlast(anchor) {
+  try {
+    if (typeof document === "undefined" || !document.body) return;
+    const rect = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+    const cx = rect && rect.width ? rect.left + rect.width / 2 : window.innerWidth / 2;
+    const cy = rect && rect.height ? rect.top + rect.height / 2 : window.innerHeight / 2;
+    const cv = document.createElement("canvas");
+    cv.className = "armor-blast";
+    cv.width = window.innerWidth;
+    cv.height = window.innerHeight;
+    document.body.appendChild(cv);
+    const ctx = cv.getContext("2d");
+    if (!ctx) { cv.remove(); return; }
+    const parts = [];
+    for (let i = 0; i < 220; i += 1) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 2.5 + Math.random() * 9;
+      parts.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, g: 120 + Math.random() * 70 });
+    }
+    const t0 = performance.now();
+    const DUR = 1700;
+    const frame = (t) => {
+      const p = Math.min(1, (t - t0) / DUR);
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      // 冲击波环（两道，错开扩散）
+      for (const [k, w] of [[1, 7], [0.62, 3]]) {
+        const r = p * Math.max(cv.width, cv.height) * 0.75 * k;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255,138,30,${Math.max(0, 0.85 - p)})`;
+        ctx.lineWidth = w * (1 - p) + 1;
+        ctx.stroke();
+      }
+      // 粒子
+      for (const q of parts) {
+        q.x += q.vx; q.y += q.vy; q.vx *= 0.985; q.vy *= 0.985; q.life -= 0.013;
+        if (q.life <= 0) continue;
+        ctx.beginPath();
+        ctx.arc(q.x, q.y, 2.2 * q.life + 0.4, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,${Math.round(q.g)},60,${Math.max(0, q.life)})`;
+        ctx.fill();
+      }
+      // 中心闪光
+      if (p < 0.2) {
+        ctx.fillStyle = `rgba(255,170,80,${0.35 * (1 - p / 0.2)})`;
+        ctx.fillRect(0, 0, cv.width, cv.height);
+      }
+      if (p < 1) requestAnimationFrame(frame);
+      else cv.remove();
+    };
+    requestAnimationFrame(frame);
+  } catch { /* 特效失败不影响注入 */ }
+}
+
 /* 落地/卸载进度：runner 每步写 data/logs/handoff-progress.json，这里轮询成进度条 */
 function stopProgressPolling() {
   if (S.host.progressTimer) { clearTimeout(S.host.progressTimer); S.host.progressTimer = null; }
@@ -1579,6 +1634,7 @@ async function simpleHostAction(kind) {
   // 一键 = 点一次就执行。不再有「再点一次确认」这一段：
   // 落地已改成独立 runner（先回响应、约 3 秒后再杀宿主），所以不需要靠二次点击来防误触。
   h.pendingAction = null;
+  if (kind === "apply") armorBlast(document.querySelector('[data-simple-host="apply"]'));
   h.busy = true;
   h.busyKind = kind;
   h.message = "";
@@ -3167,6 +3223,7 @@ async function applyDelivery(variants) {
       : "已写入宿主提示词层（prompt-inject.md），重启 dsh 生效" };
   }
   if (mode === "host-patch") {
+    armorBlast(document.getElementById("sBuild"));
     const picked = $$("#page [data-patch-pick]").filter((el) => el.checked).map((el) => el.dataset.patchPick);
     // 默认方式：没勾选就只补「还没应用」的那些（已应用的自动跳过，不会重写文件）
     let patches = picked;
