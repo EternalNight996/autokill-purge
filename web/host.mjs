@@ -351,8 +351,7 @@ export async function hostStatus(dataDir) {
   // 每个宿主根单独统计：桌面 resources/app 才是「会被加载」的那份；npm-global / profile 副本只是陪跑。
   // 以前这里只读 gatherState().patch_status（= 当前进程判定的那一个宿主），
   // 结果界面绿了一片，桌面壳读的 app.asar 却一条都没改 —— 假绿就是这么来的。
-  const hosts = [];
-  for (const base of gather.bases || []) {
+  const hosts = await Promise.all((gather.bases || []).map(async (base) => {
     let statusMap = {};
     try { statusMap = (await c.patchStatus(base)) || {}; } catch { statusMap = {}; }
     const cnt = { applied: 0, pending: 0, failed: 0, na: 0 };
@@ -365,7 +364,7 @@ export async function hostStatus(dataDir) {
     }
     let hostWritten = false;
     try { hostWritten = c.hostCleanMarkersPresent(base); } catch { hostWritten = false; }
-    hosts.push({
+    return {
       aiBase: base,
       kind: (base.indexOf('\\resources\\app\\') >= 0 || base.indexOf('/resources/app/') >= 0) ? 'desktop' : 'package',
       applied: cnt.applied,
@@ -373,8 +372,8 @@ export async function hostStatus(dataDir) {
       failed: cnt.failed,
       na: cnt.na,
       hostWritten: hostWritten,
-    });
-  }
+    };
+  }));
   const primary = hosts.find((h) => h.kind === 'desktop') || hosts[0] || null;
   let statusMap = st.patch_status || {};
   if (primary) {
