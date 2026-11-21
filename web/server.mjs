@@ -12,6 +12,7 @@ import { execFile } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { HOME, dshHome, appDataDir, localAppDataDir, platformInfo, isWin, DESKTOP_IMAGE } from './platform.mjs';
 import { run as breakRun, BreakError } from '../break/break.mjs';
 import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, restartDesktopHost, stopDesktopHost, scheduleHandoff, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listPurgeLeftovers, cleanPurgeLeftovers, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
 import { readRuntime as readPluginRuntime, writeRuntime as writePluginRuntime, runtimeFile as pluginRuntimeFile } from '../plugin/lib/host-bridge.js';
@@ -437,11 +438,11 @@ function useGuideMarkdown() {
 // ---- AutoKill 的提示词层（%APPDATA%\autokill\prompt-inject.md）------------------
 // AutoKill 与 DSH 同构：每次会话把 prompt-inject.md 注入到最前面，所以「提示词层」对它同样成立。
 function autoKillPromptPath() {
-  const appData = process.env.APPDATA || join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+  const appData = appDataDir();
   return join(appData, 'autokill', 'prompt-inject.md');
 }
 function autoKillInstalled() {
-  const local = join(process.env.LOCALAPPDATA || '', 'Programs', 'AutoKill', 'autokill.exe');
+  const local = join(localAppDataDir(), 'Programs', 'AutoKill', 'autokill.exe');
   const pf = join(process.env.ProgramFiles || 'C:\\Program Files', 'AutoKill', 'autokill.exe');
   const pf86 = join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'AutoKill', 'autokill.exe');
   return existsSync(local) || existsSync(pf) || existsSync(pf86);
@@ -489,7 +490,7 @@ function akCliPath() {
   // 安装位可能在 %LOCALAPPDATA%\Programs\AutoKill，也可能在 Program Files。
   // 两处都装了时用「最新的那份」：升级后旧目录常残留，按优先级选会一直读到旧版。
   const cands = [
-    join(process.env.LOCALAPPDATA || '', 'Programs', 'AutoKill', 'autokill-cli.exe'),
+    join(localAppDataDir(), 'Programs', 'AutoKill', 'autokill-cli.exe'),
     join(process.env.ProgramFiles || 'C:\\Program Files', 'AutoKill', 'autokill-cli.exe'),
     join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'AutoKill', 'autokill-cli.exe'),
   ];
@@ -501,7 +502,7 @@ function akCliPath() {
   })[0];
 }
 function akConfigPath() {
-  return join(process.env.APPDATA || join(process.env.USERPROFILE || '', 'AppData', 'Roaming'), 'autokill', 'config.toml');
+  return join(appDataDir(), 'autokill', 'config.toml');
 }
 /** AutoKill 桌面端在跑的时候会持有内存配置，CLI 改完文件可能被它覆盖 —— 探测出来提示用户 */
 function akAppRunning() {
@@ -1545,6 +1546,8 @@ async function handleApi(req, res, url, state) {
       outputChoices: OUTPUT_CHOICES, taskPresets: TASK_PRESETS,
       // 私有部署：入口 + 库名 + 端口（来自 data/deploy.json，可在设置页一键切换）
       deploy: deployInfo(),
+      // 平台事实：Windows / macOS / Linux、主目录、桌面安装根（排障与跨平台支持矩阵都靠它）
+      platform: platformInfo(),
     });
   }
   if (p === '/api/models/live' && method === 'GET') {
@@ -2045,7 +2048,7 @@ async function handleApi(req, res, url, state) {
 
   // ---- 宿主探测（破甲台的宿主选择用）：本地装没装、什么版本、带什么料 ----
   if (p === '/api/hosts' && method === 'GET') {
-    const home = process.env.USERPROFILE || process.env.HOME || '';
+    const home = HOME;
     const hosts = [];
     // DSH：看桌面 profile 与 dsh-purge 插件（宿主注入依赖后者）
     const dshProfile = join(home, '.dsh', 'profiles', 'desktop');

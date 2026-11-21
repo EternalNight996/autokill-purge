@@ -36,7 +36,10 @@ ok('1c. 插件段适用且 bundles 有值', dsh.j.plugins && dsh.j.plugins.appli
 ok('1d. 能力段适用且 7 项', dsh.j.capabilities && dsh.j.capabilities.applicable === true && dsh.j.capabilities.total === 7, 'total=' + (dsh.j.capabilities && dsh.j.capabilities.total));
 ok('1e. host.rows 有 DSH 版本行', (dsh.j.host.rows || []).some((r) => r.k === 'DSH'));
 ok('1f. 注入探针字段齐全', !!dsh.j.injection && typeof dsh.j.injection.ready === 'boolean' && Array.isArray(dsh.j.injection.sessions));
-ok('1g. 探针给出每请求 token 估算', Number(dsh.j.injection.estTokensPerRequest) > 4000, 'est=' + (dsh.j.injection && dsh.j.injection.estTokensPerRequest));
+// 有注入文件才谈 token；文件不在时探针应明确给 null（而不是 0，那会假装"没消耗"）
+const inj1g = dsh.j.injection || {};
+const gOk = inj1g.file ? Number(inj1g.estTokensPerRequest) > 4000 : inj1g.estTokensPerRequest === null;
+ok('1g. 探针给出每请求 token 估算（无注入文件时为 null）', gOk, 'file=' + (inj1g.file ? 'yes' : 'none') + ' est=' + inj1g.estTokensPerRequest);
 const newest = (dsh.j.injection.sessions || [])[0] || null;
 ok('1i. 指令层字段齐全', !!dsh.j.injection.instructions && typeof dsh.j.injection.instructions.hasBlock === 'boolean', 'hasBlock=' + (dsh.j.injection.instructions && dsh.j.injection.instructions.hasBlock));
 ok('1j. 指令层给 inRecentSessions', !!dsh.j.injection.instructions && typeof dsh.j.injection.instructions.inRecentSessions === 'boolean');

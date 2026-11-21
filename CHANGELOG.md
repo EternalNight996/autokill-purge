@@ -1221,3 +1221,34 @@ node test/acceptance.mjs             → 21/21 PASS
 - `/api/memory/stats` → ok（182 张卡）；`/api/host/status` → 83 条、process=app。
 - 静态资源版本号已换（`/app.js?v=…`），`DEFAULT_THEME="ops"`、`armorBlast` 均在产物中。
 - `test/ui-error-red.mjs` 24/24。
+
+## [1.2.0] — 2026-11-22（正式版：跨平台 + 界面重构 + 黑洞特效）
+
+### Added
+- **跨平台支持**：新增 `web/platform.mjs` 平台适配层，统一主目录、应用数据目录、DSH 桌面安装根、npm 全局根、进程结束（`taskkill` / `pkill`）与进程枚举（`tasklist` / `ps`）。
+  - 去掉全部写死路径（`C:/Users/Administrator/...`），换机器/换用户名不再失效。
+  - `/api/state` 新增 `platform` 字段：`platform / arch / home / dshHome / appData / desktopRoots / windowsOnly`。
+  - `package.json` 声明 `os: [win32, darwin, linux]`；`DSH_DESKTOP_ROOT`、`DSH_HOME`、`DSH_DESKTOP_EXE` 可显式覆盖。
+- **黑洞注入特效**：注入/卸载时的暗黑黑洞（视界 + 光子环 + 引力粒子 + 拖尾），随进度从 0.55× 长到 1.2×，结束整体缩放到 0。
+  - 预加载：boot 即建好 canvas / 上下文 / 粒子池，点击实测 11.5ms 出首帧。
+  - 虚拟进度：真实 percent 到达前平滑爬升到 92%，不再长时间停在 0%。
+- **装备预设同步**：勾选装备即写入 `~/.dsh/.agent-presets` 并注册进 DSH 模式下拉（插件侧新增 `registerExtras()` + 目录 watch，900ms 自动重注册）。
+
+### Changed
+- **界面重构**：普通模式与技术模式统一工序 —— 破甲台（方式 / 装备 / 补丁）→ 一键注入 / 一键卸载 → 补丁清单 → 高级折叠。
+  - 补丁清单合并为唯一一份（带勾选，两模式共用）。
+  - 规则集 / 出口白名单 / 实时模型 / 提示词正文编辑器移入设置页。
+  - 默认皮肤改为军工橙（`DEFAULT_THEME = "ops"`），旧偏好一次性迁移。
+  - 默认装备选中「梦神攻装」。
+- 软失败（插件安装失败 / 记忆服务 unreachable / 回滚）改为黄色警告并提示重试，不再显示成绿色成功。
+
+### Fixed
+- 卸载走完整链路：还原宿主 → 清解包残留 → 移除插件 → 独立 runner 重启，卸载后「梦神装甲」条目消失。
+- 一键注入 / 卸载按钮与进度条状态同步（点击即变「卸载中… / 处理中…」，进度条 0% 时走条纹动画）。
+- 记忆库空白：`deploy.json` 缺失时默认端口 7989 → 17890（与服务实际端口一致）。
+- 重启宿主全程 `windowsHide`，不再弹终端窗口。
+- `hostStatus` 的两个宿主探测改并发，首屏少等约 1.3s。
+
+### Tests
+- 新增 `test/armor-motion.mjs`（8 条断言）：预加载、首帧耗时、rAF 帧数增长、画面像素变化、完成态、无异常。
+- `inject-summary` 的 token 估算断言改为环境感知（无 `prompt-inject.md` 时为 null）。

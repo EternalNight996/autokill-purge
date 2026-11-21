@@ -12,13 +12,19 @@ import { existsSync, renameSync, writeFileSync, appendFileSync, readFileSync, rm
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import net from 'node:net';
+import { desktopInstallRoots, desktopExeOf, DESKTOP_IMAGE, killImage, isWin, listProcessCommandLines } from '../web/platform.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
 const RES = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources';
 const ASAR = RES + '/app.asar';
 const ASIDE = RES + '/app.asar.dshpurge-aside';
-const EXE = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/DeepSeek Harness.exe';
+const EXE = (() => {
+  for (const root of desktopInstallRoots()) {
+    try { const p = desktopExeOf(root); if (p && existsSync(p)) return p; } catch { /* next */ }
+  }
+  return process.env.DSH_DESKTOP_EXE || (isWin ? 'C:/Program Files/DeepSeek Harness/DeepSeek Harness.exe' : '');
+})();
 const LOG = join(ROOT, 'data', 'logs', 'handoff-runner.log');
 const OUT = join(ROOT, 'data', 'logs', 'handoff-runner.json');
 const PROG = join(ROOT, 'data', 'logs', 'handoff-progress.json');
@@ -55,7 +61,9 @@ function ps(cmd) {
   });
 }
 async function hostProcs() {
-  const out = await ps("(Get-CimInstance Win32_Process -Filter \"Name='DeepSeek Harness.exe'\" | Select-Object -ExpandProperty CommandLine) -join '||'");
+  const out = isWin
+    ? await ps("(Get-CimInstance Win32_Process -Filter \"Name='" + DESKTOP_IMAGE + "'\" | Select-Object -ExpandProperty CommandLine) -join '||'")
+    : await listProcessCommandLines(DESKTOP_IMAGE);
   const lines = out.split('||').map((s) => s.trim()).filter(Boolean);
   const low = lines.map((l) => l.toLowerCase());
   return {
@@ -90,9 +98,9 @@ await sleep(DELAY);
 
 try {
   progress('kill-host', 10, '结束宿主');
-  await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe'], { windowsHide: true }, () => r()));
+  await killImage(DESKTOP_IMAGE);
   await sleep(2500);
-  await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe', '/F'], { windowsHide: true }, () => r()));
+  await killImage(DESKTOP_IMAGE, { force: true });
   let p = await hostProcs();
   for (let i = 0; i < 40 && p.count; i++) { await sleep(500); p = await hostProcs(); }
   if (p.count) finish({ ok: false, error: 'host_still_running', remaining: p.count });
@@ -170,7 +178,7 @@ try {
 
   if (MODE === 'land' && !healthy) {
     progress('rollback', 95, '健康检查失败，回滚');
-    await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe', '/F'], { windowsHide: true }, () => r()));
+    await killImage(DESKTOP_IMAGE, { force: true });
     await sleep(2500);
     try { renameSync(ASIDE, ASAR); } catch (e) { log('rollback rename failed: ' + (e && e.message)); }
     spawn(EXE, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();

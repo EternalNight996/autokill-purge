@@ -20,6 +20,10 @@ import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  HOME, dshHome, desktopInstallRoots, resourcesDirOf, desktopExeOf, DESKTOP_IMAGE,
+  killImage, listProcessCommandLines, isWin, platformInfo, npmGlobalRoots, appDataDir,
+} from './platform.mjs';
 
 const HERE_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -31,9 +35,9 @@ const DSH_PURGE_CANDIDATES = ENGINE_DISABLED ? [] : [
   process.env.DSH_PURGE_ENGINE || VENDORED_ENGINE,   // 1) 本仓库 vendor（默认）
   VENDORED_ENGINE,
   // 2) 以下仅为「有就用」的兜底，不是依赖：vendor 在就不会看它们
-  'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/plugins/dsh-purge',
-  join(process.env.USERPROFILE || '', '.dsh/profiles/desktop/node_modules/dsh-purge'),
-  join(process.env.USERPROFILE || '', '.dsh/profiles/web/node_modules/dsh-purge'),
+  ...desktopInstallRoots().map((r) => join(resourcesDirOf(r), 'plugins', 'dsh-purge')),
+  join(dshHome(), 'profiles/desktop/node_modules/dsh-purge'),
+  join(dshHome(), 'profiles/web/node_modules/dsh-purge'),
 ];
 
 /** 补丁清单（catalog.json）候选位置；环境变量 DSH_PATCH_CATALOG 可指定单文件 */
@@ -41,10 +45,22 @@ const CATALOG_CANDIDATES = [
   process.env.DSH_PATCH_CATALOG || '',
   join(HERE_DIR, 'patch-engine', 'catalog.json'),   // 本仓库自带
   join(HERE_DIR, '..', 'patches', 'catalog.json'),
-  join(process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh'), 'patches', 'catalog.json'),
+  join(dshHome(), 'patches', 'catalog.json'),
 ];
-const ASAR_PATH = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app.asar';
-const APP_DIR = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app';
+/** 桌面安装根：按平台探测（Windows 的 LOCALAPPDATA、macOS 的 .app/Contents、Linux 的 /opt），
+ *  不再写死某台机器的绝对路径。DSH_DESKTOP_ROOT 可显式指定。 */
+export function desktopResources() {
+  for (const root of desktopInstallRoots()) {
+    try {
+      const res = resourcesDirOf(root);
+      if (res && existsSync(res)) return { root, resources: res };
+    } catch { /* 继续试下一个 */ }
+  }
+  return { root: '', resources: '' };
+}
+const DESKTOP = desktopResources();
+const ASAR_PATH = DESKTOP.resources ? join(DESKTOP.resources, 'app.asar') : '';
+const APP_DIR = DESKTOP.resources ? join(DESKTOP.resources, 'app') : '';
 // 控制台是 web 进程，但宿主可以是同一台机器上的桌面壳：
 // 显式给引擎一个桌面壳入口，避免 officialShellMain() 因 surface!==desktop 直接返回空。
 try { if (existsSync(join(APP_DIR, 'lib', 'main.js')) && !process.env.DSH_PURGE_DESKTOP_MAIN) process.env.DSH_PURGE_DESKTOP_MAIN = join(APP_DIR, 'lib', 'main.js'); } catch { /* ignore */ }
@@ -270,9 +286,9 @@ export async function asarVersion() {
 
 async function diskDshVersion() {
   const candidates = [
-    'C:/Users/Administrator/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/package.json',
-    join(process.env.USERPROFILE || '', '.dsh/profiles/web/node_modules/@deepseek-ai/dsh/package.json'),
-    join(process.env.USERPROFILE || '', '.dsh/profiles/desktop/node_modules/@deepseek-ai/dsh/package.json'),
+    ...npmGlobalRoots().map((r) => join(r, '@deepseek-ai/dsh/package.json')),
+    join(dshHome(), 'profiles/web/node_modules/@deepseek-ai/dsh/package.json'),
+    join(dshHome(), 'profiles/desktop/node_modules/@deepseek-ai/dsh/package.json'),
   ];
   for (const p of candidates) {
     if (existsSync(p)) {
@@ -730,7 +746,7 @@ export async function hostInventoryAvailable() {
 // 上游 dsh-purge 的 apply 末尾就是 restartSealedDesktopIfNeeded() 干这件事；
 // autokill-purge 的旧 apply 只有 applyPatchesAllHosts()，缺的正是这一步。
 
-const DESKTOP_EXE_GUESS = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/DeepSeek Harness.exe';
+const DESKTOP_EXE_GUESS = desktopExeOf(DESKTOP.root) || (isWin ? '' : '');
 
 function asidePathFor(asar) {
   return asar + '.dshpurge-aside';
@@ -750,8 +766,10 @@ async function detectHostLoadSource() {
     let done = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
     try {
-      const child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-        "(Get-CimInstance Win32_Process -Filter \"Name='DeepSeek Harness.exe'\" | Select-Object -ExpandProperty CommandLine) -join '`n'"], { windowsHide: true });
+      const child = spawn(isWin ? 'powershell' : 'ps', isWin
+        ? ['-NoProfile', '-NonInteractive', '-Command',
+          "(Get-CimInstance Win32_Process -Filter \"Name='" + DESKTOP_IMAGE + "'\" | Select-Object -ExpandProperty CommandLine) -join '`n'"]
+        : ['-Ao', 'args'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
       let buf = '';
       child.stdout.on('data', (d) => { buf += d; });
       child.on('error', () => finish('unknown'));
@@ -846,20 +864,28 @@ function runDetached(cmd, args) {
  * 现在杀完显式轮询到进程消失，再让调用方去改名。
  */
 async function imageStillRunning(image) {
-  return new Promise((resolve) => {
-    try {
-      const child = spawn('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/FO', 'CSV', '/NH'], { windowsHide: true });
-      let buf = '';
-      child.stdout.on('data', (d) => { buf += d; });
-      child.on('error', () => resolve(false));
-      child.on('close', () => {
-        const text = String(buf || '').toLowerCase();
-        resolve(text.includes(image.toLowerCase()));
-      });
-    } catch {
-      resolve(false);
+  try {
+    if (!isWin) {
+      const psText = await listProcessCommandLines(image);
+      return !!psText.trim();
     }
-  });
+    return await new Promise((resolve) => {
+      try {
+        const child = spawn('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/FO', 'CSV', '/NH'], { windowsHide: true });
+        let buf = '';
+        child.stdout.on('data', (d) => { buf += d; });
+        child.on('error', () => resolve(false));
+        child.on('close', () => {
+          const text = String(buf || '').toLowerCase();
+          resolve(text.includes(image.toLowerCase()));
+        });
+      } catch {
+        resolve(false);
+      }
+    });
+  } catch {
+    return false;
+  }
 }
 
 async function waitForHostExit(image, timeoutMs = 25000) {
@@ -874,9 +900,9 @@ async function waitForHostExit(image, timeoutMs = 25000) {
 async function killDesktopHost(exe) {
   if (!exe) return { ok: false, error: 'no_exe' };
   const image = basename(exe);
-  const soft = await runDetached('taskkill', ['/IM', image]);
+  const soft = await killImage(image);
   await new Promise((r) => setTimeout(r, 2000));
-  const hard = await runDetached('taskkill', ['/IM', image, '/F']);
+  const hard = await killImage(image, { force: true });
   const exited = await waitForHostExit(image, 25000);
   return { ok: exited.ok, soft: soft, hard: hard, image: image, tree: false, exited: exited };
 }
@@ -1051,7 +1077,9 @@ export async function restoreHostAsar() {
 // 口径：卸载 = 回到没装过。凡是本工具自己造出来的副本/入口，必须在卸载收尾里清掉并回读确认。
 const RESOURCES_DIR = dirname(ASAR_PATH);
 /** 开机自启快捷方式（install-desktop / launch.mjs 装进去的那个） */
-const STARTUP_LNK = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'autokill-purge.lnk');
+const STARTUP_LNK = isWin
+  ? join(appDataDir(), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'autokill-purge.lnk')
+  : '';
 
 /** 递归量一个文件/目录的字节数；量不到按 0 算（清理不因统计失败而中止） */
 async function pathBytes(p) {
@@ -1079,7 +1107,7 @@ function mb(n) {
 
 /** 只读：当前还能清掉哪些残留（UI 在「一键卸载」旁边展示体积） */
 export async function listPurgeLeftovers() {
-  const home = process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
+  const home = dshHome();
   const items = [];
   // 1) 落地/解包留下的整包副本
   let names = [];
@@ -1118,7 +1146,7 @@ export async function listPurgeLeftovers() {
  * keepExtractedApp=true 时保留 resources/app（例如只想清副本、还想继续用补丁）。
  */
 export async function cleanPurgeLeftovers({ keepExtractedApp = false } = {}) {
-  const home = process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
+  const home = dshHome();
   const items = [];
   const drop = async (id, p, kind, note = '') => {
     const before = await pathBytes(p);
@@ -1288,7 +1316,7 @@ export async function uninstallHostPurge() {
 
 // ---- 注入提示词（~/.dsh/prompt-inject.md）：原版面板的「提示词」那一栏 --------------
 function overridePath() {
-  return join(process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh'), 'prompt-inject.md');
+  return join(dshHome(), 'prompt-inject.md');
 }
 
 /** 内置默认（照搬 dsh-purge 1.1.71 的那份，去掉 HTML 注释头） */
@@ -1352,10 +1380,7 @@ async function backupPromptFile(dataDir, tag) {
   return dir;
 }
 
-/** 本机 DSH 主目录 */
-function dshHome() {
-  return process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
-}
+/** 本机 DSH 主目录（实现见 platform.mjs 的 dshHome） */
 
 /** 原版面板其他几栏的现状：规则集 / 技能 / 工具库 / 出口白名单 */
 export async function hostInventory() {
