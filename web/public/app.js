@@ -1590,32 +1590,42 @@ const armorEater = {
     ctx.fillStyle = "rgba(6,8,12,.55)";
     ctx.fillRect(0, 0, W, H);
     // 轨道
-    const y = H * 0.62;
-    const x0 = W * 0.08, x1 = W * 0.92;
-    ctx.strokeStyle = dark ? "rgba(255,120,90,.25)" : "rgba(255,150,40,.25)";
+    // 满屏波浪路径：怪物沿曲线跑（不是固定在底部直线），豆子撒在路径上
+    const pathAt = (tt) => ({
+      x: W * (0.06 + 0.88 * tt),
+      y: H * (0.5 + Math.sin(tt * Math.PI * 3.2) * 0.22),
+    });
+    ctx.beginPath();
+    for (let i = 0; i <= 80; i += 1) {
+      const pt = pathAt(i / 80);
+      if (i) ctx.lineTo(pt.x, pt.y); else ctx.moveTo(pt.x, pt.y);
+    }
+    ctx.strokeStyle = dark ? "rgba(255,120,90,.18)" : "rgba(255,150,40,.18)";
     ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(x0, y + 34); ctx.lineTo(x1, y + 34); ctx.stroke();
-    // 豆子：14 颗，按进度被吃
-    const beans = 14;
+    ctx.stroke();
+    // 豆子 18 颗，按进度被吃
+    const beans = 18;
     const eaten = Math.round((p / 100) * beans);
     for (let i = 0; i < beans; i += 1) {
       if (i < eaten) continue;
-      const bx = x0 + ((x1 - x0) * i) / (beans - 1);
+      const pt = pathAt(i / (beans - 1));
       ctx.beginPath();
-      ctx.arc(bx, y + 34, 4, 0, Math.PI * 2);
+      ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
       ctx.fillStyle = dark ? "rgba(255,140,110,.85)" : "rgba(255,190,90,.9)";
       ctx.fill();
     }
-    // 怪物位置：注入从左到右，卸载从右到左
+    // 怪物位置：注入沿路径正向，卸载反向
     const prog = this.done ? 1 : p / 100;
-    const mx = dark ? x1 - (x1 - x0) * prog : x0 + (x1 - x0) * prog;
+    const at = dark ? pathAt(1 - prog) : pathAt(prog);
+    const ahead = dark ? pathAt(Math.max(0, 1 - prog - 0.01)) : pathAt(Math.min(1, prog + 0.01));
+    const dir = (ahead.x - at.x) >= 0 ? 1 : -1;
     const tsec = (t - this.t0) / 1000;
     const mouth = 0.18 + Math.abs(Math.sin(tsec * 9)) * 0.32;
     const scale = this.done ? 1 + Math.min(1, this.fin / 700) * 0.6 : 1;
     const R = 22 * scale;
     ctx.save();
-    ctx.translate(mx, y);
-    ctx.scale(dark ? -1 : 1, 1);
+    ctx.translate(at.x, at.y);
+    ctx.scale(dir, 1);
     ctx.beginPath();
     ctx.moveTo(0, 0);
     ctx.arc(0, 0, R, mouth * Math.PI, (2 - mouth) * Math.PI);
@@ -1628,16 +1638,16 @@ const armorEater = {
     ctx.fillStyle = "#101418";
     ctx.fill();
     ctx.restore();
-    // 百分比 + 当前阶段（请求还在跑时也有东西看）
+    // 百分比 + 阶段（固定在底部，不跟路径重叠）
     ctx.font = "600 28px ui-monospace, Consolas, monospace";
     ctx.textAlign = "center";
     ctx.fillStyle = dark ? "rgba(255,150,120,.95)" : "rgba(255,180,80,.95)";
-    ctx.fillText(Math.round(p) + "%", W / 2, y - 46);
+    ctx.fillText(Math.round(p) + "%", W / 2, H - 96);
     const note = (S.host && S.host.progress && S.host.progress.note)
       || (dark ? "正在卸载…" : "正在写入补丁…");
     ctx.font = "500 13px system-ui, 'Microsoft YaHei', sans-serif";
     ctx.fillStyle = "rgba(232,238,246,.62)";
-    ctx.fillText(String(note).slice(0, 60), W / 2, y + 72);
+    ctx.fillText(String(note).slice(0, 60), W / 2, H - 64);
     // 完成：放大淡出
     if (this.done) {
       this.fin += 16;
@@ -1709,6 +1719,16 @@ function armorBlast(anchor) {
 function stopProgressPolling() {
   if (S.host.progressTimer) { clearTimeout(S.host.progressTimer); S.host.progressTimer = null; }
 }
+/** 没有真正的进度在跑时，收掉吃豆人和 0% 占位（提前返回/无待注入项时用） */
+function stopEaterIfIdle() {
+  try {
+    if (!S.host || !S.host.progressTimer) {
+      armorEater.stop();
+      if (S.host) S.host.progress = null;
+    }
+  } catch { /* ignore */ }
+}
+
 function startProgressPolling(mode) {
   stopProgressPolling();
   // 点击时就已经 start 过：这里复用，别把怪物重置回 0%
@@ -1823,6 +1843,7 @@ async function simpleHostAction(kind) {
   } finally {
     h.busy = false;
     h.busyKind = null;
+    stopEaterIfIdle();
     renderPage();
   }
 }
@@ -3103,6 +3124,7 @@ async function simpleBuild() {
     S.simple.buildError = { kind: "failed", message: simpleReason(e) };
   } finally {
     b.building = false;
+    stopEaterIfIdle();
     if (!modeIsTechnical() && S.tab === "breach") renderPage();
   }
 }
