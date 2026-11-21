@@ -30,6 +30,18 @@ npx autokill-purge            # 或：npm i -g autokill-purge && autokill-purge
 装完打开 `http://127.0.0.1:8792`。零依赖（只用 Node 标准库），Windows 桌面宿主可一键「落地并重启」。
 
 ## 🎯 它到底做什么
+## 🖥 平台支持
+
+| 平台 | 控制台 | 宿主补丁（DSH 桌面） | 说明 |
+|---|---|---|---|
+| **Windows 10/11** | ✅ | ✅ 完整 | 主开发平台：asar 落地、WMI 脱离进程树、启动项快捷方式 |
+| **macOS** | ✅ | ✅ 基础 | 自动探测 `.app/Contents/Resources`，用 `pkill` 结束宿主 |
+| **Linux** | ✅ | ✅ 基础 | 自动探测 `/opt/DeepSeek Harness`、`~/.local/share/deepseek-harness` |
+
+平台差异集中在 `web/platform.mjs`：主目录、应用数据目录、桌面安装根、npm 全局根、进程结束与枚举。
+覆盖变量：`DSH_HOME`（数据目录）、`DSH_DESKTOP_ROOT`（桌面安装根）、`DSH_DESKTOP_EXE`（可执行文件）。
+Windows 专属能力（注册表、启动项快捷方式、WMI 脱离进程树）在其它平台自动跳过并明确降级。
+
 
 模型「不肯干」通常不是一句话的事，而是**四层闸门**叠在一起：
 

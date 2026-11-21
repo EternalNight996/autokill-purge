@@ -30,6 +30,18 @@ npx autokill-purge            # or: npm i -g autokill-purge && autokill-purge
 Then open `http://127.0.0.1:8792`. Zero dependencies (Node stdlib only). On Windows desktop hosts there is a one-click "land &amp; restart" (moves `app.asar` aside so `resources\app` gets loaded).
 
 ## 🎯 What it actually does
+## 🖥 Platform support
+
+| Platform | Console | Host patching (DSH desktop) | Notes |
+|---|---|---|---|
+| **Windows 10/11** | ✅ | ✅ Full | Primary platform: asar handoff, WMI process detach, startup shortcut |
+| **macOS** | ✅ | ✅ Basic | Auto-detects `.app/Contents/Resources`, kills the host via `pkill` |
+| **Linux** | ✅ | ✅ Basic | Auto-detects `/opt/DeepSeek Harness`, `~/.local/share/deepseek-harness` |
+
+Platform differences live in `web/platform.mjs`: home dir, app-data dir, desktop install roots, npm global roots, process kill/list.
+Overrides: `DSH_HOME`, `DSH_DESKTOP_ROOT`, `DSH_DESKTOP_EXE`.
+Windows-only capabilities (registry, startup shortcut, WMI process detach) are skipped with an explicit fallback elsewhere.
+
 
 A model refusing to work is rarely one sentence — four gate layers stack up:
 
