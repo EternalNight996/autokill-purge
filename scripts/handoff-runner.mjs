@@ -8,7 +8,7 @@
 //
 // 每一步都写 data/logs/handoff-progress.json，前端轮询它显示进度条。
 import { spawn, execFile } from 'node:child_process';
-import { existsSync, renameSync, writeFileSync, appendFileSync } from 'node:fs';
+import { existsSync, renameSync, writeFileSync, appendFileSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import net from 'node:net';
@@ -107,7 +107,32 @@ try {
   }
 
   if (MODE === 'uninstall') {
-    progress('restore-files', 50, '按 asar 原件还原宿主文件');
+    // 插件必须在这里删：宿主已停，node_modules 里的文件不再被 mmap 占用；
+    // 只靠控制台进程内删，Windows 上大概率 EBUSY，用户重启 DSH 就会「插件还在」。
+    progress('plugin-remove', 45, '从 profile 移除 autokill-purge-plugin');
+    try {
+      const prof = join(process.env.USERPROFILE || '', '.dsh', 'profiles', 'desktop');
+      const pkgPath = join(prof, 'package.json');
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+        let changed = false;
+        for (const k of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+          if (pkg[k] && Object.prototype.hasOwnProperty.call(pkg[k], 'autokill-purge-plugin')) { delete pkg[k]['autokill-purge-plugin']; changed = true; }
+        }
+        const b = pkg.dsh && pkg.dsh.profile && pkg.dsh.profile.bundles;
+        if (Array.isArray(b)) {
+          const n = b.filter((x) => x !== 'autokill-purge-plugin');
+          if (n.length !== b.length) { pkg.dsh.profile.bundles = n; changed = true; }
+        }
+        if (changed) writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+      }
+      rmSync(join(prof, 'node_modules', 'autokill-purge-plugin'), { recursive: true, force: true });
+      progress('plugin-removed', 50, '插件已从 profile 移除');
+    } catch (e) {
+      log('plugin remove failed: ' + (e && e.message));
+    }
+
+    progress('restore-files', 55, '按 asar 原件还原宿主文件');
     const web = await import(pathToFileURL(join(ROOT, 'web', 'host.mjs')).href);
     let restored = null;
     try {

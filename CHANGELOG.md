@@ -1191,3 +1191,13 @@ node test/acceptance.mjs             → 21/21 PASS
 - `/`、`/breach`、`/nope` 均返回 200 + `text/html`（改前 `/nope` 是 404）。
 - `/api/state` → `deploy.owner = {"name":"YG","codename":"梦神","display":"梦神","line":"业主：梦神"}`。
 - `node --check` client.js / server.mjs / owner.mjs 全通过。
+
+## [1.1.25-beta.12] — 2026-11-22（静态资源版本化：旧页面缓存导致「按钮还是老的」）
+
+### Fixed
+- 前端页面被浏览器缓存时，按钮仍是旧文案、没有进度条、点了也不走新逻辑（用户看到「一键卸载补丁层」这种早已不存在的按钮）。`serveStatic()` 现在给 `index.html` 里的引用注入 mtime 版本号（`/app.js?v=<mtime>`、`/style.css?v=…`），HTML 响应改为 `no-store, no-cache, must-revalidate`。
+- `handoff-runner --mode=uninstall` 增加 **profile 插件移除**：宿主停止后删 `~/.dsh/profiles/desktop/node_modules/autokill-purge-plugin`、清 `dependencies`/`dsh.profile.bundles` 里的登记。之前只在控制台进程内删，Windows 上文件被 mmap，重启 DSH 插件就「还在」。
+
+### Verified
+- `curl http://127.0.0.1:8792/` → `src="/app.js?v=1795…"`、`href="/style.css?v=…"`、`cache-control: no-store, no-cache, must-revalidate`。
+- `node --check` server.mjs / handoff-runner.mjs 通过。

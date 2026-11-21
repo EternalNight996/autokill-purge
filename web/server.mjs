@@ -1302,12 +1302,33 @@ const TYPES = {
   '.md': 'text/markdown; charset=utf-8',
 };
 
+/** 给 index.html 里的静态引用加 mtime 版本号：浏览器缓存里的旧 app.js 不可能再被用到 */
+async function versionedHtml() {
+  const dir = join(HERE, 'public');
+  let html = await readFile(join(dir, 'index.html'), 'utf8');
+  for (const f of ['app.js', 'logs.js', 'style.css', 'logs.css']) {
+    try {
+      const st = await stat(join(dir, f));
+      const v = Math.round(st.mtimeMs);
+      const re = new RegExp('(["/])' + f.replace(/\./g, '\\.') + '(["])', 'g');
+      html = html.replace(re, '$1' + f + '?v=' + v + '$2');
+    } catch { /* 缺文件就不加版本 */ }
+  }
+  return html;
+}
+
 async function serveStatic(res, pathname) {
   const rel = pathname === '/' ? '/index.html' : pathname;
   try {
     const file = join(HERE, 'public', rel.replace(/\.\./g, ''));
     const data = await readFile(file);
     const ext = rel.slice(rel.lastIndexOf('.'));
+    if (ext === '.html') {
+      const html = await versionedHtml();
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store, no-cache, must-revalidate' });
+      res.end(html);
+      return;
+    }
     res.writeHead(200, { 'content-type': TYPES[ext] || 'application/octet-stream', 'cache-control': 'no-store' });
     res.end(data);
   } catch {
@@ -1316,8 +1337,8 @@ async function serveStatic(res, pathname) {
     const hasExt = /\.[a-z0-9]{1,6}$/i.test(rel);
     if (!hasExt) {
       try {
-        const html = await readFile(join(HERE, 'public', 'index.html'));
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        const html = await versionedHtml();
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store, no-cache, must-revalidate' });
         res.end(html);
         return;
       } catch { /* 落回 404 */ }
