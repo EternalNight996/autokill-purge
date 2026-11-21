@@ -47,3 +47,6 @@ _probe/
 desktop/node_modules/
 desktop/src-tauri/target/
 desktop/src-tauri/node/node.exe
+
+dist/
+
