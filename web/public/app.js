@@ -2993,11 +2993,16 @@ function equipInlineSummary() {
 }
 function equipInlineBlock(idPrefix) {
   const b = S.breach;
+  // 跟着实际选择走：没选装备就不勾、且禁用；选了才允许勾（默认随选择打开）
+  const hasEquip = currentEquipPresets().length > 0;
+  const checked = !!b.withEquip && hasEquip;
   return `<details class="s-fold"><summary>一并装备（当前 ${esc(equipInlineSummary())} → ${esc(hostTargetName(S.hostTarget))}）</summary>
     <label class="pick-row" style="padding:6px 0">
-      <input type="checkbox" id="${esc(idPrefix)}WithEquip"${b.withEquip ? " checked" : ""} aria-label="生成时一并发放装备">
+      <input type="checkbox" id="${esc(idPrefix)}WithEquip"${checked ? " checked" : ""}${hasEquip ? "" : " disabled"} aria-label="生成时一并发放装备">
       <span class="grow"><span class="t">生成时一并发放这份装备</span>
-        <span class="s">往「梦神装甲」记录追加一条，并把装备卡入库（待审）；装备包 / 能力项 / 模型在「梦神装甲」页勾选，这里跟着变。</span></span>
+        <span class="s">${hasEquip
+          ? "往「梦神装甲」记录追加一条，并把装备卡入库（待审）；装备包 / 能力项 / 模型在「梦神装甲」页勾选，这里跟着变。"
+          : "还没选装备：先在「梦神装甲」页勾选装备包，这里才会打开。"}</span></span>
     </label>
   </details>`;
 }
@@ -3006,8 +3011,9 @@ function equipInlineBlock(idPrefix) {
 async function runPostBuildActions(variants) {
   const b = S.breach;
   const parts = [];
-  // 简单模式：装备选择就在破甲台（多选预设），勾了才发；技术模式仍看 withEquip
-  const wantEquip = modeIsTechnical() ? b.withEquip : (Array.isArray(b.equipPresets) && b.equipPresets.length > 0);
+  // 装备只在「真的选了」时才发：技术模式看 withEquip，普通模式看是否勾了预设；两者都要求非空
+  const hasEquip = currentEquipPresets().length > 0;
+  const wantEquip = hasEquip && (modeIsTechnical() ? b.withEquip : true);
   if (wantEquip) {
     try {
       const note = await sendEquipmentIfNeeded();
