@@ -1201,3 +1201,23 @@ node test/acceptance.mjs             → 21/21 PASS
 ### Verified
 - `curl http://127.0.0.1:8792/` → `src="/app.js?v=1795…"`、`href="/style.css?v=…"`、`cache-control: no-store, no-cache, must-revalidate`。
 - `node --check` server.mjs / handoff-runner.mjs 通过。
+
+## [1.1.25-beta.13] — 2026-11-22（默认军工橙 · 注入炸裂特效 · 记忆库端口修复 · 软失败黄框）
+
+### Added
+- **一键注入炸裂特效**：`armorBlast()`（canvas 2D，零依赖）—— 按钮中心两道冲击波 + 220 粒子 + 中心闪光，1.7s 自毁。技术模式与普通模式的一键注入都会触发。
+- **梦神装甲触发特效**：侧栏点击时光晕扩散 + 图标弹跳；带 `?from=armor` 进入控制台时播一次扫描线 + logo 光晕（1.7s 自动移除）。
+
+### Changed
+- **默认皮肤改为军工橙**（`DEFAULT_THEME = "ops"`），`THEME_DEFAULT_VER` 2→3，旧浏览器里的默认选择一次性迁移。
+- 软失败（插件安装失败 / 记忆服务 unreachable / 回滚）改走**黄色警告**，并固定提示「再点一次一键注入即可」，不再显示成绿色成功。
+
+### Fixed
+- **记忆库空白**：`deploy.json` 被卸载清理删掉后回落到 7989，而服务实际在 17890。已重建 `deploy.json`（17890 / mem-purge / `#/breach`），并把 `web/deploy.mjs` 的默认端口改为 17890。
+- **重启宿主弹终端**：runner 的 `taskkill` / 拉起 exe 全部补 `windowsHide: true`，执行完 `process.exit(0)` 自毁。
+
+### Verified
+- `/api/state` → `deploy.memoryBase = http://127.0.0.1:17890/memory-eternal/api`、`owner.display = 梦神`。
+- `/api/memory/stats` → ok（182 张卡）；`/api/host/status` → 83 条、process=app。
+- 静态资源版本号已换（`/app.js?v=…`），`DEFAULT_THEME="ops"`、`armorBlast` 均在产物中。
+- `test/ui-error-red.mjs` 24/24。
