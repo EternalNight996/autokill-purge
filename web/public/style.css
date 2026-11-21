@@ -1686,3 +1686,11 @@ body.armor-shake { animation: armor-shake 460ms cubic-bezier(.36,.07,.19,.97); }
   30%, 50%, 70% { transform: translate(-5px, 2px); }
   40%, 60% { transform: translate(6px, -1px); }
 }
+
+/* 点击注入/卸载的瞬时按钮反馈（CSS 独立播放，不等 JS 渲染） */
+body.armor-fire button.primary { animation: armor-btn-flash 440ms cubic-bezier(.2,.8,.2,1); }
+@keyframes armor-btn-flash {
+  0% { transform: scale(.985); }
+  35% { transform: scale(1.015); box-shadow: 0 0 0 2px rgba(196,206,222,.35), 0 0 26px rgba(196,206,222,.28); }
+  100% { transform: scale(1); }
+}

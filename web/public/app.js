@@ -1594,6 +1594,13 @@ const armorEater = {
         try { this.draw(t); } catch { /* keep alive */ }
         this.raf = requestAnimationFrame(loop);
       };
+      // 同步画第一帧：点击那一刻就要看到黑洞，不等 rAF
+      try { this.draw(this.t0); } catch { /* ignore */ }
+      // 按钮侧也立刻给反馈（CSS 动画，不依赖重绘）
+      try {
+        document.body.classList.add("armor-fire");
+        setTimeout(() => { try { document.body.classList.remove("armor-fire"); } catch { /* ignore */ } }, 460);
+      } catch { /* ignore */ }
       this.raf = requestAnimationFrame(loop);
       this.timer = setInterval(() => {
         if (performance.now() - this.lastFrameAt > 300) {
@@ -1740,19 +1747,24 @@ const armorEater = {
     ctx.fillStyle = 'rgba(200,208,222,.52)';
     ctx.fillText(String(note).slice(0, 36), cx, cy + RingR + 24);
 
-    // 5) 收尾：0.6s 内收缩熄灭后自毁（不再滞留 100%）
+    // 5) 收尾：黑洞缩到 0，整体再淡出（不留在 100% 卡着）
     if (this.done) {
-      this.fin = Math.min(1, this.fin + dt * 1.7);
+      this.fin = Math.min(1, this.fin + dt * 1.15);
       const k = this.fin;
+      const shrink = Math.max(0, 1 - k);
+      ctx.globalAlpha = k > 0.7 ? Math.max(0, 1 - (k - 0.7) / 0.3) : 1;
       ctx.beginPath();
-      ctx.arc(cx, cy, Math.max(0.5, RBH * (1 - k)), 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,.95)';
+      ctx.arc(cx, cy, RBH * shrink, 0, Math.PI * 2);
+      ctx.fillStyle = '#000';
       ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx, cy, RBH * (1.1 + k * 2.6), 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(' + SILVER + ',' + (0.5 * (1 - k)).toFixed(3) + ')';
-      ctx.lineWidth = 6 * (1 - k) + 0.6;
-      ctx.stroke();
+      if (k < 0.8) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, RBH * (1.05 + k * 2.2), 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(' + SILVER + ',' + (0.45 * (1 - k / 0.8)).toFixed(3) + ')';
+        ctx.lineWidth = 5 * (1 - k) + 0.5;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
       if (k >= 1) this.stop();
     }
   },
@@ -1762,61 +1774,6 @@ const armorEater = {
     if (this.cv) { try { this.cv.remove(); } catch { /* ignore */ } this.cv = null; this.ctx = null; }
   },
 };
-
-/* 破甲台「一键注入」的炸裂特效：全屏 canvas，冲击波 + 220 粒子 + 闪光，1.7s 自毁（零依赖，不用 three.js） */
-function armorBlast(anchor) {
-  try {
-    if (typeof document === "undefined" || !document.body) return;
-    const rect = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
-    const cx = rect && rect.width ? rect.left + rect.width / 2 : window.innerWidth / 2;
-    const cy = rect && rect.height ? rect.top + rect.height / 2 : window.innerHeight / 2;
-    const cv = document.createElement("canvas");
-    cv.className = "armor-blast";
-    cv.width = window.innerWidth;
-    cv.height = window.innerHeight;
-    document.body.appendChild(cv);
-    const ctx = cv.getContext("2d");
-    if (!ctx) { cv.remove(); return; }
-    const parts = [];
-    for (let i = 0; i < 220; i += 1) {
-      const a = Math.random() * Math.PI * 2;
-      const sp = 2.5 + Math.random() * 9;
-      parts.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, g: 120 + Math.random() * 70 });
-    }
-    const t0 = performance.now();
-    const DUR = 1700;
-    const frame = (t) => {
-      const p = Math.min(1, (t - t0) / DUR);
-      ctx.clearRect(0, 0, cv.width, cv.height);
-      // 冲击波环（两道，错开扩散）
-      for (const [k, w] of [[1, 7], [0.62, 3]]) {
-        const r = p * Math.max(cv.width, cv.height) * 0.75 * k;
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(255,138,30,${Math.max(0, 0.85 - p)})`;
-        ctx.lineWidth = w * (1 - p) + 1;
-        ctx.stroke();
-      }
-      // 粒子
-      for (const q of parts) {
-        q.x += q.vx; q.y += q.vy; q.vx *= 0.985; q.vy *= 0.985; q.life -= 0.013;
-        if (q.life <= 0) continue;
-        ctx.beginPath();
-        ctx.arc(q.x, q.y, 2.2 * q.life + 0.4, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(255,${Math.round(q.g)},60,${Math.max(0, q.life)})`;
-        ctx.fill();
-      }
-      // 中心闪光
-      if (p < 0.2) {
-        ctx.fillStyle = `rgba(255,170,80,${0.35 * (1 - p / 0.2)})`;
-        ctx.fillRect(0, 0, cv.width, cv.height);
-      }
-      if (p < 1) requestAnimationFrame(frame);
-      else cv.remove();
-    };
-    requestAnimationFrame(frame);
-  } catch { /* 特效失败不影响注入 */ }
-}
 
 /* 落地/卸载进度：runner 每步写 data/logs/handoff-progress.json，这里轮询成进度条 */
 function stopProgressPolling() {
@@ -1900,7 +1857,6 @@ async function simpleHostAction(kind) {
     armorEater.start(kind === "uninstall" ? "uninstall" : "inject");
     S.host.progress = { percent: 0, step: "writing", note: kind === "uninstall" ? "正在卸载…" : "正在写入补丁…", done: false };
   }
-  if (kind === "apply") armorBlast(document.querySelector('[data-simple-host="apply"]'));
   h.busy = true;
   h.busyKind = kind;
   h.message = "";
@@ -3495,7 +3451,6 @@ async function applyDelivery(variants) {
       : "已写入宿主提示词层（prompt-inject.md），重启 dsh 生效" };
   }
   if (mode === "host-patch") {
-    armorBlast(document.getElementById("sBuild"));
     armorEater.start("inject");
     S.host.progress = { percent: 0, step: "writing", note: "正在写入补丁…", done: false };
     const picked = $$("#page [data-patch-pick]").filter((el) => el.checked).map((el) => el.dataset.patchPick);

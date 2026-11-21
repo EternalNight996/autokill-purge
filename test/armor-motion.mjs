@@ -80,7 +80,15 @@ try {
   await cdp.send('Page.navigate', { url: BASE + '/#/breach' });
   await sleep(6000);
 
-  await cdp.eval(`(() => { armorEater.start('inject'); armorEater.set(40); return 1; })()`);
+  const firstPaint = await cdp.eval(`(() => {
+    const t0 = performance.now();
+    armorEater.start('inject');
+    const cost = performance.now() - t0;
+    armorEater.set(40);
+    return JSON.stringify({ cost: Math.round(cost * 10) / 10, frames: armorEater.frames });
+  })()`);
+  const fp = JSON.parse(firstPaint);
+  ok('0. start() 同步出首帧且足够快', fp.frames >= 1 && fp.cost < 40, firstPaint);
   await sleep(350);
   const hasCanvas = await cdp.eval(`!!document.querySelector('canvas.armor-eater')`);
   ok('1. 吃豆人 canvas 已挂载', hasCanvas === true);
