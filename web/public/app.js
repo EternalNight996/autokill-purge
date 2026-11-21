@@ -1563,7 +1563,7 @@ async function simpleHostAction(kind) {
       const u = data.uninstall || {};
       const freed = u.freedMB ? `已清 ${u.freedMB} MB 残留，` : "";
       const bad = (u.errors || []).length;
-      h.message = `卸载完成：${freed}${u.applied ? "宿主已按 asar 原件还原，" : ""}${(u.stripped || []).length} 个步骤已走${bad ? "，有 " + bad + " 条警告" : ""}。${u.restarted ? "宿主已重新拉起。" : "宿主若在运行，重启后确认。"}`;
+      h.message = `卸载完成：${freed}${u.applied ? "宿主已按 asar 原件还原，" : ""}${(u.stripped || []).length} 个步骤已走${bad ? "，有 " + bad + " 条警告" : ""}。${u.restarted ? "已下发：约 3 秒后重新拉起宿主。" : "宿主若在运行，重启后确认。"}`;
     }
     toast(kind === "apply" ? "注入完成" : kind === "handoff" ? "已落地并重启宿主" : "卸载完成");
     h.lastResult = { kind: kind, ok: true, at: Date.now() };

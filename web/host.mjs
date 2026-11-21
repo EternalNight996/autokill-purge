@@ -382,8 +382,10 @@ export async function hostStatus(dataDir) {
   }
   // app.asar 还在 = 桌面壳仍从 asar 里加载 dsh，resources/app 里的补丁一条都不生效
   const desktopSealed = desktopSealedNow(c);
-  // 文件布局之外再看一眼真实进程：asar 已让位但宿主没重启时，进程里还是旧代码
-  const processLoadedFrom = await detectHostLoadSource();
+  // 文件布局之外再看一眼真实进程：asar 已让位但宿主没重启时，进程里还是旧代码。
+  // 这里**不阻塞响应**：先用手上已知值（没有就按文件布局推断），后台刷新真实进程来源。
+  const processLoadedFrom = loadSourceCache.value || (desktopSealed ? 'asar' : 'app');
+  refreshLoadSourceInBackground();
   const patches = (c.ALL_PATCHES || []).map((p) => {
     const tone = patchTone(statusMap[p.id] || 'unknown');
     return {
@@ -766,6 +768,12 @@ async function detectHostLoadSource() {
   });
   loadSourceCache = { at: Date.now(), value };
   return value;
+}
+
+/** hostStatus 用：拿缓存值，后台续热，绝不把 powershell 的延迟算进接口耗时 */
+function refreshLoadSourceInBackground() {
+  if (loadSourceCache.value && Date.now() - loadSourceCache.at < 15000) return;
+  detectHostLoadSource().catch(() => { /* 读不到就继续用旧值 */ });
 }
 
 /** 只读：现在到底是不是「补丁写了但不生效」的状态 */
