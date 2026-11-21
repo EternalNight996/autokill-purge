@@ -14,6 +14,10 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installHostBridge, readRuntime, writeRuntime } from './host-bridge.js';
+// 上游 dsh-purge 的完整宿主内实现（已内化在 plugin/vendor）：身份改写、prompt sections、
+// pre-step、fresh access、rewind filter、cwd capture、continue-retry、/purge /rules /skills /rewind
+// 命令、purge_* 工具、/dsh-purge/* 路由、启动 settle。这一层是「同等能力」的底座。
+import * as upstream from '../vendor/lib/index.js';
 
 export const name = 'autokill-purge';
 export const inject = ['systemPrompt', 'tools'];
@@ -26,6 +30,9 @@ const DEFAULTS = {
   allowWriteTools: false,
   gearSync: true,   // 装备选择 → 注入末尾的「本次装备」段（控制台 /api/gear/current）
   runtimeWatch: true, // 监听 runtime.json：控制台改开关 → 进程内立即重算 hook，不重启宿主
+  // 上游 dsh-purge 的宿主内实现整体跑起来（同等能力底座）。关掉它会退回「只有 autokill_* 工具」的薄插件。
+  upstreamEnable: true,
+  upstreamConfig: null, // 透传给上游：stripMnemon / capabilityProtocol / hooksDenyBypass / autoApplyOnStart ...
   verbose: false,
 };
 
@@ -97,6 +104,34 @@ export function apply(ctx, config) {
   const cfg = { ...DEFAULTS, ...(config || {}) };
   // 宿主内运行时桥：审批 / 沙箱 / 结果裁剪的内存 hook + runtime.json 热监听（替代 dsh-purge 的进程内部分）
   const bridge = installHostBridge(ctx, cfg, (msg) => log(cfg, msg));
+
+  // ---- ⓪ 上游 dsh-purge 完整实现（同等能力底座）------------------------------
+  // 它自己会挂：identity 改写 / prompt sections / pre-step / fresh access / rewind filter /
+  // cwd capture / continue-retry / settle 启动自愈 / 4 个斜杠命令 / purge_* 工具 / /dsh-purge/* 路由。
+  // 我们的 assemble 钩子只有在它关掉时才启用，避免两套改写叠加。
+  let upstreamResult = null;
+  if (cfg.upstreamEnable !== false) {
+    const upCfg = {
+      enabled: true,
+      stripMnemon: true,
+      capabilityProtocol: true,
+      hooksDenyBypass: true,
+      // 宿主启动时不自动改盘/升级：落地与还原由控制台显式触发，避免两套写入打架
+      autoApplyOnStart: false,
+      autoUpdateOnStart: false,
+      autoRevertOnMissing: false,
+      verbose: false,
+      ...(cfg.upstreamConfig || {}),
+    };
+    try {
+      upstream.apply(ctx, upCfg);
+      upstreamResult = { ok: true, config: upCfg, name: upstream.name };
+      log(cfg, 'upstream dsh-purge applied');
+    } catch (e) {
+      upstreamResult = { ok: false, error: String((e && e.message) || e) };
+      try { ctx.logger && ctx.logger.warn && ctx.logger.warn('autokill-purge: upstream apply failed: %s', upstreamResult.error); } catch { /* ignore */ }
+    }
+  }
 
   // ---- ① 控制台能力交给模型 ------------------------------------------------
   if (cfg.toolsEnable && ctx.tools && ctx.tools.register) {
@@ -174,7 +209,11 @@ export function apply(ctx, config) {
         parameters: emptyParams,
         output: textOut,
         async execute() {
-          try { return { ok: true, text: JSON.stringify(bridge.status(), null, 2).slice(0, 6000) }; }
+          try {
+            const st = bridge.status();
+            st.upstream = upstreamResult;
+            return { ok: true, text: JSON.stringify(st, null, 2).slice(0, 6000) };
+          }
           catch (e) { return { ok: false, text: '读取运行时状态失败：' + String((e && e.message) || e) }; }
         },
       });
@@ -225,8 +264,8 @@ export function apply(ctx, config) {
     }
   }
 
-  // ---- ② 组装期身份改写：复用上游 rewritePromptAssembly ---------------------
-  if (cfg.assembleEnable && typeof ctx.on === 'function') {
+  // ---- ② 组装期身份改写：上游开着就由它的 installIdentityOverride 负责，避免两套叠加 ----
+  if (cfg.assembleEnable && cfg.upstreamEnable === false && typeof ctx.on === 'function') {
     (async () => {
       const identity = await loadUpstreamIdentity();
       if (identity.__error) {

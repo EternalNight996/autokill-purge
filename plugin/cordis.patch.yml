@@ -29,6 +29,7 @@
       config:
         toolsEnable: true
         assembleEnable: true
+        upstreamEnable: true        # 跑上游 dsh-purge 完整实现（同等能力底座）
         sessionEnable: false
         runtimeWatch: true
         consoleUrl: 'http://127.0.0.1:8792'
