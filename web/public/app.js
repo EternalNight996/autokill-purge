@@ -1571,12 +1571,20 @@ const armorEater = {
       this.cv = cv;
       this.ctx = cv.getContext("2d");
       this.t0 = performance.now();
+      this.lastFrameAt = this.t0;
       const loop = (t) => {
         // 单帧异常不能中断 rAF 链，否则动画会整个停住（之前就是这个坑）
+        this.lastFrameAt = performance.now();
         try { this.draw(t); } catch { /* keep alive */ }
         this.raf = requestAnimationFrame(loop);
       };
       this.raf = requestAnimationFrame(loop);
+      // 兜底：页面不可见 / rAF 被暂停时（Electron 后台、headless）也要继续画
+      this.timer = setInterval(() => {
+        if (performance.now() - this.lastFrameAt > 300) {
+          try { this.draw(performance.now()); } catch { /* ignore */ }
+        }
+      }, 120);
     } catch { /* 特效失败不影响主流程 */ }
   },
   set(pct, done) {
@@ -1584,6 +1592,7 @@ const armorEater = {
     if (done) this.done = true;
   },
   draw(t) {
+    this.frames = (this.frames || 0) + 1; // 自检：rAF 是否真的在跑
     const ctx = this.ctx, cv = this.cv;
     if (!ctx || !cv) return;
     const W = cv.width, H = cv.height;
@@ -1607,6 +1616,19 @@ const armorEater = {
     ctx.strokeStyle = dark ? "rgba(255,120,90,.18)" : "rgba(255,150,40,.18)";
     ctx.lineWidth = 2;
     ctx.stroke();
+    // 路径流光：沿曲线跑的高亮光点（让"在动"一眼可见）
+    const tsec0 = (t - this.t0) / 1000;
+    for (let k = 0; k < 6; k += 1) {
+      const tt = ((tsec0 * 0.12) + k / 6) % 1;
+      const pt = pathAt(tt);
+      const g = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, 14);
+      g.addColorStop(0, dark ? "rgba(255,150,120,.65)" : "rgba(255,190,90,.7)");
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 14, 0, Math.PI * 2);
+      ctx.fill();
+    }
     // 豆子 18 颗，按进度被吃
     const beans = 18;
     const eaten = Math.round((p / 100) * beans);
@@ -1624,7 +1646,7 @@ const armorEater = {
     const ahead = dark ? pathAt(Math.max(0, 1 - prog - 0.01)) : pathAt(Math.min(1, prog + 0.01));
     const dir = (ahead.x - at.x) >= 0 ? 1 : -1;
     const tsec = (t - this.t0) / 1000;
-    const mouth = 0.18 + Math.abs(Math.sin(tsec * 9)) * 0.32;
+    const mouth = 0.12 + Math.abs(Math.sin(tsec * 12)) * 0.38;
     const scale = this.done ? 1 + Math.min(1, this.fin / 700) * 0.6 : 1;
     const R = 22 * scale;
     ctx.save();
@@ -1674,6 +1696,7 @@ const armorEater = {
   },
   stop() {
     if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
+    if (this.timer) { clearInterval(this.timer); this.timer = 0; }
     if (this.cv) { try { this.cv.remove(); } catch { /* ignore */ } this.cv = null; this.ctx = null; }
   },
 };
