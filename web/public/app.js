@@ -1719,13 +1719,16 @@ function armorBlast(anchor) {
 function stopProgressPolling() {
   if (S.host.progressTimer) { clearTimeout(S.host.progressTimer); S.host.progressTimer = null; }
 }
-/** 没有真正的进度在跑时，收掉吃豆人和 0% 占位（提前返回/无待注入项时用） */
-function stopEaterIfIdle() {
+/** 本次操作结束后收掉吃豆人：
+ *  - 这次没有新启动进度轮询（timer 与进函数前相同）→ 说明是「无待注入项/提前返回」，清掉 0% 占位；
+ *  - 这次启动了轮询 → 保留，交给轮询自己收尾。 */
+function stopEaterIfIdle(prevTimer) {
   try {
-    if (!S.host || !S.host.progressTimer) {
-      armorEater.stop();
-      if (S.host) S.host.progress = null;
-    }
+    const cur = S.host && S.host.progressTimer;
+    if (cur && cur !== prevTimer) return;
+    if (cur) clearTimeout(cur);
+    if (S.host) { S.host.progressTimer = null; S.host.progress = null; }
+    armorEater.stop();
   } catch { /* ignore */ }
 }
 
@@ -1757,6 +1760,7 @@ async function simpleHostAction(kind) {
   // 一键 = 点一次就执行。不再有「再点一次确认」这一段：
   // 落地已改成独立 runner（先回响应、约 3 秒后再杀宿主），所以不需要靠二次点击来防误触。
   h.pendingAction = null;
+  const beforeEaterTimer = S.host.progressTimer;
   // 点击瞬间就召唤小怪（此时请求还没回来，别让用户干等）
   if (kind !== "handoff") {
     armorEater.start(kind === "uninstall" ? "uninstall" : "inject");
@@ -1843,7 +1847,7 @@ async function simpleHostAction(kind) {
   } finally {
     h.busy = false;
     h.busyKind = null;
-    stopEaterIfIdle();
+    stopEaterIfIdle(beforeEaterTimer);
     renderPage();
   }
 }
@@ -2066,6 +2070,7 @@ async function uninjectPrompt() {
  *  用户看到的就是「点了没反应，重启 DSH 插件还在」。 */
 async function revertHostPatches() {
   if (typeof window !== "undefined" && !window.confirm("一键卸载：按官方 app.asar 原件还原宿主文件，清掉解包残留，并把 autokill-purge 插件从 profile 移除，然后重启宿主。当前状态会先另存一份快照。继续？")) return;
+  const beforeEaterTimer = S.host.progressTimer;
   const btn = document.getElementById("sUninstall");
   const oldLabel = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "卸载中…"; }
@@ -2079,7 +2084,7 @@ async function revertHostPatches() {
     toast(`已下发：约 3 秒后结束宿主并完成卸载（${(u.steps || []).length} 个步骤，进度见下方进度条）`);
     loadHostStatus();
   } catch (e) { toastError(simpleReason(e)); }
-  finally { if (btn) { btn.disabled = false; btn.textContent = oldLabel; } renderPage(); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = oldLabel; } stopEaterIfIdle(beforeEaterTimer); renderPage(); }
 }
 
 /** 当前破甲方式的「一键卸载」动作；不改宿主的方式（载荷/入库）返回 null */
@@ -3084,6 +3089,7 @@ async function simpleBuild() {
     return;
   }
   const techniques = S.techniques.slice(0, 3).map((t) => t.id);
+  const beforeEaterTimer = S.host.progressTimer;
   b.building = true;
   renderPage();
   try {
@@ -3124,7 +3130,7 @@ async function simpleBuild() {
     S.simple.buildError = { kind: "failed", message: simpleReason(e) };
   } finally {
     b.building = false;
-    stopEaterIfIdle();
+    stopEaterIfIdle(beforeEaterTimer);
     if (!modeIsTechnical() && S.tab === "breach") renderPage();
   }
 }
