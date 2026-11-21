@@ -1628,11 +1628,16 @@ const armorEater = {
     ctx.fillStyle = "#101418";
     ctx.fill();
     ctx.restore();
-    // 百分比
+    // 百分比 + 当前阶段（请求还在跑时也有东西看）
     ctx.font = "600 28px ui-monospace, Consolas, monospace";
     ctx.textAlign = "center";
     ctx.fillStyle = dark ? "rgba(255,150,120,.95)" : "rgba(255,180,80,.95)";
     ctx.fillText(Math.round(p) + "%", W / 2, y - 46);
+    const note = (S.host && S.host.progress && S.host.progress.note)
+      || (dark ? "正在卸载…" : "正在写入补丁…");
+    ctx.font = "500 13px system-ui, 'Microsoft YaHei', sans-serif";
+    ctx.fillStyle = "rgba(232,238,246,.62)";
+    ctx.fillText(String(note).slice(0, 60), W / 2, y + 72);
     // 完成：放大淡出
     if (this.done) {
       this.fin += 16;
@@ -1706,7 +1711,9 @@ function stopProgressPolling() {
 }
 function startProgressPolling(mode) {
   stopProgressPolling();
-  armorEater.start(mode);
+  // 点击时就已经 start 过：这里复用，别把怪物重置回 0%
+  if (!armorEater.cv) armorEater.start(mode);
+  else armorEater.mode = mode === "uninstall" ? "uninstall" : "inject";
   const started = Date.now();
   S.host.progress = { percent: 0, step: "queued", note: "已下发，等待落地进程接手…", done: false };
   const tick = async () => {
@@ -1730,6 +1737,11 @@ async function simpleHostAction(kind) {
   // 一键 = 点一次就执行。不再有「再点一次确认」这一段：
   // 落地已改成独立 runner（先回响应、约 3 秒后再杀宿主），所以不需要靠二次点击来防误触。
   h.pendingAction = null;
+  // 点击瞬间就召唤小怪（此时请求还没回来，别让用户干等）
+  if (kind !== "handoff") {
+    armorEater.start(kind === "uninstall" ? "uninstall" : "inject");
+    S.host.progress = { percent: 0, step: "writing", note: kind === "uninstall" ? "正在卸载…" : "正在写入补丁…", done: false };
+  }
   if (kind === "apply") armorBlast(document.querySelector('[data-simple-host="apply"]'));
   h.busy = true;
   h.busyKind = kind;
@@ -2036,6 +2048,8 @@ async function revertHostPatches() {
   const btn = document.getElementById("sUninstall");
   const oldLabel = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "卸载中…"; }
+  armorEater.start("uninstall");
+  S.host.progress = { percent: 0, step: "writing", note: "正在卸载…", done: false };
   try {
     const d = await request("/api/host/uninstall", { method: "POST", body: { confirm: true } });
     if (!d || d.ok === false) throw payloadError(d, "卸载失败");
@@ -3320,6 +3334,8 @@ async function applyDelivery(variants) {
   }
   if (mode === "host-patch") {
     armorBlast(document.getElementById("sBuild"));
+    armorEater.start("inject");
+    S.host.progress = { percent: 0, step: "writing", note: "正在写入补丁…", done: false };
     const picked = $$("#page [data-patch-pick]").filter((el) => el.checked).map((el) => el.dataset.patchPick);
     // 默认方式：没勾选就只补「还没应用」的那些（已应用的自动跳过，不会重写文件）
     let patches = picked;
