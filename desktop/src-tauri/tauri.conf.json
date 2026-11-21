@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AutokillPurge",
+  "version": "1.1.25-beta.2",
+  "identifier": "com.eternal.autokillpurge",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "shortDescription": "三宿主破甲控制台",
+    "longDescription": "梦神破甲 · autokill-purge：DSH / MengBot / AutoKill 三宿主破甲控制台（补丁可视化、载荷生成、装备发放、备份还原）",
+    "resources": {
+      "../../web": "app/web",
+      "../../plugin": "app/plugin",
+      "../../scripts": "app/scripts",
+      "../../assets": "app/assets",
+      "../../package.json": "app/package.json",
+      "node/node.exe": "app/node.exe",
+      "../../break": "app/break",
+      "../../lib": "app/lib"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ]
+      }
+    }
+  }
+}
