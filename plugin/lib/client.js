@@ -48,6 +48,11 @@ window.__ModuleLoader__.load({
       ".ap-armor-icon{display:inline-flex;align-items:center;justify-content:center;flex:none}",
       ".ap-armor-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}",
       ".ap-armor-collapsed{justify-content:center;padding:0}",
+      /* 点击「梦神装甲」的触发特效：光晕扩散 + 图标弹跳（纯 CSS，一次性） */
+      ".ap-armor-btn.ap-armor-hit{animation:ap-armor-burst .75s cubic-bezier(.2,.8,.2,1)}",
+      "@keyframes ap-armor-burst{0%{box-shadow:0 0 0 0 rgba(110,168,255,.75)}55%{box-shadow:0 0 0 16px rgba(110,168,255,0)}100%{box-shadow:0 0 0 0 rgba(110,168,255,0)}}",
+      ".ap-armor-btn.ap-armor-hit .ap-armor-icon{animation:ap-armor-pop .6s cubic-bezier(.2,1.6,.4,1)}",
+      "@keyframes ap-armor-pop{0%{transform:scale(1) rotate(0)}35%{transform:scale(1.35) rotate(-10deg)}70%{transform:scale(.95) rotate(4deg)}100%{transform:scale(1) rotate(0)}}",
     ].join("");
     const TAG_ID = "autokill-purge-plugin/armor-nav.css";
     if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(TAG_ID) + "]") === null) {
@@ -69,9 +74,18 @@ window.__ModuleLoader__.load({
           title: LABEL + " · 打开梦神控制台",
           "aria-label": LABEL,
           "data-mengshen-armor": "1",
-          href: consoleUrl() + "/#/breach",
+          href: consoleUrl() + "/?from=armor#/breach",
           target: "_blank",
           rel: "noopener noreferrer",
+          // 只做特效，不拦默认导航：链接本身负责“只开一次”
+          onClick: (ev) => {
+            try {
+              const el = ev && ev.currentTarget;
+              if (!el) return;
+              el.classList.add("ap-armor-hit");
+              setTimeout(() => { try { el.classList.remove("ap-armor-hit"); } catch (_) { /* ignore */ } }, 900);
+            } catch (_) { /* ignore */ }
+          },
         },
           h("span", { className: "ap-armor-icon" }, h(ArmorIcon, { size: wide ? 16 : 18 })),
           wide ? h("span", { className: "ap-armor-label" }, LABEL) : null,

@@ -90,9 +90,9 @@ await sleep(DELAY);
 
 try {
   progress('kill-host', 10, '结束宿主');
-  await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe'], () => r()));
+  await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe'], { windowsHide: true }, () => r()));
   await sleep(2500);
-  await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe', '/F'], () => r()));
+  await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe', '/F'], { windowsHide: true }, () => r()));
   let p = await hostProcs();
   for (let i = 0; i < 40 && p.count; i++) { await sleep(500); p = await hostProcs(); }
   if (p.count) finish({ ok: false, error: 'host_still_running', remaining: p.count });
@@ -156,7 +156,7 @@ try {
   }
 
   progress('launch', 92, '重新拉起宿主');
-  spawn(EXE, [], { detached: true, stdio: 'ignore' }).unref();
+  spawn(EXE, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
 
   let last = { count: 0, hasAsar: false, hasApp: false, hasRenderer: false };
   let healthy = false;
@@ -170,10 +170,10 @@ try {
 
   if (MODE === 'land' && !healthy) {
     progress('rollback', 95, '健康检查失败，回滚');
-    await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe', '/F'], () => r()));
+    await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe', '/F'], { windowsHide: true }, () => r()));
     await sleep(2500);
     try { renameSync(ASIDE, ASAR); } catch (e) { log('rollback rename failed: ' + (e && e.message)); }
-    spawn(EXE, [], { detached: true, stdio: 'ignore' }).unref();
+    spawn(EXE, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     finish({ ok: false, error: 'launch_not_healthy', detail: last, rolledBack: true, console: await ensureConsole() });
   }
 

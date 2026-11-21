@@ -453,6 +453,16 @@ function okBox(message, hint = "") {
   return `<div class="alert good" role="status"><strong>${esc(message)}</strong>${hint ? `<span class="hint">${esc(hint)}</span>` : ""}</div>`;
 }
 
+/** 软失败：注入/插件安装/记忆服务这类「第二次就成」的失败，用黄色提示 + 明确让用户再点一次 */
+function softFailBox(message, hint) {
+  const text = String(message || "");
+  const soft = /失败|未完成|unreachable|回滚|超时|not ready/i.test(text);
+  if (!soft) return okBox(text);
+  return `<div class="alert warn" role="alert"><strong>${esc(text)}</strong><span class="hint">${
+    esc(hint || "不是致命错误：第一次常因插件安装或记忆服务还没就绪而失败，再点一次「一键注入」即可。")
+  }</span></div>`;
+}
+
 function detectSource(base) {
   if (!base) return "unknown";
   try {
@@ -1249,6 +1259,13 @@ async function boot() {
     }
     S.booted = true;
     S.bootError = null;
+    // 从「梦神装甲」进来：播一次入场（扫描线 + logo 光晕），让“触发”有存在感
+    try {
+      if (location.search.indexOf("from=armor") >= 0) {
+        document.body.classList.add("armor-enter");
+        setTimeout(() => { try { document.body.classList.remove("armor-enter"); } catch { /* ignore */ } }, 1700);
+      }
+    } catch { /* ignore */ }
     const accepted = S.state && S.state.agreement && S.state.agreement.accepted;
     if (!accepted) {
       S.locked = true;
@@ -1917,7 +1934,7 @@ function renderOpsFold() {
   if (mode === "host-patch") {
     // 补丁层不展示载荷卡，但仍然要给出「上一次生成」的反馈，否则点了没感觉
     const note = b.deliveryResult
-      ? (b.deliveryResult.error ? alertBox("破甲方式没成功", b.deliveryResult.error) : okBox(b.deliveryResult.message))
+      ? (b.deliveryResult.error ? alertBox("破甲方式没成功", b.deliveryResult.error) : softFailBox(b.deliveryResult.message))
       : "";
     const vsum = Array.isArray(b.variants) && b.variants.length
       ? `<p class="hint">最近一次已生成 ${b.variants.length} 条载荷；想查看载荷把破甲方式切到「载荷破甲」。</p>`
@@ -1925,7 +1942,7 @@ function renderOpsFold() {
     body = note + vsum;
   } else if (mode === "ak-patch") {
     const note = b.deliveryResult
-      ? (b.deliveryResult.error ? alertBox("梦神破甲没成功", b.deliveryResult.error) : okBox(b.deliveryResult.message))
+      ? (b.deliveryResult.error ? alertBox("梦神破甲没成功", b.deliveryResult.error) : softFailBox(b.deliveryResult.message))
       : "";
     body = note + `<p class="hint">梦神破甲 = 改 AutoKill 的 <code>config.toml</code>（审批 / 深度 / 运行时 / 预算 / 构建参数）+ 后端开关；改前自动备份，重启 AutoKill 生效。</p>` + renderAkPatchList();
   } else if (mode === "host-prompt") {
@@ -3922,7 +3939,7 @@ function renderFlowApplyStep() {
   const c = d.counts || {};
   const snaps = Array.isArray(d.snapshots) ? d.snapshots : [];
   const busy = h.busy;
-  const msg = h.message ? (h.error ? alertBox(h.message, "") : okBox(h.message)) : "";
+  const msg = h.message ? (h.error ? alertBox(h.message, "") : softFailBox(h.message)) : "";
   const pr = h.prompt;
   const draft = h.promptDraft != null ? h.promptDraft : (pr && pr.text) || "";
   // 门禁：演练台没确认授权时只提示、不再禁用按钮。
@@ -4838,7 +4855,7 @@ function renderHostSection() {
       <td class="muted">${esc(p.layer || "")}</td>
       <td>${hostStatusBadge(d.desktopSealed && p.status === "applied" ? "written" : p.status)}</td>
     </tr>`).join("");
-  const msg = h.message ? (h.error ? alertBox(h.message, "") : okBox(h.message)) : "";
+  const msg = h.message ? (h.error ? alertBox(h.message, "") : softFailBox(h.message)) : "";
 
   // 原版面板第一栏：注入提示词（可直接改，改完点保存）
   const pr = h.prompt;
