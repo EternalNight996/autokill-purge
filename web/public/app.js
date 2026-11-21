@@ -1571,7 +1571,11 @@ const armorEater = {
       this.cv = cv;
       this.ctx = cv.getContext("2d");
       this.t0 = performance.now();
-      const loop = (t) => { this.draw(t); this.raf = requestAnimationFrame(loop); };
+      const loop = (t) => {
+        // 单帧异常不能中断 rAF 链，否则动画会整个停住（之前就是这个坑）
+        try { this.draw(t); } catch { /* keep alive */ }
+        this.raf = requestAnimationFrame(loop);
+      };
       this.raf = requestAnimationFrame(loop);
     } catch { /* 特效失败不影响主流程 */ }
   },
@@ -1638,12 +1642,26 @@ const armorEater = {
     ctx.fillStyle = "#101418";
     ctx.fill();
     ctx.restore();
+    // 等待期脉冲：请求还没回来时也给动态反馈（呼吸圈 + 旋转弧）
+    if (!this.done && p < 1) {
+      const pulse = 0.5 + Math.sin(tsec * 4) * 0.5;
+      ctx.beginPath();
+      ctx.arc(at.x, at.y, R * (1.6 + pulse * 0.8), 0, Math.PI * 2);
+      ctx.strokeStyle = dark ? `rgba(255,120,90,${0.35 - pulse * 0.2})` : `rgba(255,160,40,${0.35 - pulse * 0.2})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      const a0 = tsec * 5;
+      ctx.beginPath();
+      ctx.arc(at.x, at.y, R * 1.95, a0, a0 + Math.PI * 0.9);
+      ctx.strokeStyle = dark ? "rgba(255,140,110,.6)" : "rgba(255,190,90,.65)";
+      ctx.stroke();
+    }
     // 百分比 + 阶段（固定在底部，不跟路径重叠）
     ctx.font = "600 28px ui-monospace, Consolas, monospace";
     ctx.textAlign = "center";
     ctx.fillStyle = dark ? "rgba(255,150,120,.95)" : "rgba(255,180,80,.95)";
     ctx.fillText(Math.round(p) + "%", W / 2, H - 96);
-    const note = (S.host && S.host.progress && S.host.progress.note)
+    const note = (S && S.host && S.host.progress && S.host.progress.note)
       || (dark ? "正在卸载…" : "正在写入补丁…");
     ctx.font = "500 13px system-ui, 'Microsoft YaHei', sans-serif";
     ctx.fillStyle = "rgba(232,238,246,.62)";
@@ -1727,7 +1745,23 @@ function stopEaterIfIdle(prevTimer) {
     const cur = S.host && S.host.progressTimer;
     if (cur && cur !== prevTimer) return;
     if (cur) clearTimeout(cur);
-    if (S.host) { S.host.progressTimer = null; S.host.progress = null; }
+    if (S.host) S.host.progressTimer = null;
+    // 停在 0% 的等待态：先播「完成」，别让用户以为没动
+    const waiting = S.host && S.host.progress && !S.host.progress.done && (Number(S.host.progress.percent) || 0) < 1;
+    if (waiting) {
+      S.host.progress = { percent: 100, note: "已完成（没有待写入项）", done: true };
+      armorEater.set(100, true);
+      setTimeout(() => {
+        try {
+          armorEater.stop();
+          if (S.host) S.host.progress = null;
+          if (S.tab === "breach") renderPage();
+        } catch { /* ignore */ }
+      }, 900);
+      if (S.tab === "breach") renderPage();
+      return;
+    }
+    if (S.host) S.host.progress = null;
     armorEater.stop();
   } catch { /* ignore */ }
 }
@@ -2535,7 +2569,7 @@ function renderSimpleOperation() {
         const pct = Math.max(0, Math.min(100, Number(prog.percent) || 0));
         const label = prog.done ? (prog.step === "failed" ? "失败" : "完成") : (prog.note || prog.step || "处理中");
         return `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}">
-          <div class="prog-bar"><i style="width:${Math.max(2, pct)}%"></i></div>
+          <div class="prog-bar"><i class="${pct < 1 && !prog.done ? "indet" : ""}" style="width:${Math.max(2, pct)}%"></i></div>
           <div class="prog-meta"><span>${Math.round(pct)}% · ${esc(label)}</span>${prog.done ? "" : '<span class="mini">进行中…</span>'}</div>
         </div>`;
       })()}
@@ -4187,7 +4221,7 @@ function renderFlowApplyStep() {
       const pct = Math.max(0, Math.min(100, Number(prog.percent) || 0));
       const label = prog.done ? (prog.step === "failed" ? "失败" : "完成") : (prog.note || prog.step || "处理中");
       return `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}">
-        <div class="prog-bar"><i style="width:${Math.max(2, pct)}%"></i></div>
+        <div class="prog-bar"><i class="${pct < 1 && !prog.done ? "indet" : ""}" style="width:${Math.max(2, pct)}%"></i></div>
         <div class="prog-meta"><span>${Math.round(pct)}% · ${esc(label)}</span>${prog.done ? "" : '<span class="mini">进行中…</span>'}</div>
       </div>`;
     })()}

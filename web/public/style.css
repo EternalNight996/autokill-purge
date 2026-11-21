@@ -1668,3 +1668,12 @@ body.armor-enter .topbar { animation: armor-topbar .9s ease; }
 
 /* 吃豆人式进度：注入/卸载时召唤的小怪（armorEater 创建，完成 0.9s 后自毁） */
 .armor-eater { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 9998; }
+
+/* 进度条"等待态"条纹：请求还没返回时也看得出在动 */
+.prog-bar i.indet {
+  width: 100% !important;
+  background-image: repeating-linear-gradient(90deg, rgba(255,160,30,.18) 0 12px, rgba(255,170,40,.62) 12px 24px);
+  background-size: 24px 100%;
+  animation: prog-indet 900ms linear infinite;
+}
+@keyframes prog-indet { to { background-position: 24px 0; } }
