@@ -13,7 +13,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
-import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, restartDesktopHost, stopDesktopHost, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listPurgeLeftovers, cleanPurgeLeftovers, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
+import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, restartDesktopHost, stopDesktopHost, scheduleHandoff, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listPurgeLeftovers, cleanPurgeLeftovers, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
 import { readRuntime as readPluginRuntime, writeRuntime as writePluginRuntime, runtimeFile as pluginRuntimeFile } from '../plugin/lib/host-bridge.js';
 import { listOps, opStatus, opRun, opPlan } from './ops/index.mjs';
 import { run as instructionRun } from './ops/instruction-inject.mjs';
@@ -1913,19 +1913,15 @@ async function handleApi(req, res, url, state) {
       const r = await applyHostPatches(body.mode || 'apply', { patchIds: Array.isArray(body.patches) ? body.patches : [] });
       // 一键应用 = 写完还要能生效。桌面壳从 app.asar 里加载 dsh，asar 还在时补丁一条都不会被读到
       // （重启也没用），所以这里直接把「挪 asar + 重启宿主」做完；body.land=false 可只写不落地。
+      // 一键应用：补丁写完立刻返回，落地（杀宿主/挪 asar/重启）交给独立 runner。
+      // 之前同步 finishHostHandoff 会把控制台和请求一起掐断，前端只能看到「失败」。
       let handoff = null;
       if (r && r.pendingHandoff && body.land !== false) {
-        try { handoff = await finishHostHandoff({ restart: true }); }
+        try { handoff = await scheduleHandoff({ mode: 'land', delayMs: 2500 }); }
         catch (e) { handoff = { ok: false, error: publicError(e) }; }
-        // Electron 退出后 asar 句柄偶尔晚放：第二遍只 kill（已死）+ rename，代价很小；
-        // 别把「差一口气」当失败甩给用户 —— 一键应用就该一次点到底。
-        if (handoff && handoff.ok === false && (handoff.error === 'asar_locked' || handoff.error === 'app_dir_incomplete')) {
-          await new Promise((done) => setTimeout(done, 2500));
-          try { handoff = await finishHostHandoff({ restart: true }); }
-          catch (e) { handoff = { ok: false, error: publicError(e) }; }
-        }
       }
-      const landed = !!(handoff && handoff.ok && handoff.asarMoved);
+      const scheduled = !!(handoff && handoff.ok);
+      const landed = scheduled;
       // applyError：引擎收尾抛错但文件可能已被改过 —— 200 里带出来，别让人以为彻底失败
       return send(res, r && r.applyError ? 409 : 200, {
         ok: !(r && r.applyError),
@@ -1934,8 +1930,12 @@ async function handleApi(req, res, url, state) {
         guardSnapshot: guard.id,
         handoff: handoff,
         landed: landed,
-        handoffRequired: !!(r && r.pendingHandoff) && !landed,
-        effective: landed || !(r && r.pendingHandoff),
+        scheduled: scheduled,
+        restartInMs: scheduled ? 2500 : 0,
+        handoffRequired: !!(r && r.pendingHandoff) && !scheduled,
+        // 只有「本来就不需要落地」才敢说现在已生效；已下发落地只能说「重启中，稍后生效」
+        effective: !(r && r.pendingHandoff),
+        effectiveAfterRestart: scheduled,
       });
     } catch (e) { return send(res, 500, { ok: false, error: 'apply_failed', detail: publicError(e), guardSnapshot: guard.id }); }
   }
@@ -1985,8 +1985,9 @@ async function handleApi(req, res, url, state) {
     if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '落地会结束并重启桌面宿主（当前会话会断），传 confirm:true' });
     const guard = await createSnapshot(DATA_DIR, 'pre-handoff');
     try {
-      const r = await finishHostHandoff({ restart: body.restart !== false });
-      return send(res, 200, { ok: !!r.ok, handoff: r, guardSnapshot: guard.id, restartRequired: false });
+      // 同样交给独立 runner：先回响应，再杀宿主，界面不会「点了没反应」
+      const r = await scheduleHandoff({ mode: body.mode === 'restart' ? 'restart' : 'land', delayMs: 2500 });
+      return send(res, 200, { ok: r.ok, handoff: r, scheduled: r.ok, guardSnapshot: guard.id, restartRequired: false, note: r.ok ? '已下发：约 3 秒后结束并重启宿主' : (r.error || '下发失败') });
     } catch (e) { return send(res, 500, { ok: false, error: 'handoff_failed', detail: publicError(e), guardSnapshot: guard.id }); }
   }
   if (p === '/api/host/asar' && method === 'POST') {
@@ -2458,11 +2459,11 @@ async function handleApi(req, res, url, state) {
         summary: r.note,
       });
     } catch (e) { steps.push({ id: 'leftovers', ok: false, error: publicError(e) }); }
-    // 8) 为放回 asar 停过宿主：重新拉起，用户眼前的才是干净原版（不然桌面就空了）
+    // 8) 为放回 asar 停过宿主：下发独立 runner 重新拉起（不在本进程里做，避免控制台跟着断）
     if (wasLanded) {
       try {
-        const rr = await restartDesktopHost();
-        steps.push({ id: 'restart', ok: rr.ok !== false, note: rr.note || '桌面宿主已重新拉起' });
+        const rr = await scheduleHandoff({ mode: 'restart', delayMs: 2500 });
+        steps.push({ id: 'restart', ok: rr.ok, scheduled: true, note: rr.ok ? '宿主将在约 3 秒后重新拉起' : (rr.error || '重启下发失败') });
       } catch (e) { steps.push({ id: 'restart', ok: false, error: publicError(e) }); }
     }
     const errors = steps.filter((s) => s.ok === false);

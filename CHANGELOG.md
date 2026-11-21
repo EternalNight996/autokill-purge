@@ -1123,6 +1123,23 @@ node test/acceptance.mjs             → 21/21 PASS
 - AutoKill 插件 `.wasm` 未产出：本机出网被拦，缺 `wit-bindgen-rust-macro`；在联网机器执行 `cargo build --release --target wasm32-unknown-unknown` 即可。
 - §8 共 40 条（正向 20 / 负向 15 / 回归 5），自动化覆盖 21 条，其余按 `docs/ACCEPTANCE.md` 手测清单执行。
 
+## [1.1.25-beta.9] — 2026-11-22（按钮真正做到一键：单击即执行 + 独立落地进程）
+
+### Changed — 去掉两段式确认
+- 「一键注入 / 一键卸载 / 落地并重启宿主」不再需要点两次：删掉 `pendingAction` 的「再点一次确认」分支与对应提示块，单击直接执行。
+- 按钮提示改写为"点一次就执行：写补丁 + 自动落地 + 重启 / 还原 + 清残留 + 重启"。
+
+### Fixed — 落地不再把控制台和 HTTP 响应一起掐断
+- 新增 `scripts/handoff-runner.mjs`：由 WMI 拉起（不在 DSH 进程树里），负责 结束宿主 → `app.asar` 让位 → 重新拉起 → 健康检查（失败自动回滚）→ 把控制台重新拉起。支持 `--mode=land|restart|unland`。
+- 新增 `scheduleHandoff()`（web/host.mjs）：先派发 runner，**立刻回响应**；宿主约 2.5 秒后才重启。
+- `/api/host/apply`、`/api/host/uninstall`、`/api/host/handoff` 全部改为派发 + 回执，返回 `scheduled / restartInMs / effectiveAfterRestart`；前端据此显示"已下发：约 3 秒后重启，补丁随即生效"。
+- 之前的坑：控制台与宿主同进程树，`finishHostHandoff()` 里 taskkill 宿主会连坐控制台，请求断在半路 —— 表现就是"点了没反应/失败"。现在请求先落地再断线。
+
+### Verified
+- `scheduleHandoff({mode:'restart',delayMs:300000})` → `returnValue:"0"`，runner 进程独立存在，日志 `armed`，随后手动杀掉不触发重启。
+- 重启控制台后 `POST /api/host/apply {land:false}` 返回新字段：`scheduled:false`、`restartInMs:0`、`effective:true`、`effectiveAfterRestart:false`（当前已落地状态）。
+- `node --check` 四个改动文件全通过。
+
 ## [1.1.25-beta.8] — 2026-11-22（插件加载修复：BOM 一个字节让整个 bundle 被跳过）
 
 ### Fixed

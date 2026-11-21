@@ -1522,22 +1522,8 @@ function simpleSteps() {
 async function simpleHostAction(kind) {
   const h = S.host;
   if (h.busy) return;
-  // 两段式确认：第一次点只是把按钮变成「再点一次确认」，不弹 confirm（弹窗会被拦、也可能被当成没反应）
-  const now = Date.now();
-  const armed = !!(h.pendingAction && h.pendingAction.kind === kind && now - h.pendingAction.at < 6000);
-  if (!armed) {
-    h.pendingAction = { kind: kind, at: now };
-    h.message = "";
-    h.error = null;
-    renderPage();
-    setTimeout(() => {
-      if (S.host.pendingAction && S.host.pendingAction.kind === kind) {
-        S.host.pendingAction = null;
-        if (S.tab === "breach") renderPage();
-      }
-    }, 6200);
-    return;
-  }
+  // 一键 = 点一次就执行。不再有「再点一次确认」这一段：
+  // 落地已改成独立 runner（先回响应、约 3 秒后再杀宿主），所以不需要靠二次点击来防误触。
   h.pendingAction = null;
   h.busy = true;
   h.busyKind = kind;
@@ -1555,21 +1541,22 @@ async function simpleHostAction(kind) {
       const pluginNote = (data.pluginResult && data.pluginResult.summary)
         ? "插件：" + data.pluginResult.summary + "。"
         : "";
-      const needHandoff = !!(data.result && data.result.pendingHandoff) && !data.landed;
+      const needHandoff = !!(data.result && data.result.pendingHandoff) && !data.scheduled;
+      const when = Math.round((data.restartInMs || 2500) / 1000);
       h.message = pluginNote + (added
         ? `注入完成：新增 ${fmtNum(added)} 处，${fmtNum(already)} 处本来就是最新。`
         : `注入完成：宿主本来就是最新（${fmtNum(already)} 处无需再改，0 处新增）。`)
-        + (data.landed
-          ? "asar 已让位、宿主已重启：补丁这次真的生效了（页面若断开是宿主重启，稍后刷新即可）。"
+        + (data.scheduled
+          ? `已下发：约 ${when} 秒后结束并重启宿主，补丁随即生效。页面会断开一下，宿主重启后自动回来。`
           : needHandoff
-            ? "但落地没成功（" + ((data.handoff && (data.handoff.note || data.handoff.error)) || "原因未知") + "）：桌面壳仍从 app.asar 加载，补丁不生效 —— 再点一次「落地并重启宿主」。"
+            ? "落地没下发成功（" + ((data.handoff && (data.handoff.note || data.handoff.error)) || "原因未知") + "）：补丁已写入，但桌面壳仍读 app.asar。"
             : "补丁已在当前加载的宿主里，重启 dsh 即生效。");
     } else if (kind === "handoff") {
-      // 落地：结束宿主 → app.asar 改名让位 → 重新拉起。当前会话会断，属正常。
+      // 落地：独立 runner 先回响应，再结束宿主 → asar 让位 → 重新拉起
       data = await request("/api/host/handoff", { method: "POST", body: { confirm: true } });
       const hd = (data && data.handoff) || {};
-      if (!data || data.ok === false || hd.ok === false) throw payloadError(data, hd.note || "落地失败");
-      h.message = hd.note || "已落地并重启宿主：现在加载的是 resources/app，补丁才真正生效。";
+      if (!data || data.ok === false || (hd.ok === false)) throw payloadError(data, hd.note || hd.error || "落地失败");
+      h.message = data.note || "已下发：约 3 秒后结束并重启宿主，补丁随即生效。";
     } else {
       data = await request("/api/host/uninstall", { method: "POST", body: { confirm: true } });
       if (!data || data.ok === false) throw payloadError(data, "卸载失败");
@@ -3868,17 +3855,16 @@ function renderFlowApplyStep() {
         ? `${fmtNum(c.applied || 0)}/${fmtNum(c.total || 0)} 已写入 · ${fmtNum(c.pending || 0)} 待写入 · 未生效（宿主读 app.asar）${c.failed ? ` · ${c.failed} 失败` : ""}${c.na ? ` · ${c.na} 跳过` : ""}`
         : `${fmtNum(c.applied || 0)}/${fmtNum(c.total || 0)} 已注入并生效${c.failed ? ` · ${c.failed} 失败` : ""}`} · 备份 ${snaps.length}</span></h2>
     <div class="actions">
-      <button type="button" class="primary ${btnTone("apply")}" data-simple-host="apply" title="写完补丁会顺带落地（挪走 app.asar）并重启桌面宿主——这步会断当前会话"${busy ? " disabled" : ""}>${toneText("apply", "一键注入")}</button>
-      <button type="button" class="ghost ${btnTone("uninstall")}" data-simple-host="uninstall" title="按 app.asar 原件还原宿主文件，并清掉插件、注入块与 5 GB 级解包残留"${busy ? " disabled" : ""}>${toneText("uninstall", "一键卸载")}</button>
+      <button type="button" class="primary ${btnTone("apply")}" data-simple-host="apply" title="点一次就执行：写补丁 → 自动落地（挪走 app.asar）→ 重启宿主。约 3 秒后宿主重启，页面会断开一下"${busy ? " disabled" : ""}>${toneText("apply", "一键注入")}</button>
+      <button type="button" class="ghost ${btnTone("uninstall")}" data-simple-host="uninstall" title="点一次就执行：按 app.asar 原件还原宿主 + 清掉解包残留与插件 + 重启宿主"${busy ? " disabled" : ""}>${toneText("uninstall", "一键卸载")}</button>
       <button type="button" class="ghost ${btnTone("handoff")}" data-simple-host="handoff"${busy || !d.desktopSealed ? " disabled" : ""}>${toneText("handoff", d.desktopSealed ? "落地并重启宿主" : "已落地")}</button>
       <label class="mini" style="display:inline-flex;align-items:center;gap:6px;margin-left:4px">
         <input type="checkbox" data-host-plugin-toggle${h.withPlugin ? " checked" : ""}>
         <span>同时注入 autokill-purge 插件</span>
       </label>
-      <span class="hint">点一次先确认（橙）、再点一次执行（灰）；注入前自动备份，卸载会先还原宿主再清插件文件。勾选后走同一事务：先 pnpm add + 登记 bundles + 校验，失败不继续打补丁。</span>
+      <span class="hint">点一次就执行：注入 = 写补丁 + 自动落地（挪走 app.asar）+ 重启宿主；卸载 = 还原宿主 + 清残留 + 重启。落地由独立进程执行，点完立即有回执，约 3 秒后宿主重启。</span>
     </div>
     ${d.desktopSealed ? `<div class="alert warn" role="alert"><strong>补丁写进去了，但桌面壳还在读 app.asar</strong><span class="hint">桌面壳用 <code>app.getAppPath() + "/dsh"</code> 定位运行时，官方密封包把它指到 <code>resources/app.asar</code>；所以 <code>resources/app</code> 里那 83 条字节替换不会被加载，重启多少次都一样。点「落地并重启宿主」＝结束宿主 → 把 <code>app.asar</code> 改名让位 → 重新拉起，之后才真的生效（当前会话会断，属正常）。</span></div>` : ""}
-    ${pend("apply") || pend("uninstall") || pend("handoff") ? `<div class="alert warn" role="alert"><strong>再点一次同一个按钮才会执行</strong><span class="hint">${pend("apply") ? "注入会改本机 dsh 安装。" : pend("handoff") ? "落地会结束并重启桌面宿主，当前会话会断。" : "卸载会还原宿主并删掉三处插件文件，之后要重装才能再用。"}</span></div>` : ""}
     ${gate}
     ${msg}
     ${promptBox}

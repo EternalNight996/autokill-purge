@@ -993,6 +993,33 @@ export async function finishHostHandoff({ restart = true } = {}) {
   });
 }
 
+/**
+ * 一键落地：把「结束宿主 → asar 让位 → 重新拉起 → 健康检查」交给一个**独立进程**（WMI 拉起，
+ * 不在 DSH 进程树里）。这样控制台不会跟着宿主一起被杀，HTTP 响应能先回到前端 ——
+ * 界面才可能做到「点一次就到位」，而不是点完就断线、看起来像失败。
+ *
+ * @param {{mode?: 'land'|'restart'|'unland', delayMs?: number, port?: number}} opts
+ */
+export async function scheduleHandoff({ mode = 'land', delayMs = 2500, port = 8792 } = {}) {
+  const script = join(HERE_DIR, '..', 'scripts', 'handoff-runner.mjs');
+  if (!existsSync(script)) return { ok: false, error: 'runner_missing', script: script };
+  const cmd = `"${process.execPath}" "${script}" --mode=${mode} --delay=${delayMs} --port=${port}`;
+  const psCmd = "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '"
+    + cmd.replace(/'/g, "''") + "' } | Select-Object -ExpandProperty ReturnValue";
+  return new Promise((resolve) => {
+    try {
+      const child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', psCmd], { windowsHide: true });
+      let out = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.on('error', (e) => resolve({ ok: false, error: String((e && e.message) || e), mode, delayMs }));
+      child.on('close', () => {
+        const rv = String(out || '').trim();
+        resolve({ ok: rv === '0', returnValue: rv, mode, delayMs, scheduled: rv === '0' });
+      });
+    } catch (e) { resolve({ ok: false, error: String((e && e.message) || e), mode, delayMs }); }
+  });
+}
+
 /** 撤销落地：把 asar 放回去（宿主下次启动就又读 asar 原件） */
 export async function restoreHostAsar() {
   const asar = ASAR_PATH;

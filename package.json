@@ -1,6 +1,6 @@
 {
   "name": "autokill-purge",
-  "version": "1.1.25-beta.7",
+  "version": "1.1.25-beta.9",
   "description": "破甲控制台｜一键注入 · 83 补丁可视化 · 载荷生成 · 记忆库 · MCP 管理｜零依赖",
   "type": "module",
   "bin": {
@@ -23,6 +23,7 @@
     "plugin/",
     "break/",
     "scripts/launch.mjs",
+    "scripts/handoff-runner.mjs",
     "scripts/mem-home.mjs",
     "scripts/install-desktop.mjs",
     "scripts/mem-keepalive.mjs",
