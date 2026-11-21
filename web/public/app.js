@@ -1260,7 +1260,16 @@ async function boot() {
     }
     S.booted = true;
     // 预热特效：页面空闲时就建好 canvas，点击注入时零延迟
-    setTimeout(() => { try { armorEater.warm(); } catch { /* ignore */ } }, 600);
+    try { armorEater.warm(); } catch { /* ignore */ }
+    // 鼠标移到注入/卸载按钮上再预热一次（兜底）
+    try {
+      document.addEventListener('mouseover', (ev) => {
+        const t = ev.target;
+        if (t && t.closest && t.closest('[data-simple-host="apply"], #sBuild, [data-simple-host="uninstall"]')) {
+          try { armorEater.warm(); } catch { /* ignore */ }
+        }
+      }, { passive: true });
+    } catch { /* ignore */ }
     S.bootError = null;
     // 从「梦神装甲」进来：播一次入场（扫描线 + logo 光晕），让“触发”有存在感
     try {
@@ -1669,7 +1678,8 @@ const armorEater = {
     }
 
     const maxR = Math.min(W, H) * 0.46;
-    const RBH = Math.min(W, H) * 0.105;
+    // 越吸越大：0% 时 0.55 倍，满进度 1.2 倍
+    const RBH = Math.min(W, H) * 0.105 * (0.55 + 0.65 * (p / 100));
     const INK = dark ? '150,110,100' : '150,163,182';
     const SILVER = dark ? '196,170,162' : '196,206,222';
     const DIM = '96,106,122';
