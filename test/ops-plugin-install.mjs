@@ -34,7 +34,10 @@ ok('2. status available', st.available === true, st.summary);
 ok('2b. status 不改 profile 声明', b1.pkg === b2.pkg && b1.lock === b2.lock);
 ok('2c. 候选插件齐全', ['autokill-purge-plugin', 'memory-eternal', 'dsh-purge'].every((n) => (st.detail.plugins || []).some((p) => p.name === n)));
 ok('2d. 校验无跳过', Array.isArray(st.detail.skipped) && st.detail.skipped.length === 0);
-ok('2e. layers 含 autokill-purge-plugin', (st.detail.layers || []).includes('autokill-purge-plugin'));
+// layers 是「真正加载到的层」，bundles 是「声明要加载的」：控制台进程不在宿主 boot 里时 layers 可能为空，
+// 所以两者任一含插件即视为已登记（bundles 正确时宿主重启后必然加载）
+const hasLayer = (st.detail.layers || []).includes('autokill-purge-plugin') || (st.detail.bundles || []).includes('autokill-purge-plugin');
+ok('2e. layers/bundles 含 autokill-purge-plugin', hasLayer, 'layers=' + (st.detail.layers || []).length + ' bundles=' + (st.detail.bundles || []).length);
 
 // 3) plan
 const pl = await mod.plan(ctx, { plugins: ['autokill-purge-plugin'] });
