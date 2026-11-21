@@ -1483,7 +1483,8 @@ function renderPage() {
   // 记忆库是整页 iframe，再插一条技术模式提示会把面板往下顶 63px、还溢出
   if (modeIsTechnical() && S.tab !== "memory") renderTechHint();
   // 破甲页末尾补「能力补齐」：模块缺失时后端降级成一行不可用，前端照常渲染
-  if (S.tab === "breach") appendOpsPanel(page);
+  // 能力补齐是技术能力：只在技术模式出现，普通模式首屏保持轻量
+  if (S.tab === "breach" && modeIsTechnical()) appendOpsPanel(page);
   bindGroups();
   $$('#page pre[tabindex="0"]').forEach((pre, index) => {
     if (!pre.getAttribute("aria-label")) pre.setAttribute("aria-label", "可滚动文本内容 " + (index + 1));

@@ -710,7 +710,7 @@ async function assert1() {
   // 所以直接读按钮本身，别靠文本窗口碰运气。
   const btnText = await page.evalJS(inPage("const b=document.querySelector('#sBuild'); return b ? b.textContent.trim() : '';"), 3000).catch(() => '');
   // 破甲方式会换按钮文案（默认补丁层＝「应用补丁」，载荷＝「一键生成」），只要生成按钮在且是可执行动作即可
-  const hasOneClick = /生成|应用|入库/.test(String(btnText || "")) || text.includes('一键生成') || text.includes('生成并');
+  const hasOneClick = /生成|应用|入库|注入/.test(String(btnText || "")) || text.includes('一键生成') || text.includes('生成并') || text.includes('一键注入');
   // 破甲台按方式条件渲染：补丁层不需要模型/任务，所以「模型入口」只在需要载荷的方式下要求存在
   const deliveryMode = await page.evalJS(inPage("const s=document.querySelector('#sDelivery'); return s ? s.value : '';"), 3000).catch(() => '');
   const needsPayload = deliveryMode !== 'host-patch';
