@@ -1122,3 +1122,14 @@ node test/acceptance.mjs             → 21/21 PASS
 ### 待办
 - AutoKill 插件 `.wasm` 未产出：本机出网被拦，缺 `wit-bindgen-rust-macro`；在联网机器执行 `cargo build --release --target wasm32-unknown-unknown` 即可。
 - §8 共 40 条（正向 20 / 负向 15 / 回归 5），自动化覆盖 21 条，其余按 `docs/ACCEPTANCE.md` 手测清单执行。
+
+## [1.1.25-beta.8] — 2026-11-22（插件加载修复：BOM 一个字节让整个 bundle 被跳过）
+
+### Fixed
+- **`plugin/package.json` 带 UTF-8 BOM**：`plugin_manager list_bundles` 报 `availability:"missing"` + `Unexpected token '\uFEFF'`，DSH 直接跳过该 bundle —— 三项 insert 不入树，`autokill_*` / `purge_*` 工具、`/purge` 命令、运行时桥全部没加载。根因是 PowerShell `Set-Content -Encoding UTF8` 会写 BOM。已去 BOM，并同步清掉主 `package.json` 与 `test/plugin-runtime.mjs` 的 BOM。
+- `profiles/desktop/package.json` 同样被 BOM 污染过（改依赖时产生），已去 BOM；依赖指向重新打包的 `autokill-purge-plugin-0.4.0.tgz`。
+
+### Verified
+- 重启后插件加载：`autokill_runtime_status` 返回 `upstream: {ok:true, name:"dsh-purge"}`，`services={approval:true,sandbox:true,pruner:false,tools:true,systemPrompt:true}`，`patched={approval:[decide,effectivePolicy], sandbox:[confine]}`。
+- 上游内核在安装副本上可跑：`ALL_PATCHES=83 applied=69 pending=0 hooksDenyBypass=true`，导出 `apply / registerPromptSections / name / inject`。
+- 包内 `cordis.patch.yml` 三项 insert 齐全（`autokill-redteam-store` / `autokill-redteam` / `autokill-purge`）。
