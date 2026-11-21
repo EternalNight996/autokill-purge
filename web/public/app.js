@@ -1554,6 +1554,97 @@ function simpleSteps() {
   }).join("")}</ol>`;
 }
 
+/* 吃豆人式进度：注入/卸载时召唤一只小怪，沿轨道一路吃豆，位置=进度；吃完放大消失。
+   2D canvas 实现（零依赖、离线可用、60fps 开销可忽略），不用 three.js。 */
+const armorEater = {
+  cv: null, ctx: null, raf: 0, t0: 0, pct: 0, done: false, mode: "inject", fin: 0,
+  start(mode) {
+    try {
+      this.stop();
+      this.mode = mode === "uninstall" ? "uninstall" : "inject";
+      this.pct = 0; this.done = false; this.fin = 0;
+      const cv = document.createElement("canvas");
+      cv.className = "armor-eater";
+      cv.width = window.innerWidth;
+      cv.height = window.innerHeight;
+      document.body.appendChild(cv);
+      this.cv = cv;
+      this.ctx = cv.getContext("2d");
+      this.t0 = performance.now();
+      const loop = (t) => { this.draw(t); this.raf = requestAnimationFrame(loop); };
+      this.raf = requestAnimationFrame(loop);
+    } catch { /* 特效失败不影响主流程 */ }
+  },
+  set(pct, done) {
+    this.pct = Math.max(this.pct, Math.min(100, Number(pct) || 0));
+    if (done) this.done = true;
+  },
+  draw(t) {
+    const ctx = this.ctx, cv = this.cv;
+    if (!ctx || !cv) return;
+    const W = cv.width, H = cv.height;
+    const p = Math.max(0, Math.min(100, this.pct));
+    const dark = this.mode === "uninstall";
+    ctx.clearRect(0, 0, W, H);
+    // 半透明压暗，让怪物跳出来
+    ctx.fillStyle = "rgba(6,8,12,.55)";
+    ctx.fillRect(0, 0, W, H);
+    // 轨道
+    const y = H * 0.62;
+    const x0 = W * 0.08, x1 = W * 0.92;
+    ctx.strokeStyle = dark ? "rgba(255,120,90,.25)" : "rgba(255,150,40,.25)";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x0, y + 34); ctx.lineTo(x1, y + 34); ctx.stroke();
+    // 豆子：14 颗，按进度被吃
+    const beans = 14;
+    const eaten = Math.round((p / 100) * beans);
+    for (let i = 0; i < beans; i += 1) {
+      if (i < eaten) continue;
+      const bx = x0 + ((x1 - x0) * i) / (beans - 1);
+      ctx.beginPath();
+      ctx.arc(bx, y + 34, 4, 0, Math.PI * 2);
+      ctx.fillStyle = dark ? "rgba(255,140,110,.85)" : "rgba(255,190,90,.9)";
+      ctx.fill();
+    }
+    // 怪物位置：注入从左到右，卸载从右到左
+    const prog = this.done ? 1 : p / 100;
+    const mx = dark ? x1 - (x1 - x0) * prog : x0 + (x1 - x0) * prog;
+    const tsec = (t - this.t0) / 1000;
+    const mouth = 0.18 + Math.abs(Math.sin(tsec * 9)) * 0.32;
+    const scale = this.done ? 1 + Math.min(1, this.fin / 700) * 0.6 : 1;
+    const R = 22 * scale;
+    ctx.save();
+    ctx.translate(mx, y);
+    ctx.scale(dark ? -1 : 1, 1);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, R, mouth * Math.PI, (2 - mouth) * Math.PI);
+    ctx.closePath();
+    ctx.fillStyle = dark ? "#ff6a3d" : "#ffa01e";
+    ctx.fill();
+    // 眼睛
+    ctx.beginPath();
+    ctx.arc(R * 0.22, -R * 0.45, R * 0.16, 0, Math.PI * 2);
+    ctx.fillStyle = "#101418";
+    ctx.fill();
+    ctx.restore();
+    // 百分比
+    ctx.font = "600 28px ui-monospace, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = dark ? "rgba(255,150,120,.95)" : "rgba(255,180,80,.95)";
+    ctx.fillText(Math.round(p) + "%", W / 2, y - 46);
+    // 完成：放大淡出
+    if (this.done) {
+      this.fin += 16;
+      if (this.fin > 900) this.stop();
+    }
+  },
+  stop() {
+    if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
+    if (this.cv) { try { this.cv.remove(); } catch { /* ignore */ } this.cv = null; this.ctx = null; }
+  },
+};
+
 /* 破甲台「一键注入」的炸裂特效：全屏 canvas，冲击波 + 220 粒子 + 闪光，1.7s 自毁（零依赖，不用 three.js） */
 function armorBlast(anchor) {
   try {
@@ -1613,18 +1704,22 @@ function armorBlast(anchor) {
 function stopProgressPolling() {
   if (S.host.progressTimer) { clearTimeout(S.host.progressTimer); S.host.progressTimer = null; }
 }
-function startProgressPolling() {
+function startProgressPolling(mode) {
   stopProgressPolling();
+  armorEater.start(mode);
   const started = Date.now();
   S.host.progress = { percent: 0, step: "queued", note: "已下发，等待落地进程接手…", done: false };
   const tick = async () => {
     let p = null;
     try { const d = await request("/api/host/progress"); p = d && d.progress; } catch { /* 控制台可能正被重启 */ }
-    if (p) S.host.progress = p;
+    if (p) { S.host.progress = p; armorEater.set(p.percent, p.done); }
     if (S.tab === "breach") renderPage();
     const expired = Date.now() - started > 120000;
     if (!(p && p.done) && !expired) S.host.progressTimer = setTimeout(tick, 500);
-    else S.host.progressTimer = null;
+    else {
+      S.host.progressTimer = null;
+      if (expired) armorEater.stop();
+    }
   };
   tick();
 }
@@ -1687,7 +1782,7 @@ async function simpleHostAction(kind) {
     if ((kind === "apply" && data && data.scheduled)
       || (kind === "handoff" && data && data.scheduled)
       || (kind === "uninstall" && data && data.uninstall && data.uninstall.scheduled)) {
-      startProgressPolling();
+      startProgressPolling(kind === "uninstall" ? "uninstall" : "inject");
     }
     toast(kind === "apply" ? "注入完成" : kind === "handoff" ? "已落地并重启宿主" : "卸载完成");
     h.lastResult = { kind: kind, ok: true, at: Date.now() };
@@ -1944,7 +2039,7 @@ async function revertHostPatches() {
   try {
     const d = await request("/api/host/uninstall", { method: "POST", body: { confirm: true } });
     if (!d || d.ok === false) throw payloadError(d, "卸载失败");
-    startProgressPolling();
+    startProgressPolling("uninstall");
     const u = d.uninstall || {};
     toast(`已下发：约 3 秒后结束宿主并完成卸载（${(u.steps || []).length} 个步骤，进度见下方进度条）`);
     loadHostStatus();
@@ -3242,7 +3337,7 @@ async function applyDelivery(variants) {
     const base = `已注入宿主补丁 ${r.selected || 0}/${r.total || 0} 条（新增 ${r.applied || 0}，已是新版 ${r.already || 0}）`;
     // 落地已派发：立即起进度条，宿主约 3 秒后重启
     if (d.scheduled) {
-      startProgressPolling();
+      startProgressPolling("inject");
       return { message: `${base}；已下发：约 ${Math.round((d.restartInMs || 2500) / 1000)} 秒后结束并重启宿主，补丁随即生效（进度见下方进度条）` };
     }
     if (d.landed) return { message: `${base}，asar 已让位、宿主已重启：补丁已生效` };

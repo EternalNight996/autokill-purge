@@ -1665,3 +1665,6 @@ body.armor-enter .topbar { animation: armor-topbar .9s ease; }
 
 /* 「一键注入」炸裂特效的 canvas 层（armorBlast 创建，1.7s 自毁） */
 .armor-blast { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 9999; }
+
+/* 吃豆人式进度：注入/卸载时召唤的小怪（armorEater 创建，完成 0.9s 后自毁） */
+.armor-eater { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 9998; }
