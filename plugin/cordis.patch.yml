@@ -20,7 +20,9 @@
     - id: autokill-redteam
       name: 'autokill-purge-plugin/redteam'
 
-    # ---- autokill-purge 自己的工具桥（autokill_*）----
+    # ---- autokill-purge 自己的工具桥（autokill_*）+ 宿主内运行时桥 ----
+    # 运行时桥在进程内接管 approval / sandbox / toolResultPruner 三个服务，
+    # 并监听 $DSH_HOME/autokill-purge/runtime.json：控制台改开关即生效，不重启宿主。
     - id: autokill-purge
       name: 'autokill-purge-plugin'
       inject: [systemPrompt, tools]
@@ -28,6 +30,7 @@
         toolsEnable: true
         assembleEnable: true
         sessionEnable: false
+        runtimeWatch: true
         consoleUrl: 'http://127.0.0.1:8792'
         allowWriteTools: false
         verbose: false

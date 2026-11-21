@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
 import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, restartDesktopHost, stopDesktopHost, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listPurgeLeftovers, cleanPurgeLeftovers, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
+import { readRuntime as readPluginRuntime, writeRuntime as writePluginRuntime, runtimeFile as pluginRuntimeFile } from '../plugin/lib/host-bridge.js';
 import { listOps, opStatus, opRun, opPlan } from './ops/index.mjs';
 import { run as instructionRun } from './ops/instruction-inject.mjs';
 import { injectSummary } from './summary.mjs';
@@ -1802,6 +1803,18 @@ async function handleApi(req, res, url, state) {
     // 卸载残留预览（只读）：prev 整包副本 / asar 让位副本 / 解包目录 / 开机自启 / 运行时副本
     try { return send(res, 200, await listPurgeLeftovers()); }
     catch (e) { return send(res, 500, { ok: false, error: 'leftovers_failed', detail: publicError(e) }); }
+  }
+  // ---- 宿主内运行时桥的开关（plugin/lib/host-bridge.js 监听这个文件 → 进程内立即生效）----
+  if (p === '/api/plugin/runtime' && method === 'GET') {
+    try { return send(res, 200, { ok: true, file: pluginRuntimeFile(), runtime: readPluginRuntime() }); }
+    catch (e) { return send(res, 500, { ok: false, error: 'runtime_read_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/plugin/runtime' && method === 'POST') {
+    const body = await bodyOf(req);
+    try {
+      const runtime = writePluginRuntime(body.runtime || body || {});
+      return send(res, 200, { ok: true, file: pluginRuntimeFile(), runtime, note: '插件在 ~2s 内监听到变更并重算 hook（无需重启宿主）' });
+    } catch (e) { return send(res, 500, { ok: false, error: 'runtime_write_failed', detail: publicError(e) }); }
   }
   if (p === '/api/host/status' && method === 'GET') {
     return send(res, 200, await hostStatus(DATA_DIR));

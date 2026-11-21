@@ -2,6 +2,33 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.25-beta.7] — 2026-11-22（插件接棒 dsh-purge：四项进程内能力 + 热开关）
+
+### Added — `plugin/lib/host-bridge.js`（插件 0.4.0）
+把 dsh-purge 作为宿主内插件才有的四件事，做进 `autokill-purge-plugin`：
+
+| 能力 | dsh-purge 的做法 | 本插件的做法 |
+|---|---|---|
+| ① 进程内热更新 | Cordis effect / `Fiber._reload` | `ctx.inject` 就绪即挂载；`runtime.json` 一变**2s 内**重算 hook，另有 `autokill_reload`（优先 `fiber.reload`，拿不到就地重算）；所有挂载走 `ctx.effect` 回收 |
+| ② 直接改内存对象 | 改宿主源码文件 | 直接覆盖服务实例：`approval.decide` / `approval.effectivePolicy` / `sandbox.confine` / `toolResultPruner.pruneContent`（own property 遮盖，撤销时 `delete` 露出原型方法） |
+| ③ 改正在跑的调用 | 补丁后重启 | hook 在**返回前**生效：审批直接 `allowed-once`、`confine()` 原样返回 argv、`pruneContent()` 返回 `null` |
+| ④ bundle 生命周期 | 自带 bundle | `cordis.patch.yml` + `ctx.effect` 清理 + `ctx.provide('autokillPurge').runtime` 句柄；`plugin_manager set_plugin` 可热启停（实测无需重启宿主） |
+
+- 开关文件：`$DSH_HOME/autokill-purge/runtime.json`（`approvalBypass` / `sandboxBypass` / `prunerBypass` / `identityRewrite` / `promptInject`），原子写，插件 `fs.watch` 监听。
+- 控制台接口：`GET/POST /api/plugin/runtime`（写开关，插件 2s 内响应）。
+- 新工具：`autokill_runtime_status`（只读：哪些服务被接管、patch 了哪些方法）、`autokill_runtime_set`（运行中切开关）、`autokill_reload`（热重载）。
+- 失败纪律：任何一步失败只 `warn`，不抛给宿主；撤销必须还原到「挂之前」的函数（原型方法 `delete`、own property 用原引用）。
+
+### Verified
+- `test/plugin-runtime.mjs` → **19/19**（假 ctx：接管 / 热更 / 撤销三态），已接入 `npm test`。
+- 实机热重载：`plugin_manager set_plugin(include:autokill-purge, false→true)` → `application:applied`，**未重启宿主**；随后 `autokill_runtime_status` 返回：
+  `patched={approval:[decide,effectivePolicy], sandbox:[confine], pruner:[]}`，`services={approval:true,sandbox:true,pruner:false,tools:true,systemPrompt:true}`。
+- `POST /api/plugin/runtime {prunerBypass:false}` → `updatedAt` 写入，插件 `lastSyncAt` 3s 内更新；再写回 `true`。
+
+### Known
+- `services.pruner=false` 是真实状态，不是失败：`include:tool-result-pruner`（`@deepseek-ai/dsh-compaction-tool-result-pruner`）在当前 profile 里 `enabled:false`，服务不存在，`ctx.inject` 会等它出现再接管。
+- 插件版本 `0.3.5 → 0.4.0`，profile 副本已手工同步；正式发布要重新 `npm pack` + `plugin-install`（否则 profile 的 `file:` 依赖仍指向旧的 0.3.5 tgz）。
+
 ## [1.1.25-beta.6] — 2026-11-21（修复：「一键应用」按不动 + 「一键卸载」留 5 GB 残渣）
 
 ### Fixed — 按钮点了没反应（这才是「安装补丁无效」的第一现场）
