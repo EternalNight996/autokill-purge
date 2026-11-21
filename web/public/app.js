@@ -5286,7 +5286,6 @@ function renderBreach() {
     ${renderFlowPlanStep("technical")}
     ${renderFlowApplyStep()}
     ${renderFlowPatchList()}
-    ${renderFlowExtraPanels()}
 
     ${groupsHtml("breach", [
       { key: "strategy", html: strategyGroup },
@@ -5294,7 +5293,6 @@ function renderBreach() {
       { key: "paths", html: renderBinarySection() },
       { key: "diag", html: diagGroup },
     ])}
-    ${renderLiveModelsSection()}
   `;
   bindBreach();
   bindBinary();
@@ -7435,10 +7433,22 @@ function renderSettings() {
       { key: "paths", html: pathsGroup },
       { key: "diag", html: diagGroup },
     ])}
+    ${renderHostExtraGroup()}
   `;
   bindSettings();
   bindPeer();
   bindMemCli();
+  bindFlowControls();
+}
+
+/** 宿主侧低频面板（规则集 / 出口白名单 / 实时模型识别）：从破甲主流程挪到设置页，避免技术模式被次要功能淹没 */
+function renderHostExtraGroup() {
+  if (!S.host.tried && !S.host.loading) loadHostStatus();
+  const extra = S.host.data ? renderFlowExtraPanels() : "";
+  const live = renderLiveModelsSection();
+  const html = extra + live;
+  return html || `<section class="section"><h2><span class="num">5</span>宿主侧面板<span class="count">未加载</span></h2>
+    <p class="hint">宿主信息还没取到：到「破甲」页看一眼（或稍后回来），这里会出现规则集、出口白名单与实时模型识别。</p></section>`;
 }
 
 /* ============================================================ 私有部署：库名 / 端口一键切换 */
