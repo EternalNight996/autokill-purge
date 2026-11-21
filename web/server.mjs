@@ -1311,6 +1311,17 @@ async function serveStatic(res, pathname) {
     res.writeHead(200, { 'content-type': TYPES[ext] || 'application/octet-stream', 'cache-control': 'no-store' });
     res.end(data);
   } catch {
+    // 静态文件找不到时不要直接 404：单页应用的 hash 路由（/#/breach）与手输路径都会落到这里，
+    // 回 index.html 让前端自己去解析。带扩展名的（图片/脚本）仍然按 404 处理，避免返回 HTML 冒充资源。
+    const hasExt = /\.[a-z0-9]{1,6}$/i.test(rel);
+    if (!hasExt) {
+      try {
+        const html = await readFile(join(HERE, 'public', 'index.html'));
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(html);
+        return;
+      } catch { /* 落回 404 */ }
+    }
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('not found');
   }

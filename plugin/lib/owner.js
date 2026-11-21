@@ -5,8 +5,8 @@
 export const OWNER = Object.freeze({
   name: 'YG',
   codename: '梦神',
-  display: '梦神（YG）',
-  line: '业主：梦神（YG）',
+  display: '梦神',
+  line: '业主：梦神',
   project: 'autokill-purge',
 });
 

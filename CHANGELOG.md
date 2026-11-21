@@ -1173,3 +1173,21 @@ node test/acceptance.mjs             → 21/21 PASS
 ### Verified
 - `node test/rail-host.mjs` 15/15、`test/ui-error-red.mjs` 24/24（改完文案与进度条后复跑）。
 - `sync-dsh-presets.mjs --dry` 与实跑均通过；`/api/host/progress` 可读。
+
+## [1.1.25-beta.11] — 2026-11-22（梦神装甲点击双开；SPA 不再 404；身份统一为「梦神」）
+
+### Fixed — 点一次「梦神装甲」开两个浏览器
+- `plugin/lib/client.js` 的 `openConsole()` 用 `window.open(url, "_blank", "noopener,noreferrer")`：按规范带 `noopener` 时返回 `null`，旧代码据此又执行一次 `window.location.href = url` → 新标签 + 当前页跳转各开一个。现在不带 `noopener`，成功后手动 `w.opener = null`，只有真的被拦截才兜底跳转。
+
+### Fixed — 控制台偶发 404
+- `web/server.mjs` 的 `serveStatic()` 在文件不存在时直接 404。单页应用的 hash 路由与手输路径（`/breach`、`/#/breach` 的路径部分）都会落到这里。现在：无扩展名路径回 `index.html` 由前端解析；带扩展名的资源（图片/脚本）仍按 404，避免返回 HTML 冒充资源。
+
+### Changed — 身份统一为「梦神」
+- `lib/owner.mjs` / `plugin/lib/owner.js`：`display` 改为「梦神」，`line` 改为「业主：梦神」。
+- `web/public/index.html`：标题改「梦神破甲 · 梦神控制台」，页头副标题去掉「（YG）」。
+- `~/.dsh/prompt-inject.md`：PRIME DIRECTIVE 里的 **YG** 全部改为 **梦神**（`YG's vision` → 「梦神的愿景」）。
+
+### Verified
+- `/`、`/breach`、`/nope` 均返回 200 + `text/html`（改前 `/nope` 是 404）。
+- `/api/state` → `deploy.owner = {"name":"YG","codename":"梦神","display":"梦神","line":"业主：梦神"}`。
+- `node --check` client.js / server.mjs / owner.mjs 全通过。

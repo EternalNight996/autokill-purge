@@ -34,12 +34,16 @@ window.__ModuleLoader__.load({
 
     function openConsole() {
       const url = consoleUrl();
+      // 注意：window.open(..., "noopener") 按规范返回 null，旧代码据此又跑了一次
+      // location.href —— 于是每点一次开两个页面。这里不带 noopener，成功后手动断开 opener。
       try {
-        const w = window.open(url, "_blank", "noopener,noreferrer");
-        if (!w) window.location.href = url;
-      } catch (_) {
-        window.location.href = url;
-      }
+        const w = window.open(url, "_blank");
+        if (w) {
+          try { w.opener = null; } catch (_) { /* 跨域后不可写，忽略 */ }
+          return;
+        }
+      } catch (_) { /* 弹窗被拦，走下面的兜底 */ }
+      try { window.location.assign(url); } catch (_) { /* ignore */ }
     }
 
     /** 与控制台同一个图标：内嵌 assets/icon.png（梦神破甲） */
