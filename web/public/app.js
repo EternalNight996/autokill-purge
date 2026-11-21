@@ -1934,7 +1934,7 @@ function renderOpsFold() {
     body = renderSimpleResults();
   }
   return `<details class="adv-fold ops"${S.simple.opsOpen ? " open" : ""}><summary>操作台 · ${esc(meta.name)}</summary>
-    ${S.simple.opsOpen ? renderEquipDetail() + body : ""}
+    ${S.simple.opsOpen ? body : ""}
   </details>`;
 }
 
@@ -4103,7 +4103,7 @@ function renderOpsPanel() {
       }).join("")
     : `<tr><td colspan="4" class="muted">${o.loading ? "探测中…" : (o.error ? esc(simpleReason(o.error)) : "暂无能力模块")}</td></tr>`;
   return `<section class="section" aria-labelledby="f-ops-h">
-    <h2 id="f-ops-h"><span class="num">4</span>能力补齐
+    <h2 id="f-ops-h"><span class="num">5</span>能力补齐
       <span class="count">${ready}/${total} 就绪 · 对齐 dsh-purge</span></h2>
     <div class="actions">
       <button type="button" class="ghost" data-ops-reload${o.loading ? " disabled" : ""}>${o.loading ? "探测中…" : "重新探测"}</button>
@@ -5170,14 +5170,13 @@ function renderBreach() {
   /* 技术模式：零删减，全部原有块按固定顺序装进 5 组折叠 */
   const baseGroup = `
     <section class="section" aria-labelledby="h-task">
-      <h2 id="h-task"><span class="num">1</span>写任务，生成载荷</h2>
+      <h2 id="h-task"><span class="num">4</span>写任务，生成载荷</h2>
       <form id="buildForm" class="card" novalidate>
         <label class="field"><span>任务（必填，要能验收）</span>
           <textarea id="bTask" data-focus="bTask" rows="3" placeholder="例：写一段在授权靶场里验证 SSH 弱口令的步骤，包含命令与验收条件">${esc(b.task)}</textarea>
         </label>
         <div id="buildError">${b.buildError ? alertBox(b.buildError.message, b.buildError.hint) : ""}</div>
         <div style="margin-bottom:10px">${deliverySelectHtml("bDelivery", b)}</div>
-        ${equipInlineBlock("b")}
         <div class="actions">
           <button class="primary" id="bBuild" type="submit"${b.delivery === "host-patch" ? ' title="写完补丁会顺带落地（挪走 app.asar）并重启桌面宿主——这步会断当前会话"' : ""} ${b.building ? 'disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : (b.delivery === "payload" ? "生成载荷" : "生成并" + (b.delivery === "memory" ? "入库" : (b.delivery === "host-prompt" ? "注入宿主" : "一键注入")))}</button>
           <span class="muted">不调用任何模型；只产出可复制载荷与建议。任务为空时不会发请求。角色与输出要求在「生成策略」里。</span>
@@ -5278,13 +5277,12 @@ function renderBreach() {
       <div class="head-meta">${badge("不调用模型 API", "accent")}${badge("只改副本", "")}${badge("expect 前置校验", "good")}${hostBadge()}</div>
     </div>
 
-    ${baseGroup}
-
     ${renderHostSwitch()}
 
     ${renderFlowModelStep("technical")}
     ${renderFlowPlanStep("technical")}
     ${renderFlowApplyStep()}
+    ${baseGroup}
     ${renderFlowPatchList()}
 
     ${groupsHtml("breach", [
