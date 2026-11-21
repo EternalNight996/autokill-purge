@@ -3871,6 +3871,25 @@ function renderFlowPlanStep(mode) {
   </section>`;
 }
 
+/** 提示词正文编辑器：低频，放在设置页（技术模式主流程不再出现） */
+function renderPromptEditor() {
+  const h = S.host;
+  const pr = h.prompt;
+  if (!pr) return "";
+  const draft = h.promptDraft != null ? h.promptDraft : (pr.text || "");
+  return `<details class="grp" data-group="flow:prompt">
+      <summary><span class="grp-title">注入正文（可直接改）</span><span class="grp-hint">${pr.isBuiltin ? "与内置默认一致" : "已被改动"} · ${fmtNum(draft.length)} 字符</span></summary>
+      <div class="grp-body">
+        <textarea id="hostPrompt" rows="12" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px;width:100%">${esc(draft)}</textarea>
+        <div class="actions" style="margin-top:8px">
+          <button type="button" class="primary" data-prompt-action="save"${h.promptDirty ? "" : " disabled"}>保存正文</button>
+          <button type="button" class="ghost" data-prompt-action="reset">恢复默认正文</button>
+          <span class="hint">保存前自动备份；重启 dsh 生效。</span>
+        </div>
+      </div>
+    </details>`;
+}
+
 function renderFlowApplyStep() {
   const h = S.host;
   const d = h.data;
@@ -3890,17 +3909,6 @@ function renderFlowApplyStep() {
   // 本仓自己做的是宿主补丁引擎（web/patch-engine），不依赖 dsh-purge 的授权文件；门禁留在提示层即可。
   const authorized = !!(h.drill && h.drill.data && h.drill.data.granted);
   const gate = authorized ? "" : `<div class="alert warn" role="alert"><strong>还没在「演练台」确认授权</strong><span class="hint">按钮不会因此变灰；请在演练台确认一次，或自行确认你已获得对这台机器的测试授权。</span></div>`;
-  const promptBox = pr ? `<details class="grp" data-group="flow:prompt">
-      <summary><span class="grp-title">注入正文（可直接改）</span><span class="grp-hint">${pr.isBuiltin ? "与内置默认一致" : "已被改动"} · ${fmtNum(draft.length)} 字符</span></summary>
-      <div class="grp-body">
-        <textarea id="hostPrompt" rows="12" spellcheck="false" style="font-family:ui-monospace,Consolas,monospace;font-size:12px;width:100%">${esc(draft)}</textarea>
-        <div class="actions" style="margin-top:8px">
-          <button type="button" class="primary" data-prompt-action="save"${h.promptDirty ? "" : " disabled"}>保存正文</button>
-          <button type="button" class="ghost" data-prompt-action="reset">恢复默认正文</button>
-          <span class="hint">保存前自动备份；重启 dsh 生效。</span>
-        </div>
-      </div>
-    </details>` : "";
   const pend = (kind) => !!(h.pendingAction && h.pendingAction.kind === kind && Date.now() - h.pendingAction.at < 6000);
   // 按钮状态色：空闲(蓝) → 待确认(橙) → 执行中(灰) → 成功(绿)/失败(红，5 秒后回正)
   const btnTone = (kind) => {
@@ -3928,14 +3936,13 @@ function renderFlowApplyStep() {
     <div class="actions">
       <button type="button" class="primary ${btnTone("apply")}" data-simple-host="apply" title="点一次就执行：写补丁 → 自动落地（挪走 app.asar）→ 重启宿主。约 3 秒后宿主重启，页面会断开一下"${busy ? " disabled" : ""}>${toneText("apply", "一键注入")}</button>
       <button type="button" class="ghost ${btnTone("uninstall")}" data-simple-host="uninstall" title="点一次就执行：按 app.asar 原件还原宿主 + 清掉解包残留与插件 + 重启宿主"${busy ? " disabled" : ""}>${toneText("uninstall", "一键卸载")}</button>
-      <button type="button" class="ghost ${btnTone("handoff")}" data-simple-host="handoff"${busy || !d.desktopSealed ? " disabled" : ""}>${toneText("handoff", d.desktopSealed ? "落地并重启宿主" : "已落地")}</button>
       <label class="mini" style="display:inline-flex;align-items:center;gap:6px;margin-left:4px">
         <input type="checkbox" data-host-plugin-toggle${h.withPlugin ? " checked" : ""}>
         <span>同时注入 autokill-purge 插件</span>
       </label>
-      <span class="hint">点一次就执行：注入 = 写补丁 + 自动落地（挪走 app.asar）+ 重启宿主；卸载 = 还原宿主 + 清残留 + 重启。落地由独立进程执行，点完立即有回执，约 3 秒后宿主重启。</span>
+      <span class="hint">点一次就执行：注入 = 写补丁 + 自动落地 + 重启；卸载 = 还原 + 清残留 + 移除插件 + 重启。</span>
     </div>
-    ${d.desktopSealed ? `<div class="alert warn" role="alert"><strong>补丁写进去了，但桌面壳还在读 app.asar</strong><span class="hint">桌面壳用 <code>app.getAppPath() + "/dsh"</code> 定位运行时，官方密封包把它指到 <code>resources/app.asar</code>；所以 <code>resources/app</code> 里那 83 条字节替换不会被加载，重启多少次都一样。点「落地并重启宿主」＝结束宿主 → 把 <code>app.asar</code> 改名让位 → 重新拉起，之后才真的生效（当前会话会断，属正常）。</span></div>` : ""}
+    ${d.desktopSealed ? `<div class="alert warn" role="alert"><strong>补丁已写入，但宿主还在读 app.asar</strong><span class="hint">点「一键注入」会自动落地（结束宿主 → asar 让位 → 重新拉起），之后才真正生效。</span></div>` : ""}
     ${gate}
     ${msg}
     ${(() => {
@@ -3948,7 +3955,6 @@ function renderFlowApplyStep() {
         <div class="prog-meta"><span>${Math.round(pct)}% · ${esc(label)}</span>${prog.done ? "" : '<span class="mini">进行中…</span>'}</div>
       </div>`;
     })()}
-    ${promptBox}
   </section>`;
 }
 
@@ -7444,7 +7450,8 @@ function renderHostExtraGroup() {
   if (!S.host.tried && !S.host.loading) loadHostStatus();
   const extra = S.host.data ? renderFlowExtraPanels() : "";
   const live = renderLiveModelsSection();
-  const html = extra + live;
+  // 提示词正文编辑器也放这里：低频改动，不占破甲主流程
+  const html = (S.host.prompt ? renderPromptEditor() : "") + extra + live;
   return html || `<section class="section"><h2><span class="num">5</span>宿主侧面板<span class="count">未加载</span></h2>
     <p class="hint">宿主信息还没取到：到「破甲」页看一眼（或稍后回来），这里会出现规则集、出口白名单与实时模型识别。</p></section>`;
 }
