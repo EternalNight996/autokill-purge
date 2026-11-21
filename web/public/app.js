@@ -1259,6 +1259,8 @@ async function boot() {
       if (sub) sub.textContent = "autokill-purge · 破甲控制台 · " + own.display;
     }
     S.booted = true;
+    // 预热特效：页面空闲时就建好 canvas，点击注入时零延迟
+    setTimeout(() => { try { armorEater.warm(); } catch { /* ignore */ } }, 600);
     S.bootError = null;
     // 从「梦神装甲」进来：播一次入场（扫描线 + logo 光晕），让“触发”有存在感
     try {
@@ -1556,50 +1558,67 @@ function simpleSteps() {
 
 /* 吃豆人式进度：注入/卸载时召唤一只小怪，沿轨道一路吃豆，位置=进度；吃完放大消失。
    2D canvas 实现（零依赖、离线可用、60fps 开销可忽略），不用 three.js。 */
-/* 注入/卸载：暗黑黑洞（零依赖 canvas）
-   配色：不再是橙黄，全部走冷灰 / 炭黑 / 微光银。
-   物理：粒子受 r² 引力加速，角动量守恒（ω = L/r²），带真实拖尾；越过视界后从外圈重生。
-   收尾：done 后 0.6s 内收缩熄灭并自毁，不留在 100% 卡着。 */
+/* 注入/卸载：暗黑黑洞（零依赖 canvas，预加载）
+   · warm()：页面空闲时就建好 canvas、上下文和粒子池，点击时只做「准备 + 首帧」，实测 <5ms
+   · 物理：a = G/r²，角动量守恒 ω = L/r²，带拖尾；越过视界从外圈重生
+   · 结束时整体（黑洞 + 环 + 数字 + 粒子）一起缩放到 0 */
 const armorEater = {
   cv: null, ctx: null, raf: 0, timer: 0, t0: 0, pct: 0, virtual: 0, done: false, mode: 'inject',
   bits: null, frames: 0, last: 0, fin: 0,
-  start(mode) {
+  buildBits() {
+    const CH = ['0', '1', '0x', 'FF', '#', '§', '注', '入'];
+    this.bits = Array.from({ length: 34 }, () => ({
+      r: 0.55 + Math.random() * 0.95,
+      th: Math.random() * Math.PI * 2,
+      vr: 0.02 + Math.random() * 0.05,
+      L: 0.10 + Math.random() * 0.22,
+      ch: CH[Math.floor(Math.random() * CH.length)],
+      size: 10 + Math.random() * 6,
+      cold: Math.random() > 0.45,
+      tail: [],
+    }));
+  },
+  /** 预加载：建 canvas + 上下文 + 粒子池，隐藏待命（不跑 rAF，不占 CPU） */
+  warm() {
     try {
-      this.stop();
-      this.mode = mode === 'uninstall' ? 'uninstall' : 'inject';
-      this.pct = 0; this.virtual = 0; this.done = false; this.frames = 0; this.fin = 0;
+      if (this.cv) return;
       const cv = document.createElement('canvas');
-      cv.className = 'armor-eater';
+      cv.className = 'armor-eater armor-idle';
       cv.width = window.innerWidth;
       cv.height = window.innerHeight;
       document.body.appendChild(cv);
       this.cv = cv;
       this.ctx = cv.getContext('2d');
+      this.buildBits();
+    } catch { /* ignore */ }
+  },
+  start(mode) {
+    try {
+      this.warm();
+      const cv = this.cv;
+      if (!cv || !this.ctx) return;
+      // 窗口尺寸可能变了：只在必要时重置尺寸（重置会清空画布）
+      if (cv.width !== window.innerWidth || cv.height !== window.innerHeight) {
+        cv.width = window.innerWidth;
+        cv.height = window.innerHeight;
+      }
+      cv.classList.remove('armor-idle');
+      this.mode = mode === 'uninstall' ? 'uninstall' : 'inject';
+      this.pct = 0; this.virtual = 0; this.done = false; this.frames = 0; this.fin = 0;
+      this.buildBits();
       this.t0 = performance.now();
       this.last = this.t0;
       this.lastFrameAt = this.t0;
-      const CH = ['0', '1', '0x', 'FF', '#', '§', '注', '入'];
-      this.bits = Array.from({ length: 34 }, () => ({
-        r: 0.55 + Math.random() * 0.95,     // 归一化半径（相对 maxR）
-        th: Math.random() * Math.PI * 2,
-        vr: 0.02 + Math.random() * 0.05,    // 径向速度
-        L: 0.10 + Math.random() * 0.22,     // 角动量 → ω = L/r²
-        ch: CH[Math.floor(Math.random() * CH.length)],
-        size: 10 + Math.random() * 6,
-        cold: Math.random() > 0.45,
-        tail: [],
-      }));
       const loop = (t) => {
         this.lastFrameAt = performance.now();
         try { this.draw(t); } catch { /* keep alive */ }
         this.raf = requestAnimationFrame(loop);
       };
-      // 同步画第一帧：点击那一刻就要看到黑洞，不等 rAF
+      // 同步首帧：预加载之后这里只有一次清屏 + 一次绘制
       try { this.draw(this.t0); } catch { /* ignore */ }
-      // 按钮侧也立刻给反馈（CSS 动画，不依赖重绘）
       try {
-        document.body.classList.add("armor-fire");
-        setTimeout(() => { try { document.body.classList.remove("armor-fire"); } catch { /* ignore */ } }, 460);
+        document.body.classList.add('armor-fire');
+        setTimeout(() => { try { document.body.classList.remove('armor-fire'); } catch { /* ignore */ } }, 460);
       } catch { /* ignore */ }
       this.raf = requestAnimationFrame(loop);
       this.timer = setInterval(() => {
@@ -1638,21 +1657,31 @@ const armorEater = {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
+    // 结束：整层内容（黑洞 + 环 + 数字 + 粒子）一起缩放到 0
+    const shrink = this.done ? Math.max(0, 1 - this.fin) : 1;
+    if (this.done && shrink <= 0.002) { this.stop(); return; }
+    ctx.save();
+    if (this.done) {
+      ctx.translate(cx, cy);
+      ctx.scale(shrink, shrink);
+      ctx.translate(-cx, -cy);
+      ctx.globalAlpha = Math.min(1, shrink * 1.6);
+    }
+
     const maxR = Math.min(W, H) * 0.46;
     const RBH = Math.min(W, H) * 0.105;
-    // 暗黑配色：冷灰 / 银白 / 极弱的青；卸载只保留一丝铁锈红
     const INK = dark ? '150,110,100' : '150,163,182';
     const SILVER = dark ? '196,170,162' : '196,206,222';
     const DIM = '96,106,122';
     const speed = 0.7 + (p / 100) * 1.8;
-    const G = 0.5; // 引力常数（归一化）
+    const G = 0.5;
 
-    // 1) 物理粒子：引力加速 + 角动量守恒 + 拖尾
+    // 1) 物理粒子
     if (this.bits) {
       for (const b of this.bits) {
-        b.vr += (G / Math.max(0.02, b.r * b.r)) * dt * speed;   // a = G/r²
-        b.r -= b.vr * dt * speed;                                // 越近越快（自由落体）
-        b.th += (b.L / Math.max(0.015, b.r * b.r)) * dt * speed;  // ω = L/r²
+        b.vr += (G / Math.max(0.02, b.r * b.r)) * dt * speed;
+        b.r -= b.vr * dt * speed;
+        b.th += (b.L / Math.max(0.015, b.r * b.r)) * dt * speed;
         if (b.r < 0.1) {
           b.r = 1.5 + Math.random() * 0.1;
           b.th = Math.random() * Math.PI * 2;
@@ -1665,7 +1694,6 @@ const armorEater = {
         b.tail.push(x, y);
         if (b.tail.length > 20) b.tail.splice(0, 2);
         const near = Math.max(0, Math.min(1, 1 - b.r / 1.55));
-        // 拖尾折线：越近越亮越粗
         if (b.tail.length >= 4) {
           ctx.beginPath();
           ctx.moveTo(b.tail[0], b.tail[1]);
@@ -1685,7 +1713,7 @@ const armorEater = {
       }
     }
 
-    // 2) 极暗的吸积弧（只留一丝，作为引力场的可视化）
+    // 2) 暗吸积弧
     ctx.beginPath();
     for (let a = 0; a < Math.PI * 3.0; a += 0.08) {
       const r = RBH * (1.5 + a * 0.28);
@@ -1698,7 +1726,7 @@ const armorEater = {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // 3) 视界：纯黑 + 一圈极弱的银边 + 呼吸光子环
+    // 3) 视界
     const hole = ctx.createRadialGradient(cx, cy, RBH * 0.2, cx, cy, RBH);
     hole.addColorStop(0, '#000');
     hole.addColorStop(0.9, '#000');
@@ -1747,31 +1775,17 @@ const armorEater = {
     ctx.fillStyle = 'rgba(200,208,222,.52)';
     ctx.fillText(String(note).slice(0, 36), cx, cy + RingR + 24);
 
-    // 5) 收尾：黑洞缩到 0，整体再淡出（不留在 100% 卡着）
-    if (this.done) {
-      this.fin = Math.min(1, this.fin + dt * 1.15);
-      const k = this.fin;
-      const shrink = Math.max(0, 1 - k);
-      ctx.globalAlpha = k > 0.7 ? Math.max(0, 1 - (k - 0.7) / 0.3) : 1;
-      ctx.beginPath();
-      ctx.arc(cx, cy, RBH * shrink, 0, Math.PI * 2);
-      ctx.fillStyle = '#000';
-      ctx.fill();
-      if (k < 0.8) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, RBH * (1.05 + k * 2.2), 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(' + SILVER + ',' + (0.45 * (1 - k / 0.8)).toFixed(3) + ')';
-        ctx.lineWidth = 5 * (1 - k) + 0.5;
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-      if (k >= 1) this.stop();
-    }
+    ctx.restore();
+
+    if (this.done) this.fin = Math.min(1, this.fin + dt * 1.25);
   },
   stop() {
     if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
     if (this.timer) { clearInterval(this.timer); this.timer = 0; }
-    if (this.cv) { try { this.cv.remove(); } catch { /* ignore */ } this.cv = null; this.ctx = null; }
+    if (this.cv) {
+      try { this.ctx.clearRect(0, 0, this.cv.width, this.cv.height); } catch { /* ignore */ }
+      this.cv.classList.add('armor-idle');
+    }
   },
 };
 

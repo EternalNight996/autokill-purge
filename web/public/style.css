@@ -1694,3 +1694,6 @@ body.armor-fire button.primary { animation: armor-btn-flash 440ms cubic-bezier(.
   35% { transform: scale(1.015); box-shadow: 0 0 0 2px rgba(196,206,222,.35), 0 0 26px rgba(196,206,222,.28); }
   100% { transform: scale(1); }
 }
+
+/* 预加载的 canvas：等在后台，点击时才显示 */
+.armor-eater.armor-idle { visibility: hidden; opacity: 0; }

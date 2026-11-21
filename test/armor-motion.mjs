@@ -80,6 +80,13 @@ try {
   await cdp.send('Page.navigate', { url: BASE + '/#/breach' });
   await sleep(6000);
 
+  const pre = await cdp.eval(`(() => {
+    const cv = document.querySelector('canvas.armor-eater');
+    return JSON.stringify({ exists: !!cv, idle: !!(cv && cv.classList.contains('armor-idle')) });
+  })()`);
+  const preJ = JSON.parse(pre);
+  ok('0a. 预加载：canvas 已建好并隐藏待命', preJ.exists && preJ.idle, pre);
+
   const firstPaint = await cdp.eval(`(() => {
     const t0 = performance.now();
     armorEater.start('inject');
