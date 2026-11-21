@@ -6,7 +6,7 @@
 // - break: runs the break kernel in-process (same code as the CLI) behind a whitelist.
 import { createServer } from 'node:http';
 import * as logbus from './logbus.mjs';
-import { readFile, writeFile, mkdir, rename, rm, copyFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, rm, copyFile, stat } from 'node:fs/promises';
 import { existsSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
