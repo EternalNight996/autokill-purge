@@ -261,6 +261,8 @@ const S = {
     intel: { reports: null, report: null, running: false, days: 7, error: null, last: null },
     drill: { data: null, legal: null, busy: false, signer: "", error: null },
     pendingAction: null,
+    progress: null,
+    progressTimer: null,
     busyKind: null,
     lastResult: null,
     withPlugin: true,        // 一键注入时同时注入 autokill-purge 插件（与内核补丁同一事务）
@@ -1230,6 +1232,13 @@ async function boot() {
     if (ping && ping.version) S.version = ping.version;
     const data = await request("/api/state");
     applyState(data);
+    // 业主身份是程序内置的（lib/owner.mjs → /api/state.deploy.owner）：页面标题与页头都跟着它走
+    const own = (S.deploy && S.deploy.owner) || null;
+    if (own && own.display) {
+      document.title = "梦神破甲 · " + own.display;
+      const sub = document.querySelector(".brand .sub");
+      if (sub) sub.textContent = "autokill-purge · 破甲控制台 · " + own.display;
+    }
     S.booted = true;
     S.bootError = null;
     const accepted = S.state && S.state.agreement && S.state.agreement.accepted;
@@ -1519,6 +1528,26 @@ function simpleSteps() {
   }).join("")}</ol>`;
 }
 
+/* 落地/卸载进度：runner 每步写 data/logs/handoff-progress.json，这里轮询成进度条 */
+function stopProgressPolling() {
+  if (S.host.progressTimer) { clearTimeout(S.host.progressTimer); S.host.progressTimer = null; }
+}
+function startProgressPolling() {
+  stopProgressPolling();
+  const started = Date.now();
+  S.host.progress = { percent: 0, step: "queued", note: "已下发，等待落地进程接手…", done: false };
+  const tick = async () => {
+    let p = null;
+    try { const d = await request("/api/host/progress"); p = d && d.progress; } catch { /* 控制台可能正被重启 */ }
+    if (p) S.host.progress = p;
+    if (S.tab === "breach") renderPage();
+    const expired = Date.now() - started > 120000;
+    if (!(p && p.done) && !expired) S.host.progressTimer = setTimeout(tick, 500);
+    else S.host.progressTimer = null;
+  };
+  tick();
+}
+
 async function simpleHostAction(kind) {
   const h = S.host;
   if (h.busy) return;
@@ -1564,6 +1593,11 @@ async function simpleHostAction(kind) {
       const freed = u.freedMB ? `已清 ${u.freedMB} MB 残留，` : "";
       const bad = (u.errors || []).length;
       h.message = `卸载完成：${freed}${u.applied ? "宿主已按 asar 原件还原，" : ""}${(u.stripped || []).length} 个步骤已走${bad ? "，有 " + bad + " 条警告" : ""}。${u.restarted ? "已下发：约 3 秒后重新拉起宿主。" : "宿主若在运行，重启后确认。"}`;
+    }
+    if ((kind === "apply" && data && data.scheduled)
+      || (kind === "handoff" && data && data.scheduled)
+      || (kind === "uninstall" && data && data.uninstall && data.uninstall.scheduled)) {
+      startProgressPolling();
     }
     toast(kind === "apply" ? "注入完成" : kind === "handoff" ? "已落地并重启宿主" : "卸载完成");
     h.lastResult = { kind: kind, ok: true, at: Date.now() };
@@ -3867,6 +3901,16 @@ function renderFlowApplyStep() {
     ${d.desktopSealed ? `<div class="alert warn" role="alert"><strong>补丁写进去了，但桌面壳还在读 app.asar</strong><span class="hint">桌面壳用 <code>app.getAppPath() + "/dsh"</code> 定位运行时，官方密封包把它指到 <code>resources/app.asar</code>；所以 <code>resources/app</code> 里那 83 条字节替换不会被加载，重启多少次都一样。点「落地并重启宿主」＝结束宿主 → 把 <code>app.asar</code> 改名让位 → 重新拉起，之后才真的生效（当前会话会断，属正常）。</span></div>` : ""}
     ${gate}
     ${msg}
+    ${(() => {
+      const prog = h.progress;
+      if (!prog) return "";
+      const pct = Math.max(0, Math.min(100, Number(prog.percent) || 0));
+      const label = prog.done ? (prog.step === "failed" ? "失败" : "完成") : (prog.note || prog.step || "处理中");
+      return `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}">
+        <div class="prog-bar"><i style="width:${Math.max(2, pct)}%"></i></div>
+        <div class="prog-meta"><span>${Math.round(pct)}% · ${esc(label)}</span>${prog.done ? "" : '<span class="mini">进行中…</span>'}</div>
+      </div>`;
+    })()}
     ${promptBox}
   </section>`;
 }
@@ -8095,6 +8139,7 @@ function renderInjectRail() {
     + '<div class="rail-card">'
     + '  <h3>本机 · 宿主 <span class="badge ' + badge.cls + '">' + esc(hostLabel) + '</span></h3>'
     + railRowsHtml(host.rows)
+    + (S.deploy && S.deploy.owner ? '  <div class="rail-kv"><span>业主</span><span class="mini">' + esc(S.deploy.owner.display) + '</span></div>' : "")
     + (d.hostId === "dsh" && badge.cls !== "ok" ? '  <div class="rail-kv"><span>状态</span><span class="mini">' + esc(badge.text) + '</span></div>' : "")
     + (d.injection ? '  <div class="rail-kv"><span>提示词注入</span><span class="mini' + (d.injection.ready && !d.injection.effective ? ' rail-err' : '') + '">' + esc(injectionRailText(d.injection)) + '</span></div>' : "")
     + (d.injection && d.injection.instructions ? '  <div class="rail-kv"><span>指令层</span><span class="mini">' + esc(instructionsRailText(d.injection.instructions)) + '</span></div>' : "")

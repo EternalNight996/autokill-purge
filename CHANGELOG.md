@@ -1153,3 +1153,23 @@ node test/acceptance.mjs             → 21/21 PASS
 
 ### Changed — 默认入口改为破甲页
 - `deploy.json` 的 `entryHash` 默认 `#/breach`（原 `#/memory`）：`web/deploy.mjs` 的 DEFAULTS、`switchDeploy` 写回逻辑、`scripts/launch.mjs` 的 ENTRY 默认值全部同步；切换库/端口时不再把入口重置回记忆页。记忆页仍可从左侧导航进入。
+
+## [1.1.25-beta.10] — 2026-11-22（装备=预设一对一；一键卸载交给 runner；进度条）
+
+### Fixed — 勾两个装备，DSH 里只出现一个预设
+- 根因：`inject-dsh-gear.mjs` 只往 **redteam 一个**预设的 persona 里插 gear 段落，勾几个都合并进同一个文件。
+- 新增 `scripts/sync-dsh-presets.mjs`：为每个勾选的装备建独立目录 `~/.dsh/.agent-presets/<id>/`（从 redteam 骨架复制），写自己的 `preset.yml`（name = 装备名），再只注入该装备的段落；取消勾选的整目录删除（redteam 底座永不删，`preset.yml` 的「梦神破甲」名字不被覆盖）。
+- `EQUIPMENT_PRESETS` 改为唯一真源 `EQUIP_PRESETS.map(p => p.id)`：之前手写的 `rf-iot` / `reversing` 与 preset 的 `radio` / `re` 对不上，勾了会被过滤掉。
+- 实测：勾 `redteam,recon` → `redteam/preset.yml` = 梦神破甲、`recon/preset.yml` = 侦察刀，两个预设各自带 gear 段落（18 / 17 行）。
+
+### Fixed — 一键卸载「点了没效果」
+- 根因同上一轮：卸载的重活（停宿主 / 放回 asar / 按原件还原）原来在控制台进程里做，`taskkill` 宿主会把控制台连坐，请求断在半路。
+- `/api/host/uninstall` 改为：进程内只做轻量清理（AGENTS.md 注入块 / prompt-inject / profile 插件 / 预设工具行）+ 快照，然后派发 `handoff-runner --mode=uninstall`；runner 按序 kill → asar 放回 → `factoryRestore()` → `cleanPurgeLeftovers()` → 重新拉起 → 拉起控制台。
+
+### Added — 进度条与阶段文案
+- `handoff-runner.mjs` 每步写 `data/logs/handoff-progress.json`（`armed 1% → kill-host 10% → host-stopped 25% → asar 40% → restore-files 65% → clean-leftovers 85% → launch 92% → done 100%`）。
+- 新增 `GET /api/host/progress`；前端点击后每 500ms 轮询，渲染进度条（`.prog`）+ 百分比 + 当前阶段文案，done 自动停。
+
+### Verified
+- `node test/rail-host.mjs` 15/15、`test/ui-error-red.mjs` 24/24（改完文案与进度条后复跑）。
+- `sync-dsh-presets.mjs --dry` 与实跑均通过；`/api/host/progress` 可读。

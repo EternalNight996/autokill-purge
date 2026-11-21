@@ -1,15 +1,16 @@
 // 落地执行器：由 WMI 拉起（不在 DSH 进程树里），因此 kill 宿主不会连坐自己。
-// 用法：node scripts/handoff-runner.mjs --mode=land|restart|unland [--delay=2500]
+// 用法：node scripts/handoff-runner.mjs --mode=land|restart|unland|uninstall [--delay=2500]
 //
-//   land    = 结束宿主 → app.asar 让位 → 重新拉起 → 健康检查（失败自动回滚）
-//   restart = 结束宿主 → 重新拉起（不碰 asar；卸载后把桌面拉回来）
-//   unland  = 结束宿主 → app.asar 放回 → 重新拉起
+//   land      = 结束宿主 → app.asar 让位 → 重新拉起 → 健康检查（失败自动回滚）
+//   restart   = 结束宿主 → 重新拉起（不碰 asar）
+//   unland    = 结束宿主 → app.asar 放回 → 重新拉起
+//   uninstall = 结束宿主 → 放回 asar → 按原件还原 → 清解包残留 → 重新拉起（一键卸载整段）
 //
-// 结束后顺手把控制台拉起来（8792 没在跑时），避免用户回来面板打不开。
+// 每一步都写 data/logs/handoff-progress.json，前端轮询它显示进度条。
 import { spawn, execFile } from 'node:child_process';
 import { existsSync, renameSync, writeFileSync, appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import net from 'node:net';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +21,7 @@ const ASIDE = RES + '/app.asar.dshpurge-aside';
 const EXE = 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/DeepSeek Harness.exe';
 const LOG = join(ROOT, 'data', 'logs', 'handoff-runner.log');
 const OUT = join(ROOT, 'data', 'logs', 'handoff-runner.json');
+const PROG = join(ROOT, 'data', 'logs', 'handoff-progress.json');
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => {
   const m = a.match(/^--([^=]+)=(.*)$/);
@@ -33,14 +35,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function log(m) {
   try { appendFileSync(LOG, `[${new Date().toISOString()}] [${MODE}] ${m}\n`); } catch { /* ignore */ }
 }
+/** 进度：前端每 400ms 读一次，percent 只增不减 */
+let lastPercent = 0;
+function progress(step, percent, note) {
+  lastPercent = Math.max(lastPercent, percent);
+  const payload = { mode: MODE, step, percent: lastPercent, note: note || '', at: Date.now(), done: false };
+  try { writeFileSync(PROG, JSON.stringify(payload, null, 2)); } catch { /* ignore */ }
+  log(`[${percent}%] ${step} ${note || ''}`);
+}
 function finish(o) {
+  try { writeFileSync(PROG, JSON.stringify({ mode: MODE, step: o.ok ? 'done' : 'failed', percent: 100, note: o.error || '完成', at: Date.now(), done: true, result: o }, null, 2)); } catch { /* ignore */ }
   try { writeFileSync(OUT, JSON.stringify({ mode: MODE, ...o }, null, 2)); } catch { /* ignore */ }
   log('done ' + JSON.stringify(o));
   process.exit(0);
 }
 function ps(cmd) {
   return new Promise((resolve) => {
-    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true, timeout: 25000 }, (e, so) => resolve(String(so || '')));
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true, timeout: 30000 }, (e, so) => resolve(String(so || '')));
   });
 }
 async function hostProcs() {
@@ -74,28 +85,52 @@ async function ensureConsole() {
   } catch (e) { return 'failed:' + String((e && e.message) || e); }
 }
 
-log('armed; delay=' + DELAY + 'ms; asar=' + existsSync(ASAR) + ' aside=' + existsSync(ASIDE));
+progress('armed', 1, '约 ' + Math.round(DELAY / 1000) + ' 秒后开始');
 await sleep(DELAY);
 
 try {
-  log('kill host');
+  progress('kill-host', 10, '结束宿主');
   await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe'], () => r()));
   await sleep(2500);
   await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe', '/F'], () => r()));
   let p = await hostProcs();
   for (let i = 0; i < 40 && p.count; i++) { await sleep(500); p = await hostProcs(); }
-  log('killed; remaining=' + p.count);
   if (p.count) finish({ ok: false, error: 'host_still_running', remaining: p.count });
+  progress('host-stopped', 25, '宿主已退出');
 
   if (MODE === 'land' && existsSync(ASAR)) {
     renameSync(ASAR, ASIDE);
-    log('asar -> aside');
-  } else if (MODE === 'unland' && !existsSync(ASAR) && existsSync(ASIDE)) {
+    progress('asar-aside', 40, 'app.asar 已让位');
+  } else if ((MODE === 'unland' || MODE === 'uninstall') && !existsSync(ASAR) && existsSync(ASIDE)) {
     renameSync(ASIDE, ASAR);
-    log('aside -> asar');
+    progress('asar-back', 40, 'app.asar 已放回');
   }
 
-  log('launch');
+  if (MODE === 'uninstall') {
+    progress('restore-files', 50, '按 asar 原件还原宿主文件');
+    const web = await import(pathToFileURL(join(ROOT, 'web', 'host.mjs')).href);
+    let restored = null;
+    try {
+      restored = await web.factoryRestore();
+      progress('restore-files', 65, `已还原 ${restored && restored.restored || 0} 个文件`);
+    } catch (e) {
+      log('factoryRestore failed: ' + (e && e.message));
+      progress('restore-files', 65, '还原失败：' + (e && e.message));
+    }
+    progress('clean-leftovers', 75, '清理解包残留 / 开机自启');
+    let cleaned = null;
+    try {
+      cleaned = await web.cleanPurgeLeftovers();
+      progress('clean-leftovers', 85, `已清 ${cleaned && cleaned.freedMB || 0} MB`);
+    } catch (e) {
+      log('cleanPurgeLeftovers failed: ' + (e && e.message));
+    }
+    progress('restore', 90, '还原完成');
+  } else {
+    progress('mode', 50, MODE === 'land' ? '已让位，准备重启' : '准备重启');
+  }
+
+  progress('launch', 92, '重新拉起宿主');
   spawn(EXE, [], { detached: true, stdio: 'ignore' }).unref();
 
   let last = { count: 0, hasAsar: false, hasApp: false, hasRenderer: false };
@@ -106,20 +141,22 @@ try {
     if (last.hasRenderer && (MODE === 'land' ? last.hasApp : true)) { healthy = true; break; }
     if (last.count === 0) break;
   }
-  log('verify: count=' + last.count + ' renderer=' + last.hasRenderer + ' fromApp=' + last.hasApp + ' fromAsar=' + last.hasAsar);
+  log('verify: count=' + last.count + ' renderer=' + last.hasRenderer + ' fromApp=' + last.hasApp);
 
   if (MODE === 'land' && !healthy) {
-    log('rollback');
+    progress('rollback', 95, '健康检查失败，回滚');
     await new Promise((r) => execFile('taskkill', ['/IM', 'DeepSeek Harness.exe', '/F'], () => r()));
     await sleep(2500);
-    try { renameSync(ASIDE, ASAR); log('rollback: aside -> asar'); } catch (e) { log('rollback rename failed: ' + (e && e.message)); }
+    try { renameSync(ASIDE, ASAR); } catch (e) { log('rollback rename failed: ' + (e && e.message)); }
     spawn(EXE, [], { detached: true, stdio: 'ignore' }).unref();
     finish({ ok: false, error: 'launch_not_healthy', detail: last, rolledBack: true, console: await ensureConsole() });
   }
 
   const consoleState = await ensureConsole();
+  progress('done', 100, '宿主已拉起，控制台已就绪');
   finish({ ok: true, healthy, processes: last.count, asarExists: existsSync(ASAR), asideExists: existsSync(ASIDE), console: consoleState });
 } catch (e) {
   log('fatal: ' + (e && e.message));
+  progress('fatal', 100, String((e && e.message) || e));
   finish({ ok: false, error: 'fatal', detail: String((e && e.message) || e), console: await ensureConsole() });
 }

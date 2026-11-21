@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installHostBridge, readRuntime, writeRuntime } from './host-bridge.js';
+import { OWNER, OWNER_LINE } from './owner.js';
 // 上游 dsh-purge 的完整宿主内实现（已内化在 plugin/vendor）：身份改写、prompt sections、
 // pre-step、fresh access、rewind filter、cwd capture、continue-retry、/purge /rules /skills /rewind
 // 命令、purge_* 工具、/dsh-purge/* 路由、启动 settle。这一层是「同等能力」的底座。
@@ -284,7 +285,8 @@ export function apply(ctx, config) {
           try {
             const injectText = readInjectText();
             const gearBlock = await readGearBlock(cfg);
-            const mergedInject = gearBlock ? (injectText ? injectText + '\n\n' + gearBlock : gearBlock) : injectText;
+            // 业主身份写在注入正文最前面（程序内置，不靠 prompt-inject.md 手写）
+            const mergedInject = [OWNER_LINE, injectText, gearBlock].filter(Boolean).join('\n\n');
             const out = identity.rewritePromptAssembly(assembled, mergedInject, {});
             return out || assembled;
           } catch (e) {
@@ -318,7 +320,7 @@ export function apply(ctx, config) {
     runtime: bridge,
   });
 
-  log(cfg, 'loaded · console=' + cfg.consoleUrl + ' · assemble=' + cfg.assembleEnable + ' · write=' + cfg.allowWriteTools);
+  log(cfg, 'loaded · owner=' + OWNER.display + ' · console=' + cfg.consoleUrl + ' · assemble=' + cfg.assembleEnable + ' · write=' + cfg.allowWriteTools);
 }
 
 export default { name, inject, apply };

@@ -26,6 +26,7 @@ import { readMcpConfig, saveMcpServer, deleteMcpServer, testMcpServer, testSaved
 import { peerStatus, peerDiscover, peerStart, peerConnect, peerAccept, peerRevoke, peerUpload, peerDownload, isolatedInfo } from './peer.mjs';
 import { memCliStatus, memCliRestart, memCliStop, memCliLedger, memCliAuditList } from './memcli.mjs';
 import { readDeploy, switchDeploy } from './deploy.mjs';
+import { OWNER, ownerLine } from '../lib/owner.mjs';
 import { mbStatus, mbListBots, mbReadBot, mbInjectSoul, mbRestoreSoul, mbEquipBot, mbSetGear, GEAR_IDS, mbSnapshots, mbPruneSnapshots, mbServiceStop, mbServiceStart } from './mengbot.mjs';
 import { EQUIP_PRESETS } from './presets.mjs';
 import { renderGearMarkdown, renderGearSyncBlock } from './stage-hints.mjs';
@@ -200,7 +201,9 @@ const TASK_PRESETS = [
   { id: 'all', name: '全部', text: '' }
 ];
 
-const EQUIPMENT_PRESETS = ['redteam', 'recon', 'lateral', 'rf-iot', 'reversing', 'custom'];
+// 装备 id 的唯一真源是 web/presets.mjs（曾在这里手写 radio/reversing，与 preset 的 rf-iot/re 对不上，
+// 导致勾了装备却被过滤掉、DSH 里只装出一个预设）
+const EQUIPMENT_PRESETS = EQUIP_PRESETS.map((p) => p.id);
 
 // ---- state (data/state.json) ----------------------------------------------
 const DEFAULT_STATE = {
@@ -307,6 +310,8 @@ function deployInfo() {
     vault: DEPLOY.vault,
     memoryBase: DEPLOY.memoryBase,
     file: DEPLOY.file,
+    // 业主身份随部署信息一起下发：前端页头/标题、插件注入都用这一份
+    owner: OWNER,
   };
 }
 
@@ -1816,6 +1821,13 @@ async function handleApi(req, res, url, state) {
       return send(res, 200, { ok: true, file: pluginRuntimeFile(), runtime, note: '插件在 ~2s 内监听到变更并重算 hook（无需重启宿主）' });
     } catch (e) { return send(res, 500, { ok: false, error: 'runtime_write_failed', detail: publicError(e) }); }
   }
+  // ---- 落地/卸载进度（runner 每步写 data/logs/handoff-progress.json）----
+  if (p === '/api/host/progress' && method === 'GET') {
+    const f = join(DATA_DIR, 'logs', 'handoff-progress.json');
+    let progress = null;
+    try { progress = existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : null; } catch { progress = null; }
+    return send(res, 200, { ok: true, progress });
+  }
   if (p === '/api/host/status' && method === 'GET') {
     return send(res, 200, await hostStatus(DATA_DIR));
   }
@@ -2137,8 +2149,9 @@ async function handleApi(req, res, url, state) {
     const chosenPresets = await currentEquipPresets();
     if (chosenPresets.length) {
       try {
-        const r = await runNode(['scripts/inject-dsh-gear.mjs', '--presets', chosenPresets.join(',')]);
-        side.dsh = { ok: r.ok, presets: chosenPresets, detail: String(r.out || r.err || '').trim().split('\n')[0] || null };
+        // 勾了几个装备就在 DSH 里装几个预设（每个装备一个目录），不再合并进 redteam 一个文件
+        const r = await runNode(['scripts/sync-dsh-presets.mjs', '--presets', chosenPresets.join(',')]);
+        side.dsh = { ok: r.ok, presets: chosenPresets, detail: String(r.out || r.err || '').trim().split('\n').slice(0, 6).join(' ') || null };
       } catch (e) { side.dsh = { ok: false, error: publicError(e) }; }
       if (body.mengbotId) {
         try {
@@ -2373,34 +2386,9 @@ async function handleApi(req, res, url, state) {
     const guard = await createSnapshot(DATA_DIR, 'pre-uninstall');
     const steps = [];
     const home = process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
-    // 0) 已落地（asar 让位、宿主改从 resources/app 加载）时先结束宿主：
-    //    否则 asar 放回没问题，但解包目录被进程占用删不掉，且用户会看到「卸载完了补丁还在内存里生效」。
-    let wasLanded = false;
-    let stopped = null;
-    try {
-      const hs = await hostHandoffStatus();
-      wasLanded = !!(hs && hs.asideExists && !hs.asarExists);
-      if (wasLanded) {
-        stopped = await stopDesktopHost();
-        steps.push({ id: 'stop-host', ok: stopped.ok, skipped: !!stopped.skipped, note: stopped.note || '已结束桌面宿主（卸载后重新拉起）' });
-      }
-    } catch (e) { steps.push({ id: 'stop-host', ok: false, error: publicError(e) }); }
-    // 1) 落地过的 asar 放回
-    try {
-      const r = await restoreHostAsar();
-      // no_aside 说明没落地过（或已经放回），对卸载来说属于「已完成」，不算失败
-      const okay = r.ok !== false || r.error === 'no_aside' || r.error === 'asar_present';
-      steps.push({ ...r, id: 'asar', ok: okay });
-    }
-    catch (e) { steps.push({ id: 'asar', ok: false, error: publicError(e) }); }
-    // 2) 补丁按 asar 原件还原（自检：回读一遍，还剩几处与 asar 不一致）
-    try {
-      const r = await factoryRestore();
-      const after = await baselineDiff();
-      const left = after.patched || 0;
-      steps.push({ id: 'patches', ok: left === 0, restored: r.restored, skipped: r.skipped, left: left });
-    }
-    catch (e) { steps.push({ id: 'patches', ok: false, error: publicError(e) }); }
+    // 0/1/2 段（停宿主 / 放回 asar / 按原件还原）全部交给独立 runner：
+    // 本进程做这些会把控制台一起 taskkill 掉、请求断在半路 —— 用户看到的就是「点了没反应」。
+    // runner 的 uninstall 模式按序做：kill → asar 放回 → factoryRestore → 清残留 → 重新拉起。
     // 3) AGENTS.md 注入块（用户正文保留）
     try { const r = await instructionRun({ dshHome: home, dataDir: DATA_DIR }, { action: 'remove' }); steps.push({ id: 'instructions', ok: r.ok !== false, changed: !!r.changed, summary: r.summary }); }
     catch (e) { steps.push({ id: 'instructions', ok: false, error: publicError(e) }); }
@@ -2445,30 +2433,20 @@ async function handleApi(req, res, url, state) {
         else steps.push({ id: 'preset', ok: true, removed: false });
       } else steps.push({ id: 'preset', ok: true, removed: false, note: '无预设' });
     } catch (e) { steps.push({ id: 'preset', ok: false, error: publicError(e) }); }
-    // 7) 卸载残留：解包/落地留下的整包副本、asar 让位副本、解包目录、开机自启、运行时副本。
-    //    旧版到这里就返回了，于是 resources 下 4~5 GB 的 app.dshpurge-prev* 一直躺着 —— 卸载不干净的主因。
+    // 7) 重活交给独立 runner：结束宿主 → 放回 asar → 按原件还原 → 清解包残留 → 重新拉起。
+    //    派发完立刻回执，前端据 /api/host/progress 显示进度条，而不是干等或看到断线。
     try {
-      const r = await cleanPurgeLeftovers();
-      steps.push({
-        id: 'leftovers',
-        ok: r.ok,
-        freedMB: r.freedMB,
-        count: r.items.length,
-        failed: r.failed,
-        items: r.items.filter((x) => x.freedMB > 0 || x.ok === false),
-        summary: r.note,
-      });
-    } catch (e) { steps.push({ id: 'leftovers', ok: false, error: publicError(e) }); }
-    // 8) 为放回 asar 停过宿主：下发独立 runner 重新拉起（不在本进程里做，避免控制台跟着断）
-    if (wasLanded) {
-      try {
-        const rr = await scheduleHandoff({ mode: 'restart', delayMs: 2500 });
-        steps.push({ id: 'restart', ok: rr.ok, scheduled: true, note: rr.ok ? '宿主将在约 3 秒后重新拉起' : (rr.error || '重启下发失败') });
-      } catch (e) { steps.push({ id: 'restart', ok: false, error: publicError(e) }); }
-    }
+      const rr = await scheduleHandoff({ mode: 'uninstall', delayMs: 2500 });
+      steps.push({ id: 'uninstall-runner', ok: rr.ok, scheduled: rr.ok, note: rr.ok ? '已下发：约 3 秒后结束宿主并完成卸载' : (rr.error || '下发失败') });
+    } catch (e) { steps.push({ id: 'uninstall-runner', ok: false, error: publicError(e) }); }
     const errors = steps.filter((s) => s.ok === false);
-    const freedMB = steps.find((s) => s.id === 'leftovers')?.freedMB || 0;
-    return send(res, 200, { ok: true, uninstall: { ok: errors.length === 0, applied: true, stripped: steps.map((s) => s.id), errors, steps, freedMB, restarted: wasLanded }, guardSnapshot: guard.id, restartRequired: !wasLanded });
+    return send(res, 200, {
+      ok: true,
+      uninstall: { ok: errors.length === 0, applied: true, scheduled: true, stripped: steps.map((s) => s.id), errors, steps, freedMB: 0, restarted: false },
+      guardSnapshot: guard.id,
+      restartRequired: false,
+      progressUrl: '/api/host/progress',
+    });
   }
 
   // ---- 规则集 / 出口白名单 / 技能（原版面板另外三栏） -------------------------------
