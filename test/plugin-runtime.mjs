@@ -1,4 +1,4 @@
-﻿// 宿主内运行时桥：挂载 / 撤销 / 热更（用假 ctx 跑，不碰真实宿主）
+// 宿主内运行时桥：挂载 / 撤销 / 热更（用假 ctx 跑，不碰真实宿主）
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
