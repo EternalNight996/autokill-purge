@@ -176,6 +176,15 @@ check('解包后必须重算 apply（旧宿主 0 pending 也不能跳过）',
 const stepsNoop = OPS.buildSteps({ asarPresent: false, appDirComplete: true }, OPS.decide({ asarPresent: false, appDirComplete: true, stamp: { appliedRev: 'x' }, stampAligned: true }));
 check('无事可做时给 noop 一步', stepsNoop.length === 1 && stepsNoop[0].id === 'noop');
 
+// 前置：本用例验证的是「已落地」形态（asar 让位、resources/app 存在、pending=0）。
+// 密封态（asar 在位、未解包）下这些断言不成立，明确跳过而不是崩在 ENOENT。
+const HOST_APP_PKG = process.env.DSH_HOST_APP_PKG || 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app/dsh/package.json';
+if (!existsSync(HOST_APP_PKG)) {
+  console.log('SKIP  宿主当前是密封态（resources/app 未解包）—— 本用例只验证已落地形态');
+  console.log('summary: 0 PASS / 0 FAIL / 1 SKIP');
+  process.exit(0);
+}
+
 // ====================== 6. status：真机只读、结论正确 =============================
 section('status（真机）');
 const t0 = Date.now();
@@ -190,7 +199,7 @@ check('三个布尔都是布尔', typeof st1.detail.needsReapply === 'boolean'
 check('shouldRestart / shouldReapply 是布尔', typeof st1.detail.shouldRestart === 'boolean' && typeof st1.detail.shouldReapply === 'boolean');
 check('pending 计数与引擎一致（逐补丁）',
   st1.detail.facts.total === 83 && st1.detail.facts.pending === 0, 'total=' + st1.detail.facts.total + ' pending=' + st1.detail.facts.pending);
-const diskVersion = JSON.parse(await readFile('C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app/dsh/package.json', 'utf8')).version;
+const diskVersion = JSON.parse(await readFile(HOST_APP_PKG, 'utf8')).version;
 check('appVersion 来自 resources/app/dsh/package.json', st1.detail.facts.appVersion === diskVersion, st1.detail.facts.appVersion + ' vs ' + diskVersion);
 check('archiveVersion 从让位副本读出（asar 已让位）',
   st1.detail.facts.archiveVersion === diskVersion && /dshpurge-aside$/.test(String(st1.detail.facts.archiveSource)),
