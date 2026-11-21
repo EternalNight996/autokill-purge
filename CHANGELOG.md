@@ -1150,3 +1150,6 @@ node test/acceptance.mjs             → 21/21 PASS
 - 重启后插件加载：`autokill_runtime_status` 返回 `upstream: {ok:true, name:"dsh-purge"}`，`services={approval:true,sandbox:true,pruner:false,tools:true,systemPrompt:true}`，`patched={approval:[decide,effectivePolicy], sandbox:[confine]}`。
 - 上游内核在安装副本上可跑：`ALL_PATCHES=83 applied=69 pending=0 hooksDenyBypass=true`，导出 `apply / registerPromptSections / name / inject`。
 - 包内 `cordis.patch.yml` 三项 insert 齐全（`autokill-redteam-store` / `autokill-redteam` / `autokill-purge`）。
+
+### Changed — 默认入口改为破甲页
+- `deploy.json` 的 `entryHash` 默认 `#/breach`（原 `#/memory`）：`web/deploy.mjs` 的 DEFAULTS、`switchDeploy` 写回逻辑、`scripts/launch.mjs` 的 ENTRY 默认值全部同步；切换库/端口时不再把入口重置回记忆页。记忆页仍可从左侧导航进入。

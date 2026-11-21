@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { ensureMemHome, memEnv } from '../scripts/mem-home.mjs';
 import { resolveMemRoot } from '../lib/mem-runtime.mjs';
 
-const DEFAULTS = { port: 7989, dbName: 'mem-purge', entryHash: '#/memory' };
+const DEFAULTS = { port: 7989, dbName: 'mem-purge', entryHash: '#/breach' };
 const NAME_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 
 function home() {
@@ -50,7 +50,10 @@ export function readDeploy() {
 
 function writeDeploy(port, dbName) {
   mkdirSync(dataDir(), { recursive: true });
-  writeFileSync(deployFile(), JSON.stringify({ port: Number(port), dbName: String(dbName), entryHash: '#/memory', at: new Date().toISOString() }, null, 2) + '\n', 'utf8');
+  // 切换库/端口不该改入口：保留用户当前的 entryHash（默认破甲页，不再默认进记忆）
+  let entryHash = DEFAULTS.entryHash;
+  try { const cur = JSON.parse(readFileSync(deployFile(), 'utf8')); if (cur && cur.entryHash) entryHash = String(cur.entryHash); } catch { /* 首次写入用默认 */ }
+  writeFileSync(deployFile(), JSON.stringify({ port: Number(port), dbName: String(dbName), entryHash: entryHash, at: new Date().toISOString() }, null, 2) + '\n', 'utf8');
 }
 
 function portOpen(port, timeoutMs = 700) {

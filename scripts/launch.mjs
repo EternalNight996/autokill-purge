@@ -18,11 +18,13 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const HOME = process.env.USERPROFILE || process.env.HOME || '';
 // 端口与库名来自 data/deploy.json（设置页可一键切换），环境变量仍可覆盖
 function readDeployCfg() {
-  const def = { port: 7989, dbName: 'mem-purge' };
+  const def = { port: 7989, dbName: 'mem-purge', entryHash: '#/breach' };
   try {
     const raw = JSON.parse(readFileSyncSync(join(process.env.USERPROFILE || '', '.dsh', 'autokill-purge-data', 'deploy.json'), 'utf8'));
     if (raw && Number(raw.port)) def.port = Number(raw.port);
     if (raw && raw.dbName) def.dbName = String(raw.dbName);
+    // 入口默认是破甲页；deploy.json 里显式配了才跟随（记忆页只在用户自己切过去时进）
+    if (raw && raw.entryHash) def.entryHash = String(raw.entryHash);
   } catch { /* 用默认 */ }
   return def;
 }
@@ -156,7 +158,7 @@ async function main() {
 
   // 3) 打开浏览器
   // 私有部署固定入口：直接进记忆库
-  const ENTRY = process.env.PURGE_ENTRY || `http://127.0.0.1:${WEB_PORT}/#/memory`;
+  const ENTRY = process.env.PURGE_ENTRY || `http://127.0.0.1:${WEB_PORT}/${CFG.entryHash}`;
   const url = ENTRY;
   if (!NO_OPEN) {
     try {
