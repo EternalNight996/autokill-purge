@@ -1556,14 +1556,12 @@ function simpleSteps() {
 
 /* 吃豆人式进度：注入/卸载时召唤一只小怪，沿轨道一路吃豆，位置=进度；吃完放大消失。
    2D canvas 实现（零依赖、离线可用、60fps 开销可忽略），不用 three.js。 */
-/* 注入/卸载：黑洞吸收 + 数据流吸入（零依赖 canvas）
-   · 中心黑洞：事件视界 + 光子环 + 三圈旋转吸积盘
-   · 四周 0/1/十六进制/补丁字符沿螺旋轨道被吸入，越近越快
-   · 外环 = 进度，中央百分比，下方阶段文案
-   · 虚拟进度：真实 percent 到达前平滑爬升（≤92%），真实值更大时接管 */
+/* 注入/卸载：黑洞吸收（精简版，零依赖 canvas）
+   只保留最有冲击力的四件东西：一个更大更黑的视界、一圈强发光、一条旋转吸积螺旋、24 条带拖尾的数据流。
+   进度 = 外环 + 中央数字；真实 percent 未到时用虚拟进度平滑爬升（≤92%）。 */
 const armorEater = {
   cv: null, ctx: null, raf: 0, timer: 0, t0: 0, pct: 0, virtual: 0, done: false, mode: 'inject',
-  bits: null, frames: 0, last: 0,
+  bits: null, frames: 0, last: 0, fin: 0,
   start(mode) {
     try {
       this.stop();
@@ -1579,17 +1577,15 @@ const armorEater = {
       this.t0 = performance.now();
       this.last = this.t0;
       this.lastFrameAt = this.t0;
-      const CH = ['0', '1', '0x', 'FF', '7E', '#', '$', '//', '{}', '<>', '§', '补', '丁', '注', '入', '1.1.7'];
-      this.bits = Array.from({ length: 78 }, () => {
-        const r = 0.45 + Math.random() * 1.0;
-        return {
-          r, a: Math.random() * Math.PI * 2,
-          sp: 0.18 + Math.random() * 0.42,
-          ch: CH[Math.floor(Math.random() * CH.length)],
-          size: 9 + Math.random() * 8,
-          hue: Math.random(),
-        };
-      });
+      const CH = ['0', '1', '0x', 'FF', '#', '§', '补', '丁', '注', '入'];
+      this.bits = Array.from({ length: 24 }, () => ({
+        r: 0.5 + Math.random() * 0.9,
+        a: Math.random() * Math.PI * 2,
+        sp: 0.2 + Math.random() * 0.4,
+        ch: CH[Math.floor(Math.random() * CH.length)],
+        size: 11 + Math.random() * 7,
+        cool: Math.random() > 0.5,
+      }));
       const loop = (t) => {
         this.lastFrameAt = performance.now();
         try { this.draw(t); } catch { /* keep alive */ }
@@ -1617,128 +1613,134 @@ const armorEater = {
     const W = cv.width, H = cv.height;
     const cx = W / 2, cy = H / 2;
     const dark = this.mode === 'uninstall';
-    const hot = dark ? '255,110,70' : '255,168,60';
-    const cool = dark ? '120,190,255' : '120,210,255';
+    const hot = dark ? '255,105,65' : '255,165,50';
+    const cool = '130,200,255';
     const e = (t - this.t0) / 1000;
 
-    // 虚拟进度：越接近 92 越慢，真实值来了就取大的
     if (!this.done && this.virtual < 92) {
       const gap = 92 - this.virtual;
-      this.virtual = Math.min(92, this.virtual + dt * (gap > 40 ? 22 : gap > 15 ? 9 : 3));
+      this.virtual = Math.min(92, this.virtual + dt * (gap > 40 ? 20 : gap > 15 ? 8 : 2.6));
     }
     const p = this.done ? 100 : Math.max(this.pct, this.virtual);
 
     ctx.clearRect(0, 0, W, H);
-    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.75);
-    bg.addColorStop(0, 'rgba(8,10,14,.78)');
-    bg.addColorStop(1, 'rgba(3,5,9,.9)');
+    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.72);
+    bg.addColorStop(0, 'rgba(6,8,12,.6)');
+    bg.addColorStop(1, 'rgba(3,5,9,.88)');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
-    const maxR = Math.min(W, H) * 0.42;
-    const RBH = Math.min(W, H) * 0.055 + 26;   // 事件视界半径
-    const speed = 0.6 + (p / 100) * 1.9;       // 进度越高，吸入越快
+    const maxR = Math.min(W, H) * 0.46;
+    const RBH = Math.min(W, H) * 0.105;          // 视界更大，冲击更强
+    const speed = 0.7 + (p / 100) * 2.0;
 
-    // 1) 数据流：沿螺旋轨道被吸入
+    // 1) 数据流：带拖尾，越近越快越长
     if (this.bits) {
       for (const b of this.bits) {
-        b.r -= dt * b.sp * speed * 0.55;
-        b.a += dt * (1.6 / Math.max(0.08, b.r)) * 0.55 * speed;
-        if (b.r < 0.035) {
-          b.r = 1.45;
-          b.a = Math.random() * Math.PI * 2;
-          b.ch = b.ch; // 保留字符，形成持续字符流
-        }
-        const x = cx + Math.cos(b.a) * b.r * maxR;
-        const y = cy + Math.sin(b.a) * b.r * maxR * 0.62;
-        const near = Math.max(0, Math.min(1, 1 - b.r / 1.45));
-        const alpha = 0.12 + near * 0.75;
+        b.r -= dt * b.sp * speed * 0.5;
+        b.a += dt * (1.5 / Math.max(0.1, b.r)) * 0.5 * speed;
+        if (b.r < 0.06) { b.r = 1.5; b.a = Math.random() * Math.PI * 2; }
+        const rr = b.r * maxR;
+        const x = cx + Math.cos(b.a) * rr;
+        const y = cy + Math.sin(b.a) * rr * 0.6;
+        const near = Math.max(0, Math.min(1, 1 - b.r / 1.5));
+        const tail = near * 52 + 3;
+        const tx = cx + Math.cos(b.a + 0.10) * (rr + tail);
+        const ty = cy + Math.sin(b.a + 0.10) * (rr + tail) * 0.6;
         ctx.save();
-        ctx.font = '600 ' + (b.size * (1 - near * 0.35)).toFixed(1) + 'px ui-monospace, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = b.hue > 0.5
-          ? 'rgba(' + cool + ',' + alpha.toFixed(3) + ')'
-          : 'rgba(' + hot + ',' + alpha.toFixed(3) + ')';
-        ctx.fillText(b.ch, x, y);
+        ctx.strokeStyle = b.cool
+          ? 'rgba(' + cool + ',' + (0.10 + near * 0.5).toFixed(3) + ')'
+          : 'rgba(' + hot + ',' + (0.10 + near * 0.6).toFixed(3) + ')';
+        ctx.lineWidth = 1.6 + near * 1.8;
+        ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke();
+        if (near > 0.25) {
+          ctx.font = '600 ' + b.size.toFixed(0) + 'px ui-monospace, Consolas, monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = b.cool
+            ? 'rgba(' + cool + ',' + (0.3 + near * 0.6).toFixed(3) + ')'
+            : 'rgba(' + hot + ',' + (0.35 + near * 0.6).toFixed(3) + ')';
+          ctx.fillText(b.ch, x, y);
+        }
         ctx.restore();
       }
     }
 
-    // 2) 吸积盘：三圈椭圆弧，反向旋转
-    for (let k = 0; k < 3; k += 1) {
-      const rr = RBH * (1.55 + k * 0.42);
-      const rot = e * (0.9 - k * 0.22) * (k % 2 ? -1 : 1);
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(rot);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, rr, rr * 0.52, 0, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(' + (k % 2 ? cool : hot) + ',' + (0.36 - k * 0.08).toFixed(3) + ')';
-      ctx.lineWidth = 2.4 - k * 0.6;
-      ctx.stroke();
-      ctx.restore();
+    // 2) 一条旋转吸积螺旋（唯一的结构线，简洁但有吸积感）
+    ctx.beginPath();
+    for (let a = 0; a < Math.PI * 3.4; a += 0.07) {
+      const r = RBH * (1.45 + a * 0.30);
+      const ang = a + e * 1.5;
+      const x = cx + Math.cos(ang) * r;
+      const y = cy + Math.sin(ang) * r * 0.58;
+      if (a === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
+    ctx.strokeStyle = 'rgba(' + hot + ',.42)';
+    ctx.lineWidth = 2.6;
+    ctx.stroke();
 
-    // 3) 视界本体 + 光子环
-    const hole = ctx.createRadialGradient(cx, cy, RBH * 0.15, cx, cy, RBH);
-    hole.addColorStop(0, 'rgba(0,0,0,1)');
-    hole.addColorStop(0.72, 'rgba(2,3,6,1)');
-    hole.addColorStop(1, 'rgba(12,10,8,.98)');
+    // 3) 黑洞本体：纯黑球 + 三层强发光 + 呼吸的爱因斯坦环
+    const hole = ctx.createRadialGradient(cx, cy, RBH * 0.2, cx, cy, RBH);
+    hole.addColorStop(0, '#000');
+    hole.addColorStop(0.86, '#000');
+    hole.addColorStop(1, 'rgba(24,12,4,1)');
     ctx.beginPath();
     ctx.arc(cx, cy, RBH, 0, Math.PI * 2);
     ctx.fillStyle = hole;
     ctx.fill();
+    for (const [rr, lw, al] of [[1.0, 3.2, 0.95], [1.06, 9, 0.30], [1.17, 20, 0.10]]) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, RBH * rr, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(' + hot + ',' + al + ')';
+      ctx.lineWidth = lw;
+      ctx.stroke();
+    }
     ctx.beginPath();
-    ctx.arc(cx, cy, RBH, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(' + hot + ',.9)';
-    ctx.lineWidth = 2.2;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx, cy, RBH * 1.075, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,' + (0.10 + Math.abs(Math.sin(e * 3)) * 0.16).toFixed(3) + ')';
-    ctx.lineWidth = 1.2;
+    ctx.arc(cx, cy, RBH * 1.02, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.22 + Math.abs(Math.sin(e * 3.2)) * 0.22).toFixed(3) + ')';
+    ctx.lineWidth = 2;
     ctx.stroke();
 
-    // 4) 外环进度 + 百分比
-    const RingR = maxR * 1.16;
+    // 4) 外环进度 + 数字 + 阶段
+    const RingR = RBH * 2.35;
     ctx.beginPath();
     ctx.arc(cx, cy, RingR, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(255,255,255,.07)';
-    ctx.lineWidth = 7;
+    ctx.lineWidth = 6;
     ctx.stroke();
     const a0 = -Math.PI / 2;
     ctx.beginPath();
     ctx.arc(cx, cy, RingR, a0, a0 + (p / 100) * Math.PI * 2);
     ctx.strokeStyle = 'rgba(' + hot + ',.95)';
-    ctx.lineWidth = 7;
+    ctx.lineWidth = 6;
     ctx.lineCap = 'round';
     ctx.stroke();
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '700 ' + Math.round(Math.min(W, H) * 0.05) + 'px ui-monospace, Consolas, monospace';
+    ctx.font = '700 ' + Math.round(Math.min(W, H) * 0.045) + 'px ui-monospace, Consolas, monospace';
     ctx.fillStyle = 'rgba(255,244,232,.97)';
-    ctx.fillText(Math.round(p) + '%', cx, cy - 2);
+    ctx.fillText(Math.round(p) + '%', cx, cy);
 
     const note = (S && S.host && S.host.progress && S.host.progress.note)
       || (dark ? '正在卸载…' : '正在写入补丁…');
-    ctx.font = '500 13px system-ui, "Microsoft YaHei", sans-serif';
-    ctx.fillStyle = 'rgba(232,238,246,.66)';
-    ctx.fillText(String(note).slice(0, 42), cx, cy + RBH + 34);
+    ctx.font = '500 12.5px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(232,238,246,.6)';
+    ctx.fillText(String(note).slice(0, 36), cx, cy + RingR + 26);
 
-    // 5) 完成：视界收缩成一点 + 一圈外扩
+    // 5) 完成：视界熄灭 + 一圈外扩
     if (this.done) {
-      this.fin = (this.fin || 0) + 0.03;
-      const k = Math.min(1, this.fin);
+      this.fin = Math.min(1, this.fin + 0.04);
+      const k = this.fin;
       ctx.beginPath();
-      ctx.arc(cx, cy, RBH * (1 - k) + 2, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,.9)';
+      ctx.arc(cx, cy, Math.max(1, RBH * (1 - k)), 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,.92)';
       ctx.fill();
       ctx.beginPath();
-      ctx.arc(cx, cy, maxR * (0.3 + k * 0.9), 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(' + hot + ',' + (0.8 * (1 - k)).toFixed(3) + ')';
-      ctx.lineWidth = 10 * (1 - k) + 1;
+      ctx.arc(cx, cy, RBH * (1.2 + k * 3.2), 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(' + hot + ',' + (0.75 * (1 - k)).toFixed(3) + ')';
+      ctx.lineWidth = 9 * (1 - k) + 1;
       ctx.stroke();
       if (k >= 1) this.stop();
     }
