@@ -1570,6 +1570,8 @@ async function simpleHostAction(kind) {
   try {
     let data;
     if (kind === "apply") {
+      // 兜底：注入前把 DSH 预设对齐到当前勾选的装备（勾了没同步也不会错位）
+      await syncEquipPresets(true);
       const plugins = h.withPlugin ? ["autokill-purge-plugin"] : [];
       // 唯一一份补丁清单：勾了就只注入勾的；一个都不勾 = 只补还没写入的（与技术模式同一语义）
       let picked = $$("#page [data-patch-pick]").filter((el) => el.checked).map((el) => el.dataset.patchPick);
@@ -2076,6 +2078,17 @@ function equipSummaryText() {
   return picked.length ? `已选 ${picked.length}：${picked.map(nameOf).join("、")}` : "不装备（只破甲）";
 }
 
+/** 勾选装备即同步 DSH 预设：勾几个就在 ~/.dsh/.agent-presets 下装几个（防抖，避免连点刷盘） */
+let presetSyncTimer = null;
+function syncEquipPresets(immediate) {
+  const presets = Array.isArray(S.breach.equipPresets) ? S.breach.equipPresets.filter(Boolean) : [];
+  if (!presets.length) return Promise.resolve(null);
+  const run = () => request("/api/gear/sync-presets", { method: "POST", body: { presets } }).catch(() => null);
+  if (immediate) return run();
+  clearTimeout(presetSyncTimer);
+  return new Promise((resolve) => { presetSyncTimer = setTimeout(() => resolve(run()), 800); });
+}
+
 /** 勾/取消预设、逐项、全选清空的绑定；局部刷新后会重新调用 */
 function bindEquipControls() {
   $$("#page [data-eq-preset]").forEach((el) => {
@@ -2095,6 +2108,8 @@ function bindEquipControls() {
       }
       S.breach.equipPresets = list;
       S.breach.withEquip = list.length > 0;
+      // 勾几个就装几个：立即把 DSH 预设对齐到当前选择
+      syncEquipPresets();
       // 不重绘整页：下拉保持展开，可以连续勾多个预设
       refreshEquipUI();
     });

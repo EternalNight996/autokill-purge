@@ -2212,6 +2212,24 @@ async function handleApi(req, res, url, state) {
 
   // 装备模式（供前端与 MCP 共用同一份预设）
   // 装备清单与可注入段落：给其它宿主（MengBot 等）直接取用，避免各自维护一份阶段表
+  if (p === '/api/gear/sync-presets' && method === 'POST') {
+    // 勾选装备即同步 DSH 预设：勾几个就在 ~/.dsh/.agent-presets 下建几个目录
+    const body = await bodyOf(req);
+    const presets = Array.isArray(body.presets) ? body.presets.filter((x) => typeof x === 'string' && x) : [];
+    if (!presets.length) return send(res, 400, { ok: false, error: 'no_presets', hint: '先勾选装备再同步' });
+    try {
+      const r = await runNode(['scripts/sync-dsh-presets.mjs', '--presets', presets.join(',')], 40000);
+      const out = String(r.out || '');
+      let parsed = null;
+      try { parsed = JSON.parse(out.slice(out.indexOf('{'))); } catch { parsed = null; }
+      return send(res, r.ok ? 200 : 500, {
+        ok: r.ok,
+        presets,
+        result: parsed,
+        err: String(r.err || '').slice(0, 2000) || null,
+      });
+    } catch (e) { return send(res, 500, { ok: false, error: 'sync_presets_failed', detail: publicError(e) }); }
+  }
   if (p === '/api/gear' && method === 'GET') {
     return send(res, 200, {
       ok: true,
