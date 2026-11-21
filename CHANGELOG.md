@@ -2,6 +2,18 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.25-beta.3] — 2026-11-21（记忆库跟随 v0.52.0 重发版 · 日志抽屉 · 桌面壳转 GUI）
+
+### Changed
+- 记忆库钉到 **memory-eternal v0.52.0 重发版**（GitHub tag 内容已更新：`lib/web.js` sha256 前 16 位 `4ea6eed47b6ca3ac`）。运行时副本与 profile 副本逐字节对齐该 tag；升级前两库 `db/wal/shm` 已备份到 `.backups/pre-republish-*`。
+- 清理残留 worker：7999/8000-8003 多开进程合并为单一 7999（主库 10,479 卡）+ 17890（mem-purge 182 卡），`deploy.json` 以无 BOM UTF-8 重写。
+
+### Added
+- **UI 级系统日志**（`web/logbus.mjs` + `web/public/logs.{js,css}`）：SSE 实时、级别/标签/关键字过滤、实时暂停、清空、导出、按天落盘 `data/logs/app-YYYYMMDD.log`（留 14 天）、`console.*` 与 stdout/stderr 镜像、未捕获异常入日志；顶栏「日志」按钮，`Ctrl+\` 开关，`?logs=1` 深链。
+- 桌面壳：node 子进程 stdout/stderr 落 `app\data\logs\node-<pid>.log`。
+
+### Fixed
+- 桌面壳 release 版原来是 CONSOLE 子系统，会弹黑框 → 加 `windows_subsystem = \"windows\"`，PE subsystem 2（GUI）。
 ## [1.1.25-beta.2] — 2026-11-21（三宿主生命周期 · 记忆库 0.52.0 · 开源门面）
 
 ### Added
