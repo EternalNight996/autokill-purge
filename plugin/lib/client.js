@@ -32,20 +32,6 @@ window.__ModuleLoader__.load({
 
     const LABEL = "梦神装甲";
 
-    function openConsole() {
-      const url = consoleUrl();
-      // 注意：window.open(..., "noopener") 按规范返回 null，旧代码据此又跑了一次
-      // location.href —— 于是每点一次开两个页面。这里不带 noopener，成功后手动断开 opener。
-      try {
-        const w = window.open(url, "_blank");
-        if (w) {
-          try { w.opener = null; } catch (_) { /* 跨域后不可写，忽略 */ }
-          return;
-        }
-      } catch (_) { /* 弹窗被拦，走下面的兜底 */ }
-      try { window.location.assign(url); } catch (_) { /* ignore */ }
-    }
-
     /** 与控制台同一个图标：内嵌 assets/icon.png（梦神破甲） */
     function ArmorIcon(props) {
       const size = (props && props.size) || 16;
@@ -72,17 +58,20 @@ window.__ModuleLoader__.load({
       document.head.appendChild(tag);
     }
 
-    /** 侧栏底部的一项：收起时只有图标，展开时图标 + 名称 */
+    /** 侧栏底部的一项：收起时只有图标，展开时图标 + 名称。
+     *  用 <a target="_blank"> 而不是 JS 打开：Electron/浏览器对锚点的外链只处理一次，
+     *  而 window.open 在嵌套管家里可能「已经开了还返回 null」，再兜底跳转就会开两个。 */
     function ArmorNavButton(props) {
       const wide = !!(props && props.wide);
       return h("div", { className: "ap-armor-nav" },
-        h("button", {
-          type: "button",
+        h("a", {
           className: "ap-armor-btn" + (wide ? "" : " ap-armor-collapsed"),
-          title: LABEL + " · 打开 autokill-purge 控制台",
+          title: LABEL + " · 打开梦神控制台",
           "aria-label": LABEL,
           "data-mengshen-armor": "1",
-          onClick: openConsole,
+          href: consoleUrl() + "/#/breach",
+          target: "_blank",
+          rel: "noopener noreferrer",
         },
           h("span", { className: "ap-armor-icon" }, h(ArmorIcon, { size: wide ? 16 : 18 })),
           wide ? h("span", { className: "ap-armor-label" }, LABEL) : null,
@@ -92,8 +81,13 @@ window.__ModuleLoader__.load({
 
     const inject = ["slots"];
 
-    /** 只往 sidebar.footer.action（list 槽）加一行，别的一概不碰 */
+    /** 只往 sidebar.footer.action（list 槽）加一行，别的一概不碰。
+     *  guard：热重载/重复 apply 时同一页面只注册一次，避免出现两个按钮、点一次开两个页面。 */
     function apply(ctx) {
+      if (typeof window !== "undefined") {
+        if (window.__apArmorRegistered) return;
+        window.__apArmorRegistered = true;
+      }
       ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
         name: "sidebar.footer.action",
         id: "mengshen-armor",
