@@ -32,7 +32,12 @@
     "README.md",
     "README.en.md",
     "CHANGELOG.md",
-    "SKILL.md"
+    "SKILL.md",
+    "scripts/lifecycle.mjs",
+    "scripts/patch-mengbot-wrap.mjs",
+    "scripts/check-pack.mjs",
+    "docs/*.md",
+    "docs/shots-ux2/hero-breach-1280.png"
   ],
   "engines": {
     "node": ">=22"
