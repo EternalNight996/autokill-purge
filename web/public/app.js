@@ -1556,9 +1556,10 @@ function simpleSteps() {
 
 /* 吃豆人式进度：注入/卸载时召唤一只小怪，沿轨道一路吃豆，位置=进度；吃完放大消失。
    2D canvas 实现（零依赖、离线可用、60fps 开销可忽略），不用 three.js。 */
-/* 注入/卸载：黑洞吸收（精简版，零依赖 canvas）
-   只保留最有冲击力的四件东西：一个更大更黑的视界、一圈强发光、一条旋转吸积螺旋、24 条带拖尾的数据流。
-   进度 = 外环 + 中央数字；真实 percent 未到时用虚拟进度平滑爬升（≤92%）。 */
+/* 注入/卸载：暗黑黑洞（零依赖 canvas）
+   配色：不再是橙黄，全部走冷灰 / 炭黑 / 微光银。
+   物理：粒子受 r² 引力加速，角动量守恒（ω = L/r²），带真实拖尾；越过视界后从外圈重生。
+   收尾：done 后 0.6s 内收缩熄灭并自毁，不留在 100% 卡着。 */
 const armorEater = {
   cv: null, ctx: null, raf: 0, timer: 0, t0: 0, pct: 0, virtual: 0, done: false, mode: 'inject',
   bits: null, frames: 0, last: 0, fin: 0,
@@ -1577,14 +1578,16 @@ const armorEater = {
       this.t0 = performance.now();
       this.last = this.t0;
       this.lastFrameAt = this.t0;
-      const CH = ['0', '1', '0x', 'FF', '#', '§', '补', '丁', '注', '入'];
-      this.bits = Array.from({ length: 24 }, () => ({
-        r: 0.5 + Math.random() * 0.9,
-        a: Math.random() * Math.PI * 2,
-        sp: 0.2 + Math.random() * 0.4,
+      const CH = ['0', '1', '0x', 'FF', '#', '§', '注', '入'];
+      this.bits = Array.from({ length: 34 }, () => ({
+        r: 0.55 + Math.random() * 0.95,     // 归一化半径（相对 maxR）
+        th: Math.random() * Math.PI * 2,
+        vr: 0.02 + Math.random() * 0.05,    // 径向速度
+        L: 0.10 + Math.random() * 0.22,     // 角动量 → ω = L/r²
         ch: CH[Math.floor(Math.random() * CH.length)],
-        size: 11 + Math.random() * 7,
-        cool: Math.random() > 0.5,
+        size: 10 + Math.random() * 6,
+        cold: Math.random() > 0.45,
+        tail: [],
       }));
       const loop = (t) => {
         this.lastFrameAt = performance.now();
@@ -1612,10 +1615,8 @@ const armorEater = {
     this.last = now;
     const W = cv.width, H = cv.height;
     const cx = W / 2, cy = H / 2;
-    const dark = this.mode === 'uninstall';
-    const hot = dark ? '255,105,65' : '255,165,50';
-    const cool = '130,200,255';
     const e = (t - this.t0) / 1000;
+    const dark = this.mode === 'uninstall';
 
     if (!this.done && this.virtual < 92) {
       const gap = 92 - this.virtual;
@@ -1625,122 +1626,132 @@ const armorEater = {
 
     ctx.clearRect(0, 0, W, H);
     const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.72);
-    bg.addColorStop(0, 'rgba(6,8,12,.6)');
-    bg.addColorStop(1, 'rgba(3,5,9,.88)');
+    bg.addColorStop(0, 'rgba(5,6,8,.72)');
+    bg.addColorStop(1, 'rgba(2,3,5,.92)');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
     const maxR = Math.min(W, H) * 0.46;
-    const RBH = Math.min(W, H) * 0.105;          // 视界更大，冲击更强
-    const speed = 0.7 + (p / 100) * 2.0;
+    const RBH = Math.min(W, H) * 0.105;
+    // 暗黑配色：冷灰 / 银白 / 极弱的青；卸载只保留一丝铁锈红
+    const INK = dark ? '150,110,100' : '150,163,182';
+    const SILVER = dark ? '196,170,162' : '196,206,222';
+    const DIM = '96,106,122';
+    const speed = 0.7 + (p / 100) * 1.8;
+    const G = 0.5; // 引力常数（归一化）
 
-    // 1) 数据流：带拖尾，越近越快越长
+    // 1) 物理粒子：引力加速 + 角动量守恒 + 拖尾
     if (this.bits) {
       for (const b of this.bits) {
-        b.r -= dt * b.sp * speed * 0.5;
-        b.a += dt * (1.5 / Math.max(0.1, b.r)) * 0.5 * speed;
-        if (b.r < 0.06) { b.r = 1.5; b.a = Math.random() * Math.PI * 2; }
+        b.vr += (G / Math.max(0.02, b.r * b.r)) * dt * speed;   // a = G/r²
+        b.r -= b.vr * dt * speed;                                // 越近越快（自由落体）
+        b.th += (b.L / Math.max(0.015, b.r * b.r)) * dt * speed;  // ω = L/r²
+        if (b.r < 0.1) {
+          b.r = 1.5 + Math.random() * 0.1;
+          b.th = Math.random() * Math.PI * 2;
+          b.vr = 0.02 + Math.random() * 0.04;
+          b.tail.length = 0;
+        }
         const rr = b.r * maxR;
-        const x = cx + Math.cos(b.a) * rr;
-        const y = cy + Math.sin(b.a) * rr * 0.6;
-        const near = Math.max(0, Math.min(1, 1 - b.r / 1.5));
-        const tail = near * 52 + 3;
-        const tx = cx + Math.cos(b.a + 0.10) * (rr + tail);
-        const ty = cy + Math.sin(b.a + 0.10) * (rr + tail) * 0.6;
-        ctx.save();
-        ctx.strokeStyle = b.cool
-          ? 'rgba(' + cool + ',' + (0.10 + near * 0.5).toFixed(3) + ')'
-          : 'rgba(' + hot + ',' + (0.10 + near * 0.6).toFixed(3) + ')';
-        ctx.lineWidth = 1.6 + near * 1.8;
-        ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke();
-        if (near > 0.25) {
+        const x = cx + Math.cos(b.th) * rr;
+        const y = cy + Math.sin(b.th) * rr * 0.58;
+        b.tail.push(x, y);
+        if (b.tail.length > 20) b.tail.splice(0, 2);
+        const near = Math.max(0, Math.min(1, 1 - b.r / 1.55));
+        // 拖尾折线：越近越亮越粗
+        if (b.tail.length >= 4) {
+          ctx.beginPath();
+          ctx.moveTo(b.tail[0], b.tail[1]);
+          for (let k = 2; k < b.tail.length; k += 2) ctx.lineTo(b.tail[k], b.tail[k + 1]);
+          ctx.strokeStyle = (b.cold ? 'rgba(' + SILVER + ',' : 'rgba(' + INK + ',') + (0.05 + near * 0.55).toFixed(3) + ')';
+          ctx.lineWidth = 0.8 + near * 2.2;
+          ctx.lineCap = 'round';
+          ctx.stroke();
+        }
+        if (near > 0.2) {
           ctx.font = '600 ' + b.size.toFixed(0) + 'px ui-monospace, Consolas, monospace';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillStyle = b.cool
-            ? 'rgba(' + cool + ',' + (0.3 + near * 0.6).toFixed(3) + ')'
-            : 'rgba(' + hot + ',' + (0.35 + near * 0.6).toFixed(3) + ')';
+          ctx.fillStyle = (b.cold ? 'rgba(' + SILVER + ',' : 'rgba(' + INK + ',') + (0.25 + near * 0.55).toFixed(3) + ')';
           ctx.fillText(b.ch, x, y);
         }
-        ctx.restore();
       }
     }
 
-    // 2) 一条旋转吸积螺旋（唯一的结构线，简洁但有吸积感）
+    // 2) 极暗的吸积弧（只留一丝，作为引力场的可视化）
     ctx.beginPath();
-    for (let a = 0; a < Math.PI * 3.4; a += 0.07) {
-      const r = RBH * (1.45 + a * 0.30);
-      const ang = a + e * 1.5;
+    for (let a = 0; a < Math.PI * 3.0; a += 0.08) {
+      const r = RBH * (1.5 + a * 0.28);
+      const ang = a - e * 1.1;
       const x = cx + Math.cos(ang) * r;
-      const y = cy + Math.sin(ang) * r * 0.58;
+      const y = cy + Math.sin(ang) * r * 0.55;
       if (a === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
-    ctx.strokeStyle = 'rgba(' + hot + ',.42)';
-    ctx.lineWidth = 2.6;
+    ctx.strokeStyle = 'rgba(' + DIM + ',.22)';
+    ctx.lineWidth = 2;
     ctx.stroke();
 
-    // 3) 黑洞本体：纯黑球 + 三层强发光 + 呼吸的爱因斯坦环
+    // 3) 视界：纯黑 + 一圈极弱的银边 + 呼吸光子环
     const hole = ctx.createRadialGradient(cx, cy, RBH * 0.2, cx, cy, RBH);
     hole.addColorStop(0, '#000');
-    hole.addColorStop(0.86, '#000');
-    hole.addColorStop(1, 'rgba(24,12,4,1)');
+    hole.addColorStop(0.9, '#000');
+    hole.addColorStop(1, 'rgba(10,11,14,1)');
     ctx.beginPath();
     ctx.arc(cx, cy, RBH, 0, Math.PI * 2);
     ctx.fillStyle = hole;
     ctx.fill();
-    for (const [rr, lw, al] of [[1.0, 3.2, 0.95], [1.06, 9, 0.30], [1.17, 20, 0.10]]) {
+    for (const [rr, lw, al] of [[1.0, 2.2, 0.55], [1.07, 10, 0.10], [1.2, 22, 0.045]]) {
       ctx.beginPath();
       ctx.arc(cx, cy, RBH * rr, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(' + hot + ',' + al + ')';
+      ctx.strokeStyle = 'rgba(' + SILVER + ',' + al + ')';
       ctx.lineWidth = lw;
       ctx.stroke();
     }
     ctx.beginPath();
     ctx.arc(cx, cy, RBH * 1.02, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,' + (0.22 + Math.abs(Math.sin(e * 3.2)) * 0.22).toFixed(3) + ')';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(220,228,240,' + (0.08 + Math.abs(Math.sin(e * 2.6)) * 0.14).toFixed(3) + ')';
+    ctx.lineWidth = 1.4;
     ctx.stroke();
 
-    // 4) 外环进度 + 数字 + 阶段
-    const RingR = RBH * 2.35;
+    // 4) 进度环 + 数字
+    const RingR = RBH * 2.3;
     ctx.beginPath();
     ctx.arc(cx, cy, RingR, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,.07)';
-    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(255,255,255,.055)';
+    ctx.lineWidth = 5;
     ctx.stroke();
     const a0 = -Math.PI / 2;
     ctx.beginPath();
     ctx.arc(cx, cy, RingR, a0, a0 + (p / 100) * Math.PI * 2);
-    ctx.strokeStyle = 'rgba(' + hot + ',.95)';
-    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(' + SILVER + ',.92)';
+    ctx.lineWidth = 5;
     ctx.lineCap = 'round';
     ctx.stroke();
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '700 ' + Math.round(Math.min(W, H) * 0.045) + 'px ui-monospace, Consolas, monospace';
-    ctx.fillStyle = 'rgba(255,244,232,.97)';
+    ctx.font = '700 ' + Math.round(Math.min(W, H) * 0.042) + 'px ui-monospace, Consolas, monospace';
+    ctx.fillStyle = 'rgba(228,234,244,.95)';
     ctx.fillText(Math.round(p) + '%', cx, cy);
 
     const note = (S && S.host && S.host.progress && S.host.progress.note)
       || (dark ? '正在卸载…' : '正在写入补丁…');
     ctx.font = '500 12.5px system-ui, "Microsoft YaHei", sans-serif';
-    ctx.fillStyle = 'rgba(232,238,246,.6)';
-    ctx.fillText(String(note).slice(0, 36), cx, cy + RingR + 26);
+    ctx.fillStyle = 'rgba(200,208,222,.52)';
+    ctx.fillText(String(note).slice(0, 36), cx, cy + RingR + 24);
 
-    // 5) 完成：视界熄灭 + 一圈外扩
+    // 5) 收尾：0.6s 内收缩熄灭后自毁（不再滞留 100%）
     if (this.done) {
-      this.fin = Math.min(1, this.fin + 0.04);
+      this.fin = Math.min(1, this.fin + dt * 1.7);
       const k = this.fin;
       ctx.beginPath();
-      ctx.arc(cx, cy, Math.max(1, RBH * (1 - k)), 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,.92)';
+      ctx.arc(cx, cy, Math.max(0.5, RBH * (1 - k)), 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,.95)';
       ctx.fill();
       ctx.beginPath();
-      ctx.arc(cx, cy, RBH * (1.2 + k * 3.2), 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(' + hot + ',' + (0.75 * (1 - k)).toFixed(3) + ')';
-      ctx.lineWidth = 9 * (1 - k) + 1;
+      ctx.arc(cx, cy, RBH * (1.1 + k * 2.6), 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(' + SILVER + ',' + (0.5 * (1 - k)).toFixed(3) + ')';
+      ctx.lineWidth = 6 * (1 - k) + 0.6;
       ctx.stroke();
       if (k >= 1) this.stop();
     }
@@ -1850,7 +1861,22 @@ function startProgressPolling(mode) {
   const tick = async () => {
     let p = null;
     try { const d = await request("/api/host/progress"); p = d && d.progress; } catch { /* 控制台可能正被重启 */ }
-    if (p) { S.host.progress = p; armorEater.set(p.percent, p.done); }
+    if (p) {
+      S.host.progress = p;
+      armorEater.set(p.percent, p.done);
+      // 到 100% 就收住：播完收尾后清掉进度状态，别让页面停在 100%
+      if (p.done && !S.host.progressCleared) {
+        S.host.progressCleared = true;
+        setTimeout(() => {
+          try {
+            armorEater.stop();
+            S.host.progress = null;
+            S.host.progressCleared = false;
+            if (S.tab === "breach") renderPage();
+          } catch { /* ignore */ }
+        }, 1600);
+      }
+    }
     if (S.tab === "breach") renderPage();
     const expired = Date.now() - started > 120000;
     if (!(p && p.done) && !expired) S.host.progressTimer = setTimeout(tick, 500);
