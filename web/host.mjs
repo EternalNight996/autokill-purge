@@ -390,7 +390,9 @@ export async function hostStatus(dataDir) {
       nameZh: patchZh(p.name),
       layer: p.layer,
       layerEn: p.layer_en,
-      status: (st.patch_status && st.patch_status[p.id]) || 'unknown',
+      // status 与 tone/statusZh 必须同一个宿主口径：以前 status 取进程全局的 gatherState（往往是
+      // npm-global 那份陪跑宿主），桌面主宿主却被判成待注入 —— 表格里「已注入」和「待注入」互相打架。
+      status: statusMap[p.id] || 'unknown',
       tone: tone.tone,
       statusZh: tone.label,
     };
@@ -474,10 +476,25 @@ export async function listSnapshots(dataDir) {
     if (!existsSync(manifest)) continue;
     try {
       const m = JSON.parse(await readFile(manifest, 'utf8'));
-      out.push({ id: name, at: m.at, tag: m.tag, files: (m.files || []).length, bytes: m.bytes || 0 });
+      // 排序真源是 manifest.at（快照创建时刻）。以前按 id 字符串倒序，遇到 skill- / rule- / prompt-
+      // 这类前缀快照就会排到 2026… 前面 —— 它们恰好是 0 个文件的空快照，于是「恢复」恢复了 0 个文件却回 200。
+      const atMs = Date.parse(m.at || '') || 0;
+      out.push({ id: name, at: m.at, atMs: atMs, tag: m.tag, files: (m.files || []).length, bytes: m.bytes || 0 });
     } catch { /* 跳过损坏快照 */ }
   }
-  return out.sort((a, b) => String(b.id).localeCompare(String(a.id)));
+  return out.sort((a, b) => (b.atMs - a.atMs) || String(b.id).localeCompare(String(a.id)));
+}
+
+/**
+ * 选一份用来恢复的快照。
+ * - 给了 id：照单全收（调用方明确要点哪一份）
+ * - 没给：按时间从新到旧，跳过 exclude（刚建的 guard）和空快照（files 为 0）
+ */
+export function pickRestoreSnapshot(snaps, { id = null, excludeIds = [] } = {}) {
+  const list = Array.isArray(snaps) ? snaps : [];
+  if (id) return list.find((s) => String(s.id) === String(id)) || null;
+  const skip = new Set((excludeIds || []).map((x) => String(x)));
+  return list.find((s) => !skip.has(String(s.id)) && (Number(s.files) || 0) > 0) || null;
 }
 
 /** 备份：把补丁会碰到的每个文件的当前内容整份复制下来，并记 sha256 */
@@ -504,12 +521,16 @@ export async function createSnapshot(dataDir, tag = 'manual') {
   return { id: id, files: manifest.files.length, bytes: manifest.bytes, at: manifest.at };
 }
 
-/** 撤销上一次：用指定快照（默认最近一份）覆盖回宿主 */
-export async function restoreSnapshot(dataDir, id) {
+/** 撤销上一次：用指定快照（默认最近一份「有文件」的快照，跳过刚建的 guard）覆盖回宿主 */
+export async function restoreSnapshot(dataDir, id, opts = {}) {
   const snaps = await listSnapshots(dataDir);
   if (!snaps.length) throw new Error('还没有任何快照：先点一次「备份现在」');
-  const target = id ? snaps.find((s) => s.id === id) : snaps[0];
-  if (!target) throw new Error('找不到快照 ' + id);
+  const target = pickRestoreSnapshot(snaps, { id: id || opts.id || null, excludeIds: opts.excludeIds || [] });
+  if (!target) {
+    throw new Error(id
+      ? '找不到快照 ' + id
+      : '没有可用的快照：现有的快照要么是空快照（0 个文件），要么就是本次操作刚建的 guard');
+  }
   const dir = join(SNAP_DIR(dataDir), target.id);
   const m = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
   const done = [];
@@ -519,7 +540,7 @@ export async function restoreSnapshot(dataDir, id) {
     await copyFile(join(dir, f.blob), f.path);
     done.push(f.path);
   }
-  return { id: target.id, restored: done.length, paths: done };
+  return { id: target.id, at: target.at, files: (m.files || []).length, restored: done.length, paths: done };
 }
 
 /** 恢复出厂：用官方 app.asar 的原件覆盖被 patch 的文件（不依赖 .bak） */
@@ -611,6 +632,18 @@ async function applyHostPatchesInner(kind, { patchIds = [] } = {}) {
       note: '还原是文件级（补丁共用 .dshpurge.bak），只能整份还原',
     };
   }
+  // 密封包（asar 还在）：桌面壳按 app.getAppPath() 从 app.asar 读 dsh，resources/app 必须存在
+  // 且**已经打过补丁**，落地后才会有东西可加载。若 resources/app 不完整，先让引擎解包；
+  // 否则 apply 只写到 npm 全局那份，落地后加载的是未打补丁的原件 —— 用户看到的就是「注入成功、补丁无效」。
+  let ensured = null;
+  try {
+    const appPkg = join(APP_DIR, 'dsh', 'package.json');
+    if (desktopSealedNow(c) && !existsSync(appPkg) && typeof c.openSealedDesktopHost === 'function') {
+      ensured = await c.openSealedDesktopHost({ forApply: true });
+    }
+  } catch (e) {
+    ensured = { ok: false, error: String((e && e.message) || e) };
+  }
   const all = Array.isArray(c.ALL_PATCHES) ? c.ALL_PATCHES : [];
   const want = (Array.isArray(patchIds) ? patchIds : []).map((x) => String(x || '').trim()).filter(Boolean);
   const subset = want.length
@@ -661,6 +694,7 @@ async function applyHostPatchesInner(kind, { patchIds = [] } = {}) {
     applied,
     already,
     applyError: applyError,
+    ensured: ensured,
     desktopSealed: desktopSealed,
     // 这一条就是「注入了却没反应」的开关：true 时必须点「落地并重启宿主」
     pendingHandoff: desktopSealed,
@@ -753,26 +787,56 @@ function runDetached(cmd, args) {
 }
 
 /**
- * 结束宿主：按映像名两段式（先温和，再强制）。
+ * 结束宿主：按映像名两段式（先温和，再强制），并**等它真的退出**。
  *
  * 刻意**不用 /T**。/T 会顺着主进程把整棵子树端掉；而本函数常被「挂在宿主树里的一方」触发
  * （宿主自己的插件、PTC 派生的 watcher、控制台的子进程），/T 会把调用方一起杀。
  * 2026-11-18 18:07 那次落地就是这么自杀的：45 个同名进程连同 watcher 一起没了，
  * 日志停在 "before: asar exists=true"，asar 根本没来得及改名。
  * 只按映像名杀，watcher（node.exe）不受牵连。
+ *
+ * 2026-11-21 补：taskkill 返回成功 ≠ 进程已经退干净。Electron 关窗后主进程还会活一小会儿，
+ * 这时 rename asar 必失败 —— 之前「点了应用没反应」有相当一部分就是 20s 重试窗口被白白耗光。
+ * 现在杀完显式轮询到进程消失，再让调用方去改名。
  */
+async function imageStillRunning(image) {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/FO', 'CSV', '/NH'], { windowsHide: true });
+      let buf = '';
+      child.stdout.on('data', (d) => { buf += d; });
+      child.on('error', () => resolve(false));
+      child.on('close', () => {
+        const text = String(buf || '').toLowerCase();
+        resolve(text.includes(image.toLowerCase()));
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+async function waitForHostExit(image, timeoutMs = 25000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!(await imageStillRunning(image))) return { ok: true, waitedMs: Date.now() - started };
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { ok: false, waitedMs: Date.now() - started, error: 'host_still_running' };
+}
+
 async function killDesktopHost(exe) {
   if (!exe) return { ok: false, error: 'no_exe' };
   const image = basename(exe);
   const soft = await runDetached('taskkill', ['/IM', image]);
   await new Promise((r) => setTimeout(r, 2000));
   const hard = await runDetached('taskkill', ['/IM', image, '/F']);
-  await new Promise((r) => setTimeout(r, 1200));
-  return { ok: true, soft: soft, hard: hard, image: image, tree: false };
+  const exited = await waitForHostExit(image, 25000);
+  return { ok: exited.ok, soft: soft, hard: hard, image: image, tree: false, exited: exited };
 }
 
 /** 等 asar 的锁释放后改名让位（Electron 退出时文件句柄有几秒延迟） */
-async function moveAsarAside(asar, aside, timeoutMs = 20000) {
+async function moveAsarAside(asar, aside, timeoutMs = 60000) {
   const started = Date.now();
   let lastError = null;
   while (Date.now() - started < timeoutMs) {
@@ -786,6 +850,34 @@ async function moveAsarAside(asar, aside, timeoutMs = 20000) {
     }
   }
   return { ok: false, error: lastError };
+}
+
+/**
+ * 只结束宿主、不拉起（卸载前用：宿主正从 resources/app 加载时，要先退出才能放回 asar、删解包目录）。
+ */
+export async function stopDesktopHost() {
+  await core();
+  const exe = existsSync(DESKTOP_EXE_GUESS) ? DESKTOP_EXE_GUESS : null;
+  if (!exe) return { ok: true, skipped: true, note: '没找到桌面宿主 exe：没有可结束的进程' };
+  const killed = await killDesktopHost(exe);
+  return { ok: killed.ok, killed: killed, exe: exe };
+}
+
+/**
+ * 只重启桌面宿主：kill + 拉起，不动 app.asar。
+ * 「一键卸载」把 asar 放回后要用它 —— 那时 asar 已经在了，不能再走 finishHostHandoff
+ * （那是「挪走 asar」的动作，会把刚放回的原件又挪出去）。
+ */
+export async function restartDesktopHost() {
+  await core();
+  const exe = existsSync(DESKTOP_EXE_GUESS) ? DESKTOP_EXE_GUESS : null;
+  if (!exe) return { ok: false, error: 'no_desktop_install', note: '没找到桌面宿主 exe（只装了 web/CLI 版 dsh 时不需要重启）' };
+  const killed = await killDesktopHost(exe);
+  const launched = await runDetached(exe, []);
+  return {
+    ok: !!(launched && launched.ok), killed: killed, launched: launched, exe: exe, asarMoved: false,
+    note: launched && launched.ok ? '桌面宿主已重启' : '没能重新拉起宿主，请手动打开 DeepSeek Harness',
+  };
 }
 
 /**
@@ -805,16 +897,28 @@ export async function finishHostHandoff({ restart = true } = {}) {
     if (!existsSync(asar)) {
       return { ok: true, needed: false, asarMoved: true, appDir: join(dirname(asar), 'app'), note: 'app.asar 已经不在了：resources/app 就是当前宿主，重启即生效。' };
     }
-    // 1) 挪走 asar 前先确认 resources/app 真的有完整宿主，否则挪完就打不开了
+    // 1) 挪走 asar 前先确认 resources/app 真的有完整宿主，否则挪完就打不开了。
+    //    没有就自己解包（引擎的 openSealedDesktopHost，幂等）—— 别再把「先点一次一键注入」甩给用户，
+    //    一键应用就该一步到底。解包失败才算失败。
     const appDir = join(dirname(asar), 'app');
-    const pkg = join(appDir, 'dsh', 'package.json');
+    let pkg = join(appDir, 'dsh', 'package.json');
+    let extracted = null;
     if (!existsSync(pkg)) {
-      return {
-        ok: false,
-        error: 'app_dir_incomplete',
-        appDir: appDir,
-        note: 'resources/app 里没有 dsh/package.json，现在挪 asar 会让桌面打不开。先点一次「一键注入」把 asar 解开再来。',
-      };
+      try {
+        extracted = await c.openSealedDesktopHost?.({ forApply: true }) || null;
+      } catch (e) {
+        extracted = { ok: false, error: String((e && e.message) || e) };
+      }
+      pkg = join(appDir, 'dsh', 'package.json');
+      if (!existsSync(pkg)) {
+        return {
+          ok: false,
+          error: 'app_dir_incomplete',
+          appDir: appDir,
+          extracted: extracted,
+          note: 'resources/app 里没有 dsh/package.json，自动解包也没成功：' + ((extracted && (extracted.error || extracted.note)) || '引擎没给出原因') + '。现在挪 asar 会让桌面打不开，已中止（宿主未被结束）。',
+        };
+      }
     }
     // 2) 结束宿主
     const killed = await killDesktopHost(exe);
@@ -862,6 +966,140 @@ export async function restoreHostAsar() {
   } catch (e) {
     return { ok: false, error: 'rename_failed', detail: String((e && e.message) || e) };
   }
+}
+
+// ---- 卸载残留：每次「解包 / 落地」都会在 resources 下留一份 app 副本 ------------
+//
+// 2026-11-21 实测（这台机器）：resources 下躺着 10 份 app.dshpurge-prev*，每份 447.8 MB，
+// 合计 4.48 GB；外加解包出来的 resources/app 447.8 MB、开机启动项 autokill-purge.lnk、
+// ~/.dsh/autokill-purge*（49.7 MB 运行时副本）。旧的卸载只还原文件 + 清插件，一条都没碰，
+// 于是「卸载完成」之后磁盘上还留着 5 GB 的痕迹 —— 这就是「卸载不干净」。
+//
+// 口径：卸载 = 回到没装过。凡是本工具自己造出来的副本/入口，必须在卸载收尾里清掉并回读确认。
+const RESOURCES_DIR = dirname(ASAR_PATH);
+/** 开机自启快捷方式（install-desktop / launch.mjs 装进去的那个） */
+const STARTUP_LNK = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'autokill-purge.lnk');
+
+/** 递归量一个文件/目录的字节数；量不到按 0 算（清理不因统计失败而中止） */
+async function pathBytes(p) {
+  try {
+    const st = await stat(p);
+    if (!st.isDirectory()) return st.size;
+    let total = 0;
+    const entries = await readdir(p, { withFileTypes: true });
+    for (const e of entries) {
+      const fp = join(p, e.name);
+      if (e.isDirectory()) total += await pathBytes(fp);
+      else {
+        try { total += (await stat(fp)).size; } catch { /* 单个文件读不到就跳过 */ }
+      }
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+}
+
+function mb(n) {
+  return Math.round((Number(n) || 0) / 1048576 * 10) / 10;
+}
+
+/** 只读：当前还能清掉哪些残留（UI 在「一键卸载」旁边展示体积） */
+export async function listPurgeLeftovers() {
+  const home = process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
+  const items = [];
+  // 1) 落地/解包留下的整包副本
+  let names = [];
+  try { names = await readdir(RESOURCES_DIR); } catch { names = []; }
+  for (const n of names) {
+    if (!n.startsWith('app.dshpurge-prev')) continue;
+    const p = join(RESOURCES_DIR, n);
+    items.push({ id: 'prev', path: p, kind: 'dir', bytes: await pathBytes(p), removable: true, note: '上一次解包前的整包副本（回滚用，官方升级后即失效）' });
+  }
+  // 2) asar 让位副本（asar 已回位才可删）
+  const aside = asidePathFor(ASAR_PATH);
+  if (existsSync(aside)) {
+    const asarBack = existsSync(ASAR_PATH);
+    items.push({ id: 'aside', path: aside, kind: 'file', bytes: await pathBytes(aside), removable: asarBack, note: asarBack ? 'asar 已在位，这份让位副本可以删' : 'app.asar 不在位：先把 asar 放回再删' });
+  }
+  // 3) 解包目录（asar 在位时才是纯残留；不在位时它就是宿主本体，删了打不开）
+  if (existsSync(APP_DIR)) {
+    const asarBack = existsSync(ASAR_PATH);
+    items.push({ id: 'extracted-app', path: APP_DIR, kind: 'dir', bytes: await pathBytes(APP_DIR), removable: asarBack, note: asarBack ? '解包出来的宿主目录，asar 在位时可安全删' : '当前宿主正从这里加载：放回 asar 后才能删' });
+  }
+  // 4) 开机自启
+  if (existsSync(STARTUP_LNK)) {
+    items.push({ id: 'startup', path: STARTUP_LNK, kind: 'file', bytes: await pathBytes(STARTUP_LNK), removable: true, note: '开机自启快捷方式' });
+  }
+  // 5) 本项目运行时副本与数据目录
+  for (const d of ['autokill-purge', 'autokill-purge-data', 'autokill-purge-logs']) {
+    const p = join(home, d);
+    if (existsSync(p)) items.push({ id: 'runtime', path: p, kind: 'dir', bytes: await pathBytes(p), removable: true, note: '本工具的运行时副本 / 数据 / 日志' });
+  }
+  const totalBytes = items.reduce((a, x) => a + (x.bytes || 0), 0);
+  return { ok: true, items, totalBytes, totalMB: mb(totalBytes), count: items.length };
+}
+
+/**
+ * 卸载收尾：清残留并逐项回读。
+ * keepExtractedApp=true 时保留 resources/app（例如只想清副本、还想继续用补丁）。
+ */
+export async function cleanPurgeLeftovers({ keepExtractedApp = false } = {}) {
+  const home = process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
+  const items = [];
+  const drop = async (id, p, kind, note = '') => {
+    const before = await pathBytes(p);
+    let ok = false;
+    let error = null;
+    try {
+      await rm(p, { recursive: true, force: true });
+      ok = !existsSync(p);
+      if (!ok) error = 'still_present';
+    } catch (e) {
+      error = String((e && e.message) || e);
+    }
+    items.push({ id, path: p, kind, freedBytes: ok ? before : 0, freedMB: ok ? mb(before) : 0, ok, error, note });
+  };
+
+  let names = [];
+  try { names = await readdir(RESOURCES_DIR); } catch { names = []; }
+  for (const n of names) {
+    if (n.startsWith('app.dshpurge-prev')) await drop('prev', join(RESOURCES_DIR, n), 'dir');
+  }
+
+  const aside = asidePathFor(ASAR_PATH);
+  if (existsSync(aside)) {
+    if (existsSync(ASAR_PATH)) await drop('aside', aside, 'file');
+    else items.push({ id: 'aside', path: aside, kind: 'file', freedBytes: 0, freedMB: 0, ok: false, error: 'asar_absent', note: 'app.asar 不在位：先把 asar 放回再清' });
+  }
+
+  if (!keepExtractedApp && existsSync(APP_DIR)) {
+    if (existsSync(ASAR_PATH)) {
+      await drop('extracted-app', APP_DIR, 'dir');
+    } else {
+      items.push({ id: 'extracted-app', path: APP_DIR, kind: 'dir', freedBytes: 0, freedMB: 0, ok: false, error: 'asar_absent', note: '宿主正从这里加载：放回 asar 后才能删' });
+    }
+  }
+
+  if (existsSync(STARTUP_LNK)) await drop('startup', STARTUP_LNK, 'file');
+
+  for (const d of ['autokill-purge', 'autokill-purge-data', 'autokill-purge-logs']) {
+    const p = join(home, d);
+    if (existsSync(p)) await drop('runtime', p, 'dir');
+  }
+
+  const freedBytes = items.reduce((a, x) => a + (x.freedBytes || 0), 0);
+  const failed = items.filter((x) => x.ok === false);
+  return {
+    ok: failed.length === 0,
+    items,
+    freedBytes,
+    freedMB: mb(freedBytes),
+    failed,
+    note: failed.length
+      ? `${failed.length} 项没清掉（多半是宿主还占用着文件）：关掉桌面宿主后再跑一次卸载`
+      : (freedBytes ? `已清 ${mb(freedBytes)} MB 残留` : '没有残留可清'),
+  };
 }
 
 // ---- 补丁中文名（原版只有英文常量名，界面上要中英并列） ----------------------

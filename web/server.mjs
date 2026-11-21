@@ -13,7 +13,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { run as breakRun, BreakError } from '../break/break.mjs';
-import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
+import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, restartDesktopHost, stopDesktopHost, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listPurgeLeftovers, cleanPurgeLeftovers, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
 import { listOps, opStatus, opRun, opPlan } from './ops/index.mjs';
 import { run as instructionRun } from './ops/instruction-inject.mjs';
 import { injectSummary } from './summary.mjs';
@@ -1798,6 +1798,11 @@ async function handleApi(req, res, url, state) {
   }
 
 // ---- 宿主破甲（照搬 dsh-purge 1.1.71 的补丁引擎 + 备份/恢复闭环） --------------
+  if (p === '/api/host/leftovers' && method === 'GET') {
+    // 卸载残留预览（只读）：prev 整包副本 / asar 让位副本 / 解包目录 / 开机自启 / 运行时副本
+    try { return send(res, 200, await listPurgeLeftovers()); }
+    catch (e) { return send(res, 500, { ok: false, error: 'leftovers_failed', detail: publicError(e) }); }
+  }
   if (p === '/api/host/status' && method === 'GET') {
     return send(res, 200, await hostStatus(DATA_DIR));
   }
@@ -1817,10 +1822,56 @@ async function handleApi(req, res, url, state) {
     if (body.confirm !== true) return send(res, 400, { ok: false, error: 'confirm_required', hint: '恢复会覆盖宿主文件，必须先备份并传 confirm:true' });
     // 覆盖前先给「当前状态」再存一份，保证这次操作本身也可撤销
     const guard = await createSnapshot(DATA_DIR, 'pre-restore');
+    // mode=factory：补丁层卸载。用官方 app.asar 原件逐文件覆盖，不看快照新旧 —— 快照只是「某一刻的状态」，
+    // 而卸载要的是「回到未打补丁」。落地过（asar 被挪走）时顺手把 asar 放回去。
+    if (body.mode === 'factory') {
+      try {
+        const asar = await restoreHostAsar();
+        const f = await factoryRestore();
+        const after = await baselineDiff();
+        const left = after.patched || 0;
+        // 一键卸载：asar 被放回后，正在跑的宿主还是从 resources/app 起的，得重启一次才算干净。
+        // 密封状态下（没落地过）宿主读的就是 asar，文件已还原，不用重启。
+        let restart = null;
+        if (!left && asar && asar.restored && body.restart !== false) {
+          try { restart = await restartDesktopHost(); } catch (e) { restart = { ok: false, error: publicError(e) }; }
+        }
+        return send(res, left ? 409 : 200, {
+          ok: !left,
+          mode: 'factory',
+          restored: f.restored,
+          skipped: f.skipped,
+          left: left,
+          asar: { ok: asar.ok !== false, error: asar.error || null, note: asar.note || null },
+          restart: restart,
+          error: left ? 'files_left' : undefined,
+          note: left
+            ? `还有 ${left} 个文件与 asar 原件不一致（补丁被别处重写过）：看 /api/host/baseline 里的路径`
+            : (f.note || '已按 asar 原件覆盖'),
+          guardSnapshot: guard.id,
+          restartRequired: !!(asar && asar.restored)
+        });
+      } catch (e) {
+        return send(res, 500, { ok: false, error: 'restore_failed', detail: publicError(e), guardSnapshot: guard.id });
+      }
+    }
     try {
-      const r = await restoreSnapshot(DATA_DIR, body.id || null);
+      const r = await restoreSnapshot(DATA_DIR, body.id || null, { excludeIds: [guard.id] });
+      // 恢复 0 个文件不再回 200：以前选到空快照（skill-* / rule-* / 刚建的那份 guard）时
+      // 一个字节都没写，却回「已撤回」，界面因此永远没反应。
+      if (!r.restored) {
+        return send(res, 409, {
+          ok: false,
+          error: 'restored_nothing',
+          restored: r,
+          guardSnapshot: guard.id,
+          hint: '选中的快照里没有宿主文件（空快照）：换一份有文件的快照，或点「一键卸载补丁层」按 asar 原件还原'
+        });
+      }
       return send(res, 200, { ok: true, restored: r, guardSnapshot: guard.id, restartRequired: true });
-    } catch (e) { return send(res, 500, { ok: false, error: 'restore_failed', detail: publicError(e), guardSnapshot: guard.id }); }
+    } catch (e) {
+      return send(res, 500, { ok: false, error: 'restore_failed', detail: publicError(e), guardSnapshot: guard.id });
+    }
   }
   if (p === '/api/host/factory' && method === 'POST') {
     const body = await bodyOf(req);
@@ -1847,13 +1898,31 @@ async function handleApi(req, res, url, state) {
       }
       // patches: ['id1','id2'] 只应用这几条；不传（或空数组）= 全部 83 条
       const r = await applyHostPatches(body.mode || 'apply', { patchIds: Array.isArray(body.patches) ? body.patches : [] });
+      // 一键应用 = 写完还要能生效。桌面壳从 app.asar 里加载 dsh，asar 还在时补丁一条都不会被读到
+      // （重启也没用），所以这里直接把「挪 asar + 重启宿主」做完；body.land=false 可只写不落地。
+      let handoff = null;
+      if (r && r.pendingHandoff && body.land !== false) {
+        try { handoff = await finishHostHandoff({ restart: true }); }
+        catch (e) { handoff = { ok: false, error: publicError(e) }; }
+        // Electron 退出后 asar 句柄偶尔晚放：第二遍只 kill（已死）+ rename，代价很小；
+        // 别把「差一口气」当失败甩给用户 —— 一键应用就该一次点到底。
+        if (handoff && handoff.ok === false && (handoff.error === 'asar_locked' || handoff.error === 'app_dir_incomplete')) {
+          await new Promise((done) => setTimeout(done, 2500));
+          try { handoff = await finishHostHandoff({ restart: true }); }
+          catch (e) { handoff = { ok: false, error: publicError(e) }; }
+        }
+      }
+      const landed = !!(handoff && handoff.ok && handoff.asarMoved);
       // applyError：引擎收尾抛错但文件可能已被改过 —— 200 里带出来，别让人以为彻底失败
       return send(res, r && r.applyError ? 409 : 200, {
         ok: !(r && r.applyError),
         result: r,
         pluginResult: pluginResult,
         guardSnapshot: guard.id,
-        handoffRequired: !!(r && r.pendingHandoff),
+        handoff: handoff,
+        landed: landed,
+        handoffRequired: !!(r && r.pendingHandoff) && !landed,
+        effective: landed || !(r && r.pendingHandoff),
       });
     } catch (e) { return send(res, 500, { ok: false, error: 'apply_failed', detail: publicError(e), guardSnapshot: guard.id }); }
   }
@@ -2290,6 +2359,18 @@ async function handleApi(req, res, url, state) {
     const guard = await createSnapshot(DATA_DIR, 'pre-uninstall');
     const steps = [];
     const home = process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh');
+    // 0) 已落地（asar 让位、宿主改从 resources/app 加载）时先结束宿主：
+    //    否则 asar 放回没问题，但解包目录被进程占用删不掉，且用户会看到「卸载完了补丁还在内存里生效」。
+    let wasLanded = false;
+    let stopped = null;
+    try {
+      const hs = await hostHandoffStatus();
+      wasLanded = !!(hs && hs.asideExists && !hs.asarExists);
+      if (wasLanded) {
+        stopped = await stopDesktopHost();
+        steps.push({ id: 'stop-host', ok: stopped.ok, skipped: !!stopped.skipped, note: stopped.note || '已结束桌面宿主（卸载后重新拉起）' });
+      }
+    } catch (e) { steps.push({ id: 'stop-host', ok: false, error: publicError(e) }); }
     // 1) 落地过的 asar 放回
     try {
       const r = await restoreHostAsar();
@@ -2298,8 +2379,13 @@ async function handleApi(req, res, url, state) {
       steps.push({ ...r, id: 'asar', ok: okay });
     }
     catch (e) { steps.push({ id: 'asar', ok: false, error: publicError(e) }); }
-    // 2) 补丁按 asar 原件还原
-    try { const r = await factoryRestore(); steps.push({ id: 'patches', ok: true, restored: r.restored, skipped: r.skipped }); }
+    // 2) 补丁按 asar 原件还原（自检：回读一遍，还剩几处与 asar 不一致）
+    try {
+      const r = await factoryRestore();
+      const after = await baselineDiff();
+      const left = after.patched || 0;
+      steps.push({ id: 'patches', ok: left === 0, restored: r.restored, skipped: r.skipped, left: left });
+    }
     catch (e) { steps.push({ id: 'patches', ok: false, error: publicError(e) }); }
     // 3) AGENTS.md 注入块（用户正文保留）
     try { const r = await instructionRun({ dshHome: home, dataDir: DATA_DIR }, { action: 'remove' }); steps.push({ id: 'instructions', ok: r.ok !== false, changed: !!r.changed, summary: r.summary }); }
@@ -2345,8 +2431,30 @@ async function handleApi(req, res, url, state) {
         else steps.push({ id: 'preset', ok: true, removed: false });
       } else steps.push({ id: 'preset', ok: true, removed: false, note: '无预设' });
     } catch (e) { steps.push({ id: 'preset', ok: false, error: publicError(e) }); }
+    // 7) 卸载残留：解包/落地留下的整包副本、asar 让位副本、解包目录、开机自启、运行时副本。
+    //    旧版到这里就返回了，于是 resources 下 4~5 GB 的 app.dshpurge-prev* 一直躺着 —— 卸载不干净的主因。
+    try {
+      const r = await cleanPurgeLeftovers();
+      steps.push({
+        id: 'leftovers',
+        ok: r.ok,
+        freedMB: r.freedMB,
+        count: r.items.length,
+        failed: r.failed,
+        items: r.items.filter((x) => x.freedMB > 0 || x.ok === false),
+        summary: r.note,
+      });
+    } catch (e) { steps.push({ id: 'leftovers', ok: false, error: publicError(e) }); }
+    // 8) 为放回 asar 停过宿主：重新拉起，用户眼前的才是干净原版（不然桌面就空了）
+    if (wasLanded) {
+      try {
+        const rr = await restartDesktopHost();
+        steps.push({ id: 'restart', ok: rr.ok !== false, note: rr.note || '桌面宿主已重新拉起' });
+      } catch (e) { steps.push({ id: 'restart', ok: false, error: publicError(e) }); }
+    }
     const errors = steps.filter((s) => s.ok === false);
-    return send(res, 200, { ok: true, uninstall: { ok: errors.length === 0, applied: true, stripped: steps.map((s) => s.id), errors, steps }, guardSnapshot: guard.id, restartRequired: true });
+    const freedMB = steps.find((s) => s.id === 'leftovers')?.freedMB || 0;
+    return send(res, 200, { ok: true, uninstall: { ok: errors.length === 0, applied: true, stripped: steps.map((s) => s.id), errors, steps, freedMB }, guardSnapshot: guard.id, restartRequired: true });
   }
 
   // ---- 规则集 / 出口白名单 / 技能（原版面板另外三栏） -------------------------------

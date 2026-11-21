@@ -2,6 +2,64 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.1.25-beta.6] — 2026-11-21（修复：「一键应用」按不动 + 「一键卸载」留 5 GB 残渣）
+
+### Fixed — 按钮点了没反应（这才是「安装补丁无效」的第一现场）
+- **三个按钮全被授权门禁 disabled**：`renderFlowApplyStep()` 用 `authorized = !!(h.drill.data && h.drill.data.granted)` 决定 `disabled`，而 `/api/drill` 在本机返回 `granted:false`（`degraded:"dsh-purge 未安装：找不到 lib/drill-grant.js"`）—— 于是「一键注入 / 一键卸载 / 落地并重启宿主」全是灰的，用户点下去毫无反应。本仓已内化补丁引擎（`web/patch-engine/vendor`），不依赖 `dsh-purge` 的授权文件；门禁改为**只提示、不禁用**（`app.js` 3823 起 + 3860–3862）。
+- 实际连 `/api/host/apply` 都能跑：`applied=63 already=11`、两份宿主 `pending=0 hostWritten=true` —— 说明补丁从来不是"没写进去"，是按钮根本发不出请求。
+
+### Fixed — 补丁写进去却永远不生效（落地链路补全）
+- **apply 前自动解包**：密封状态（`app.asar` 还在）且 `resources/app` 不完整时，先调引擎 `openSealedDesktopHost({forApply:true})` 解包；否则 apply 只写到 npm 全局那份，落地后加载的仍是未打补丁的原件。返回里新增 `ensured`。
+- **落地前自动解包**：`finishHostHandoff()` 遇到 `app_dir_incomplete` 不再甩「先点一次一键注入」，自己解包；仍失败才中止（且不结束宿主）。
+- **杀进程要等它真的退**：新增 `imageStillRunning()` / `waitForHostExit()`，`killDesktopHost()` 现在两段式 kill 后轮询到进程消失（最长 25s）再让调用方去改名；`moveAsarAside()` 重试窗口 20s → 60s。Electron 关窗后句柄晚放，之前 20s 窗口被白白耗光，表现就是「点了应用没反应」。
+- **落地失败自动重试一次**：`/api/host/apply` 在 `asar_locked` / `app_dir_incomplete` 时等 2.5s 再走一遍 `finishHostHandoff`，一键应用一次点到底。
+
+### Fixed — 卸载不干净（实测 4.86 GB 残渣）
+- 新增 `listPurgeLeftovers()` / `cleanPurgeLeftovers()` 与只读接口 **`GET /api/host/leftovers`**，覆盖 5 类残留：
+  - `resources/app.dshpurge-prev*`：每次解包/落地留下的整包副本 —— 本机实测 **10 份 × 447.8 MB = 4.48 GB**，旧卸载一条都没碰；
+  - `resources/app.asar.dshpurge-aside`：asar 让位副本（asar 已回位才算可删）；
+  - `resources/app`：解包出来的宿主目录（447.8 MB，仅当 asar 在位时可删）；
+  - `Startup\autokill-purge.lnk`：开机自启快捷方式；
+  - `~/.dsh/autokill-purge*`：运行时副本 / 数据 / 日志（49.7 MB）。
+- `/api/host/uninstall` 新增第 7 步 `leftovers`（逐项回读，删不掉的列进 `failed` 并带「关掉宿主再跑」提示），返回 `uninstall.freedMB`；界面文案同步显示释放体积与警告数。
+- 卸载顺序修正：**已落地时先 `stopDesktopHost()`**（宿主正从 `resources/app` 加载，不退出就删不掉解包目录，也会出现"卸载完了补丁还在内存里"）→ 放回 asar → 按原件还原 → 清残留 → `restartDesktopHost()` 把桌面拉回来。新增导出 `stopDesktopHost()`。
+- 插件侧同步：`plugin/vendor/lib/uninstall.js` 的 `uninstallPurge()` 收尾调 `cleanHostLeftovers()`（`process.resourcesPath` 下的 prev 副本 / asar 让位副本 / 开机自启；不碰正在加载的 `resources/app`），删不掉只记警告不回滚卸载。
+
+### Verified
+- `node test/host-restore.mjs` → 11/11；`test/ops-acceptance.mjs` → 40/40（只读）；`test/rail-host.mjs` → 15/15；`test/client-nav.mjs` → 17/17；`test/ui-error-red.mjs` → 24/24；`test/ops-reapply.mjs` → 80 PASS / 4 FAIL（4 条都断言"本机已落地"，当前机器是密封状态，环境不符，非本次改动引入）。
+- 实机：`GET /api/host/leftovers` 报 `count=15 totalMB=4976.9`；已手工回收 10 份 `app.dshpurge-prev*`（释放 4.48 GB，耗时 71.6s），回收后接口剩 `extracted-app + startup + 3×runtime = 498.5 MB`。
+- `POST /api/host/apply {land:false}` → `applied=61 already=13`，两份宿主 `pending=0 / hostWritten=true`，`pendingHandoff=true`。
+
+### Known
+- 落地（挪 asar + 重启宿主）仍未在本会话内实跑：它会结束当前 DSH 会话，按约定留给「一键注入」按钮触发。按钮此刻已可点（不再 disabled），失败时会把 `handoff.note` 原样显示在按钮下方。
+
+## [1.1.25-beta.5] — 2026-11-21（修复：撤销补丁层「点了没反应」）
+
+### Fixed
+- **「一键卸载补丁层」恢复了 0 个文件却回 200**：`/api/host/restore` 选快照用的是 `listSnapshots` 的 id 字符串倒序，而历史遗留的 `skill-20261117-192550` / `rule-*` / `prompt-*` 恰好都是 **0 个文件**的空快照，`"s" > "2"` 于是一直被当成「最新」。实测：`restoredId=skill-20261117-192550, files=0`，界面照样弹「已撤回宿主补丁」。
+- 同一处还有第二个吃掉操作的坑：handler 先 `createSnapshot('pre-restore')` 再 `restoreSnapshot(…, null)`，即使排序修好，「最新」也是刚建的那份 guard —— 恢复的是当前状态，等于原地踏步。现在 guard 进 `excludeIds`。
+- 快照排序真源改为 `manifest.at`（创建时刻），`pickRestoreSnapshot()` 抽成纯函数：跳过空快照与 guard，显式传 `id` 时照单全收。
+- 恢复 0 个文件不再回 200：回 `409 restored_nothing` 并带 hint，界面按错误显示，不再「假成功」。
+- **「一键卸载补丁层」改为按 asar 原件还原**（`POST /api/host/restore {mode:'factory'}`）：快照只代表「某一刻」，卸载要的是「回到未打补丁」。逐文件用 `app.asar` 原件覆盖，落地过的顺手把 `asar` 放回；覆盖后回读 `baselineDiff()`，`left>0` 时回 409 并报剩余处数。
+- `/api/host/uninstall` 的 `patches` 步骤改自检式：`factoryRestore()` 之后回读基线，`left===0` 才算 ok（之前无条件 `ok:true`）。
+- 补跑一次 console 版本错位：8792 上的进程是 15:50:02 启动的 beta.3，beta.4 的卸载修复当时并未在跑 —— 改完必须重启 console（重启 console 不影响桌面宿主）。
+
+### Changed — 两个按钮改成真正的一键
+- **「应用补丁」= 写补丁 + 落地 + 重启**：`POST /api/host/apply` 写完后若仍在「asar 密封」状态（`pendingHandoff`），直接调 `finishHostHandoff({restart:true})` 把 asar 让位并重启桌面宿主，`land:false` 可只写不落地。返回里带 `handoff` / `landed` / `effective`，界面据此说「补丁已生效」还是「落地失败（原因）」。
+- **「一键卸载」= asar 原件还原 + 把 asar 放回 + 重启**：`mode:'factory'` 还原 91 个文件后，若这次确实把 asar 放回了，用新增的 `restartDesktopHost()`（只 kill + 拉起，不动 asar）重启宿主，让运行中的进程立刻换成原版；没落地过（asar 密封）则不重启。
+- 两个按钮都加了 `title` 说明「会重启宿主 / 会清掉插件与注入块」，避免以为只是点一下页面小动作。
+
+### Verified
+- 新增 `test/host-restore.mjs`（11 条断言：按 at 排序 / 跳过空快照 / 跳过 guard / 真写回 / 空快照报 0 / 不存在的 id 抛错），已接入 `npm test`。
+- 实机（dsh 桌面宿主 0.2.2-rc.5）走了一轮完整往返：
+  - 卸载：`POST /api/host/restore {mode:'factory'}` → `restored=91 skipped=33 left=0`，随后 `baseline` 变 `patched=0 / identical=112`；
+  - 应用：`POST /api/host/apply {land:false}` → `applied=65 already=9`，`baseline` 回到 `patched=93`，宿主计数从 `72/83 · 6 pending` 变成 **`78/83 · 0 pending`**。
+- 快照恢复：`POST /api/host/restore {mode:'snapshot'}` → `restored.id=20261121-173510-pre-restore, restored=124`；显式指定 `skill-*` 空快照 → `409 restored_nothing`。
+- 落地（挪 asar + 重启宿主）这一跳没有在本人会话里实跑：它会结束当前 DSH 会话，留给按钮触发。
+
+### Known
+- **「应用补丁」本身不是哑弹**：`resources/app` 里 91 个文件确实被改写（`/api/host/baseline` 可证），但桌面壳 `app.getAppPath()` 指向 `resources/app.asar`，asar 还在时一条补丁都不会被加载（`effective:false`）。要生效必须「落地并重启宿主」（挪 asar + 重启 exe），这一步会断当前会话。
+
 ## [1.1.25-beta.4] — 2026-11-21（修复：DSH 一键卸载卸不干净）
 
 ### Fixed

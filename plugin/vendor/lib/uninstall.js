@@ -193,6 +193,38 @@ function unregisterProfiles(profiles) {
   return { stripped, errors };
 }
 
+/**
+ * 卸载收尾清宿主侧残留。
+ *
+ * 2026-11-21 实测：每次「解包 / 落地」都会在 resources 下留一份 app.dshpurge-prev*（每份约 448 MB），
+ * 插件侧卸载一条都不清；开机启动项也留着。这里只清「本插件自己造出来的副本与入口」，
+ * 不碰 resources/app —— 插件在宿主进程里跑，那份目录正被加载，删了会把自己脚下的地板抽掉。
+ */
+function cleanHostLeftovers() {
+  const out = { removed: [], errors: [] };
+  const res = process.resourcesPath || '';
+  if (!res) return out;
+  let names = [];
+  try { names = fs.readdirSync(res); } catch { names = []; }
+  for (const n of names) {
+    if (!n.startsWith('app.dshpurge-prev')) continue;
+    const p = path.join(res, n);
+    try { fs.rmSync(p, { recursive: true, force: true }); out.removed.push(p); }
+    catch (e) { out.errors.push(`${p}: ${e && e.message ? e.message : e}`); }
+  }
+  const aside = path.join(res, 'app.asar.dshpurge-aside');
+  if (fs.existsSync(aside) && fs.existsSync(path.join(res, 'app.asar'))) {
+    try { fs.rmSync(aside, { force: true }); out.removed.push(aside); }
+    catch (e) { out.errors.push(`${aside}: ${e && e.message ? e.message : e}`); }
+  }
+  const startup = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'autokill-purge.lnk');
+  if (fs.existsSync(startup)) {
+    try { fs.rmSync(startup, { force: true }); out.removed.push(startup); }
+    catch (e) { out.errors.push(`${startup}: ${e && e.message ? e.message : e}`); }
+  }
+  return out;
+}
+
 export async function uninstallPurge() {
   const state = await core.gatherState();
   const applied = wasApplied(state);
@@ -278,6 +310,13 @@ export async function uninstallPurge() {
   }
 
   report.cleanup = collectCleanupDirs(profiles, dshHome);
+  // 宿主侧残留（整包副本 / asar 让位副本 / 开机自启）：清不掉只记警告，不回滚已完成的卸载
+  try {
+    report.hostCleanup = cleanHostLeftovers();
+    if (report.hostCleanup.errors.length) report.errors.push(...report.hostCleanup.errors.map((x) => `host cleanup: ${x}`));
+  } catch (e) {
+    report.errors.push(`host cleanup: ${e.message || e}`);
+  }
   return report;
 }
 

@@ -1555,13 +1555,15 @@ async function simpleHostAction(kind) {
       const pluginNote = (data.pluginResult && data.pluginResult.summary)
         ? "插件：" + data.pluginResult.summary + "。"
         : "";
-      const needHandoff = !!(data.result && data.result.pendingHandoff);
+      const needHandoff = !!(data.result && data.result.pendingHandoff) && !data.landed;
       h.message = pluginNote + (added
         ? `注入完成：新增 ${fmtNum(added)} 处，${fmtNum(already)} 处本来就是最新。`
         : `注入完成：宿主本来就是最新（${fmtNum(already)} 处无需再改，0 处新增）。`)
-        + (needHandoff
-          ? "但 app.asar 还在：桌面壳仍从 asar 里加载 dsh，现在重启也不会变 —— 再点一次「落地并重启宿主」才生效。"
-          : "重启 dsh 生效。");
+        + (data.landed
+          ? "asar 已让位、宿主已重启：补丁这次真的生效了（页面若断开是宿主重启，稍后刷新即可）。"
+          : needHandoff
+            ? "但落地没成功（" + ((data.handoff && (data.handoff.note || data.handoff.error)) || "原因未知") + "）：桌面壳仍从 app.asar 加载，补丁不生效 —— 再点一次「落地并重启宿主」。"
+            : "补丁已在当前加载的宿主里，重启 dsh 即生效。");
     } else if (kind === "handoff") {
       // 落地：结束宿主 → app.asar 改名让位 → 重新拉起。当前会话会断，属正常。
       data = await request("/api/host/handoff", { method: "POST", body: { confirm: true } });
@@ -1572,7 +1574,9 @@ async function simpleHostAction(kind) {
       data = await request("/api/host/uninstall", { method: "POST", body: { confirm: true } });
       if (!data || data.ok === false) throw payloadError(data, "卸载失败");
       const u = data.uninstall || {};
-      h.message = `卸载完成：${u.applied ? "宿主已还原，" : ""}${(u.stripped || []).length} 个 profile 已清理${(u.errors || []).length ? "，有 " + u.errors.length + " 条警告" : ""}。重启 dsh 生效。`;
+      const freed = u.freedMB ? `已清 ${u.freedMB} MB 残留，` : "";
+      const bad = (u.errors || []).length;
+      h.message = `卸载完成：${freed}${u.applied ? "宿主已还原，" : ""}${(u.stripped || []).length} 个步骤已走${bad ? "，有 " + bad + " 条警告" : ""}。重启 dsh 生效。`;
     }
     toast(kind === "apply" ? "注入完成" : kind === "handoff" ? "已落地并重启宿主" : "卸载完成");
     h.lastResult = { kind: kind, ok: true, at: Date.now() };
@@ -1818,13 +1822,15 @@ async function uninjectPrompt() {
   } catch (e) { toastError(simpleReason(e)); }
 }
 
-/** 补丁层卸载：回到最近一次快照（应用前状态），当前状态也会先存一份 */
+/** 补丁层卸载：按 app.asar 原件把被改的宿主文件逐份还原（不靠快照新旧），当前状态先另存一份 */
 async function revertHostPatches() {
-  if (typeof window !== "undefined" && !window.confirm("撤回宿主补丁：恢复到最近一次快照（应用前的状态）。当前状态会先另存一份，可再回滚。继续？")) return;
+  if (typeof window !== "undefined" && !window.confirm("撤回宿主补丁：按官方 app.asar 原件逐份还原被改的文件（落地过的会把 asar 放回）。当前状态会先另存一份，可再回滚。继续？")) return;
   try {
-    const d = await request("/api/host/restore", { method: "POST", body: { confirm: true } });
+    const d = await request("/api/host/restore", { method: "POST", body: { confirm: true, mode: "factory" } });
     if (!d || d.ok === false) throw payloadError(d, "撤回失败");
-    toast("已撤回宿主补丁（重启 dsh 生效；本次操作同样存了快照）");
+    const asarNote = d.asar && d.asar.restored ? "，app.asar 已放回" : "";
+    const restartNote = !d.restart ? "" : (d.restart.ok ? "，宿主已重启" : "，但宿主没拉起来（请手动打开 DeepSeek Harness）");
+    toast(`已撤回宿主补丁层：还原 ${fmtNum(d.restored)} 个文件（跳过 ${fmtNum(d.skipped)} 个本来就一致）${asarNote}${restartNote}；现在跑的是原版 dsh`);
     loadHostStatus();
   } catch (e) { toastError(simpleReason(e)); }
 }
@@ -3083,7 +3089,12 @@ async function applyDelivery(variants) {
     const d = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply", patches } });
     if (!d || d.ok === false) throw payloadError(d, "应用补丁失败");
     const r = d.result || {};
-    return { message: `已应用宿主补丁 ${r.selected || 0}/${r.total || 0} 条（新增 ${r.applied || 0}，已是新版 ${r.already || 0}），重启 dsh 生效` };
+    const base = `已应用宿主补丁 ${r.selected || 0}/${r.total || 0} 条（新增 ${r.applied || 0}，已是新版 ${r.already || 0}）`;
+    if (d.landed) return { message: `${base}，asar 已让位、宿主已重启：补丁已生效` };
+    if (d.handoff && d.handoff.ok === false) {
+      return { message: `${base}，但落地失败（${d.handoff.note || d.handoff.error || "原因未知"}）：补丁写在 resources/app，桌面壳仍读 app.asar` };
+    }
+    return { message: `${base}，重启 dsh 生效` };
   }
   return null;
 }
@@ -3809,9 +3820,12 @@ function renderFlowApplyStep() {
   const msg = h.message ? (h.error ? alertBox(h.message, "") : okBox(h.message)) : "";
   const pr = h.prompt;
   const draft = h.promptDraft != null ? h.promptDraft : (pr && pr.text) || "";
-  // 门禁：没在演练台确认授权就不让动宿主
+  // 门禁：演练台没确认授权时只提示、不再禁用按钮。
+  // 2026-11-21 实测：dsh-purge 插件没装时 /api/drill 必然返回 granted:false（degraded），
+  // 于是「一键注入 / 一键卸载 / 落地」全被 disabled —— 用户点了没反应，看起来就是「安装补丁无效」。
+  // 本仓自己做的是宿主补丁引擎（web/patch-engine），不依赖 dsh-purge 的授权文件；门禁留在提示层即可。
   const authorized = !!(h.drill && h.drill.data && h.drill.data.granted);
-  const gate = authorized ? "" : `<div class="alert warn" role="alert"><strong>先去「演练台」确认授权</strong><span class="hint">注入 / 卸载会改本机 dsh 安装，未授权时按钮是灰的。</span></div>`;
+  const gate = authorized ? "" : `<div class="alert warn" role="alert"><strong>还没在「演练台」确认授权</strong><span class="hint">按钮不会因此变灰；请在演练台确认一次，或自行确认你已获得对这台机器的测试授权。</span></div>`;
   const promptBox = pr ? `<details class="grp" data-group="flow:prompt">
       <summary><span class="grp-title">注入正文（可直接改）</span><span class="grp-hint">${pr.isBuiltin ? "与内置默认一致" : "已被改动"} · ${fmtNum(draft.length)} 字符</span></summary>
       <div class="grp-body">
@@ -3846,9 +3860,9 @@ function renderFlowApplyStep() {
     <h2 id="f-apply-h"><span class="num">3</span>注入 / 卸载 / 还原
       <span class="count">${fmtNum(c.applied || 0)}/${fmtNum(c.total || 0)} 已注入${c.failed ? ` · ${c.failed} 失败` : ""} · 备份 ${snaps.length}</span></h2>
     <div class="actions">
-      <button type="button" class="primary ${btnTone("apply")}" data-simple-host="apply"${busy || !authorized ? " disabled" : ""}>${toneText("apply", "一键注入")}</button>
-      <button type="button" class="ghost ${btnTone("uninstall")}" data-simple-host="uninstall"${busy || !authorized ? " disabled" : ""}>${toneText("uninstall", "一键卸载")}</button>
-      <button type="button" class="ghost ${btnTone("handoff")}" data-simple-host="handoff"${busy || !authorized || !d.desktopSealed ? " disabled" : ""}>${toneText("handoff", d.desktopSealed ? "落地并重启宿主" : "已落地")}</button>
+      <button type="button" class="primary ${btnTone("apply")}" data-simple-host="apply" title="写完补丁会顺带落地（挪走 app.asar）并重启桌面宿主——这步会断当前会话"${busy ? " disabled" : ""}>${toneText("apply", "一键注入")}</button>
+      <button type="button" class="ghost ${btnTone("uninstall")}" data-simple-host="uninstall" title="按 app.asar 原件还原宿主文件，并清掉插件、注入块与 5 GB 级解包残留"${busy ? " disabled" : ""}>${toneText("uninstall", "一键卸载")}</button>
+      <button type="button" class="ghost ${btnTone("handoff")}" data-simple-host="handoff"${busy || !d.desktopSealed ? " disabled" : ""}>${toneText("handoff", d.desktopSealed ? "落地并重启宿主" : "已落地")}</button>
       <label class="mini" style="display:inline-flex;align-items:center;gap:6px;margin-left:4px">
         <input type="checkbox" data-host-plugin-toggle${h.withPlugin ? " checked" : ""}>
         <span>同时注入 autokill-purge 插件</span>
@@ -4880,7 +4894,7 @@ async function hostAction(kind) {
       if (!data || data.ok === false) throw payloadError(data, "备份失败");
       h.message = `已备份：${data.snapshot.id}（${fmtNum(data.snapshot.files)} 个文件 / ${fmtNum(data.snapshot.bytes)} 字节）`;
     } else if (kind === "restore") {
-      data = await request("/api/host/restore", { method: "POST", body: { confirm: true } });
+      data = await request("/api/host/restore", { method: "POST", body: { confirm: true, mode: "snapshot" } });
       if (!data || data.ok === false) throw payloadError(data, "恢复失败");
       h.message = `已按快照 ${data.restored.id} 覆盖 ${fmtNum(data.restored.restored)} 个文件；覆盖前的状态另存为 ${data.guardSnapshot}。重启 dsh 生效。`;
     } else if (kind === "factory") {
@@ -4891,7 +4905,7 @@ async function hostAction(kind) {
       data = await request("/api/host/apply", { method: "POST", body: { confirm: true, mode: "apply", patches: pickedPatches } });
       if (!data || data.ok === false) throw payloadError(data, "应用失败");
       const r = data.result || {};
-      h.message = `已应用选中 ${fmtNum(r.selected || 0)}/${fmtNum(r.total || 0)} 条：新增 ${fmtNum(r.applied)} 个（${fmtNum(r.already)} 个本来就是最新）。${r.restartRequired ? "重启 dsh 生效。" : ""}`;
+      h.message = `已应用选中 ${fmtNum(r.selected || 0)}/${fmtNum(r.total || 0)} 条：新增 ${fmtNum(r.applied)} 个（${fmtNum(r.already)} 个本来就是最新）。${data.landed ? "asar 已让位、宿主已重启，补丁已生效。" : (r.restartRequired ? "重启 dsh 生效。" : "")}`;
     }
     toast("完成");
     await loadHostStatus(true);
@@ -5078,7 +5092,7 @@ function renderBreach() {
         <div style="margin-bottom:10px">${deliverySelectHtml("bDelivery", b)}</div>
         ${equipInlineBlock("b")}
         <div class="actions">
-          <button class="primary" id="bBuild" type="submit" ${b.building ? 'disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : (b.delivery === "payload" ? "生成载荷" : "生成并" + (b.delivery === "memory" ? "入库" : (b.delivery === "host-prompt" ? "注入宿主" : "应用补丁")))}</button>
+          <button class="primary" id="bBuild" type="submit"${b.delivery === "host-patch" ? ' title="写完补丁会顺带落地（挪走 app.asar）并重启桌面宿主——这步会断当前会话"' : ""} ${b.building ? 'disabled aria-busy="true"' : ""}>${b.building ? "生成中…" : (b.delivery === "payload" ? "生成载荷" : "生成并" + (b.delivery === "memory" ? "入库" : (b.delivery === "host-prompt" ? "注入宿主" : "应用补丁")))}</button>
           <span class="muted">不调用任何模型；只产出可复制载荷与建议。任务为空时不会发请求。角色与输出要求在「生成策略」里。</span>
         </div>
       </form>
