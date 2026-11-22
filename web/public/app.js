@@ -2943,6 +2943,9 @@ async function drillAction(kind) {
 /* 统一流程里的公共控件（两模式共用）：注入/卸载/还原、重新识别、注入正文编辑 */
 function bindFlowControls() {
   // 人格台：卡片＝注入，卸下，导入，导出
+  $$("#page [data-compat-replay]").forEach((el) => {
+    el.addEventListener("click", () => personaReplay(el.dataset.compatReplay));
+  });
   $$("#page [data-persona-toggle]").forEach((el) => {
     el.addEventListener("click", () => personaToggle(el.dataset.personaToggle));
   });
@@ -5354,6 +5357,23 @@ async function loadCompat(force = false) {
   finally { st.loading = false; st.tried = true; if (S.tab === "breach") renderPage(); }
 }
 
+/** 回放一条历史：切回当时的模型；注入类还会把人格重新注入 */
+function personaReplay(at) {
+  const d = S.compat && S.compat.data;
+  const h = d && (d.history || []).find((x) => String(x.at) === String(at));
+  if (!h) { toastError("这条历史已经不在最近 30 条里了"); return; }
+  if (h.model) { S.breach.models = [h.model]; S.breach.model = h.model; }
+  if (h.kind === "persona-apply" && Array.isArray(h.personaIds) && h.personaIds.length) {
+    S.persona.selected = h.personaIds.slice();
+    renderPage();
+    toast("已切回：" + (h.personas || []).join("、") + "（模型 " + (h.model || "自动") + "），正在重新注入…");
+    personaApplySelected();
+    return;
+  }
+  renderPage();
+  toast("已切回模型 " + (h.model || "自动") + "；写句话再点生成即可复现");
+}
+
 async function recordCompat(kind, extra) {
   try {
     const modelId = (S.breach.models && S.breach.models[0]) || S.breach.model || "";
@@ -5378,7 +5398,7 @@ function renderCompatSection() {
   const modelRow = d.modelCheck
     ? `<div class="s-row"><div class="s-row-main"><strong>模型</strong><span class="mono small">${esc(d.current.modelName || d.current.modelId)}</span><span class="small muted">${esc(d.modelCheck.reason)}</span></div><div class="actions"><span class="badge ${d.modelCheck.level === 'ok' ? 'good' : (d.modelCheck.level === 'bad' ? 'bad' : 'warn')}">${d.modelCheck.level === 'ok' ? '已测' : '未测'}</span></div></div>`
     : '<p class="hint">还没选模型（会走自动推荐）</p>';
-  const hist = (d.history || []).slice(0, 12).map((h) => `<div class="s-row"><div class="s-row-main"><span class="mono small muted">${esc(String(h.at || '').replace('T', ' ').slice(0, 19))}</span><strong>${esc(h.kind === 'build' ? '生成载荷' : (h.kind === 'persona-apply' ? '注入人格' : (h.kind || '')))}</strong><span class="small">${esc((h.personas || []).join('、') || h.model || '')}</span><span class="small muted">${esc(h.dshVersion || '')}</span></div></div>`).join("");
+  const hist = (d.history || []).slice(0, 12).map((h) => `<div class="s-row"><div class="s-row-main"><span class="mono small muted">${esc(String(h.at || '').replace('T', ' ').slice(0, 19))}</span><strong>${esc(h.kind === 'build' ? '生成载荷' : (h.kind === 'persona-apply' ? '注入人格' : (h.kind || '')))}</strong><span class="small">${esc((h.personas || []).join('、') || h.model || '')}</span><span class="small muted">${esc(h.dshVersion || '')}</span></div><div class="actions"><button type="button" class="small" data-compat-replay="${esc(h.at || '')}">回放</button></div></div>`).join("");
   return `<section class="section" aria-labelledby="f-compat-h">
     <details class="grp" data-group="compat">
       <summary><span class="grp-title">兼容性 · 历史</span>
@@ -5504,7 +5524,7 @@ async function personaApplySelected() {
       if (!d || d.ok === false) throw payloadError(d, "注入人格失败");
       st.message = "已写入 bot soul（重启 MengBot 生效）：" + (d.count || sel.length) + " 张";
       await loadPersona(true);
-      await recordCompat("persona-apply", { personas: d.count ? sel : sel, count: d.count || sel.length });
+      await recordCompat("persona-apply", { personas: (d.names || sel), personaIds: sel.slice(), count: d.count || sel.length });
       toast(st.message);
     } catch (e) { toastError(simpleReason(e)); }
     finally { st.busy = ""; renderPage(); }
@@ -5519,7 +5539,7 @@ async function personaApplySelected() {
       ? "已写入 " + (d.count || sel.length) + " 张，重启宿主后生效"
       : "已生效：" + (d.count || sel.length) + " 张（" + (d.names || []).join("、") + "），下一句话就是这个人格";
     await loadPersona(true);
-    await recordCompat("persona-apply", { personas: (d.names || []), count: d.count || sel.length });
+    await recordCompat("persona-apply", { personas: (d.names || []), personaIds: sel.slice(), count: d.count || sel.length });
     toast(st.message);
   } catch (e) { toastError(simpleReason(e)); }
   finally { st.busy = ""; renderPage(); }

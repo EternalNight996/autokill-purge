@@ -2760,6 +2760,8 @@ async function handleApi(req, res, url, state) {
         appVersion: body.appVersion || null,
         model: body.model || null,
         personas: Array.isArray(body.personas) ? body.personas.slice(0, 10) : [],
+        personaIds: Array.isArray(body.personaIds) ? body.personaIds.slice(0, 10) : [],
+        technique: body.technique || null,
         count: Number(body.count) || 0,
         verdict: body.verdict || null,
         ok: body.ok !== false,
