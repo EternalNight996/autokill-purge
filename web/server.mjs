@@ -7,7 +7,7 @@
 import { createServer } from 'node:http';
 import * as logbus from './logbus.mjs';
 import { readFile, writeFile, mkdir, rename, rm, copyFile, stat } from 'node:fs/promises';
-import { existsSync, statSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, statSync, readFileSync, writeFileSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +17,7 @@ import { run as breakRun, BreakError } from '../break/break.mjs';
 import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, restartDesktopHost, stopDesktopHost, scheduleHandoff, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listPurgeLeftovers, cleanPurgeLeftovers, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
 import { readRuntime as readPluginRuntime, writeRuntime as writePluginRuntime, runtimeFile as pluginRuntimeFile } from '../plugin/lib/host-bridge.js';
 import { listOps, opStatus, opRun, opPlan } from './ops/index.mjs';
+import { decodeSession } from './ops/rewind.mjs';
 import { run as instructionRun } from './ops/instruction-inject.mjs';
 import { injectSummary } from './summary.mjs';
 import { detectLiveModels } from './models-live.mjs';
@@ -2681,6 +2682,46 @@ async function handleApi(req, res, url, state) {
   }
   // ---------------------------------------------------------------- 人格层（双轨桥接）
   // 卡格式 = Character Card V3：SillyTavern 的 .png/.json 卡能直接导入，内置卡也能导出回酒馆。
+  /** 递归扫会话文件（最近 N 个），检查 system prompt 里是否出现给定标记 */
+  function scanSessionsFor(root, needles, limit = 6) {
+    if (!root || !needles.length) return [];
+    const files = [];
+    const walk = (dir, depth) => {
+      if (depth > 4) return;
+      let ents = [];
+      try { ents = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of ents) {
+        const full = join(dir, e.name);
+        if (e.isDirectory()) walk(full, depth + 1);
+        else if (e.name.includes('session')) {
+          try { const st = statSync(full); files.push({ path: full, mtimeMs: st.mtimeMs, size: st.size }); } catch { /* skip */ }
+        }
+      }
+    };
+    walk(root, 0);
+    files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const out = [];
+    for (const f of files.slice(0, limit)) {
+      let text = '';
+      try {
+        const fd = openSync(f.path, 'r');
+        const cap = Math.min(48 * 1024 * 1024, Math.max(0, f.size));
+        const buf = Buffer.alloc(cap);
+        const got = readSync(fd, buf, 0, buf.length, 0);
+        closeSync(fd);
+        // 会话日志是 zstd 帧（session.v4.jsonl.zstd）：必须解码，直接 utf8 读只是一堆二进制
+        const dec = decodeSession(buf.subarray(0, got));
+        text = dec.text || '';
+      } catch { continue; }
+      out.push({
+        id: f.path.split(/[\\/]/).pop(),
+        at: f.mtimeMs,
+        chars: text.length,
+        hit: needles.some((needle) => text.includes(needle)),
+      });
+    }
+    return out;
+  }
   if (p === '/api/persona/list' && method === 'GET') {
     try { await seedPersonas(DATA_DIR); } catch { /* 播种失败不挡列表 */ }
     const targets = personaTargets();
@@ -2696,6 +2737,30 @@ async function handleApi(req, res, url, state) {
       active,
       cards: cards.map(({ card, ...rest }) => rest),
       note: 'DSH 的 persona 块写在 ~/.dsh/prompt-inject.md 开头；宿主每轮读取，下一句生效，不需要重启',
+    });
+  }
+  if (p === '/api/persona/verify' && method === 'POST') {
+    // 验证「是否真的进了模型上下文」：读最近几个会话的 system/message，找 persona 块或人格名。
+    // prompt-inject.md 落盘 ≠ 模型收到；只有会话文件里能看到才算真生效。
+    const body = await bodyOf(req);
+    const host = String(body.host || 'dsh');
+    const t = personaTargets()[host];
+    if (!t) return send(res, 400, { ok: false, error: 'bad_host' });
+    const active = await readActivePersona(t.file);
+    const needles = ['persona:begin', active && active.active ? active.active.name : null].filter(Boolean);
+    const sessions = scanSessionsFor(join(dshHome(), 'sessions'), needles, 6);
+    const hit = sessions.some((s) => s.hit);
+    return send(res, 200, {
+      ok: true,
+      host,
+      active: active.active,
+      hit,
+      sessions,
+      hint: hit
+        ? '已进入模型上下文：最近会话的 system prompt 里能看到人格块'
+        : (active.active
+          ? '还没进上下文 —— 在 DSH 里发一句话（触发新一轮组装），再点一次验证'
+          : '当前没有生效人格（先点一张卡）'),
     });
   }
   if (p === '/api/persona/import-url' && method === 'POST') {

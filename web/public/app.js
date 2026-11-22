@@ -2953,7 +2953,10 @@ function bindFlowControls() {
       if (f) personaImport(f);
     });
   });
-  $$("#page [data-persona-url-go]").forEach((el) => {
+  $("#page [data-persona-verify]").forEach((el) => {
+    el.addEventListener("click", () => personaVerify());
+  });
+  $("#page [data-persona-url-go]").forEach((el) => {
     el.addEventListener("click", () => {
       const inp = document.querySelector("#page [data-persona-url]");
       personaImportUrl(inp && inp.value);
@@ -5361,6 +5364,7 @@ function renderPersonaSection() {
             导入卡（.png / .json）
             <input type="file" accept=".png,.json,application/json,image/png" data-persona-import hidden>
           </label>
+          <button type="button" class="ghost" data-persona-verify${active ? "" : " disabled"}>验证生效</button>
           <button type="button" class="ghost" data-persona-export="json"${active ? "" : " disabled"}>导出 JSON</button>
           <button type="button" class="ghost" data-persona-export="png"${active ? "" : " disabled"}>导出卡（给酒馆）</button>
           <span class="hint">${esc(busy ? "处理中…" : (st.message || ""))}</span>
@@ -5416,6 +5420,25 @@ async function personaClear() {
     toast(st.message);
   } catch (e) { toastError(simpleReason(e)); }
   finally { st.busy = ""; renderPage(); }
+}
+
+async function personaVerify() {
+  const st = S.persona;
+  const { host, active } = personaActive();
+  if (!active) { toastError('当前没有生效人格，先点一张卡'); return; }
+  st.busy = 'verify';
+  st.message = '正在检查最近会话的 system prompt…';
+  renderPage();
+  try {
+    const d = await request('/api/persona/verify', { method: 'POST', body: { host } });
+    if (!d || d.ok === false) throw payloadError(d, '验证失败');
+    const sess = (d.sessions || []).map((s) => s.id.slice(0, 8) + (s.hit ? '✓' : '·')).join(' ');
+    st.message = d.hit
+      ? '✅ 已进上下文：' + active.name + ' —— 最近会话里能看到人格块（' + sess + '）'
+      : '⏳ 还没进上下文：在 DSH 里说一句话，再点验证（' + sess + '）';
+    toast(st.message, d.hit ? 'ok' : 'warn');
+  } catch (e) { st.message = ''; toastError(simpleReason(e)); }
+  finally { st.busy = ''; renderPage(); }
 }
 
 async function personaImportUrl(rawUrl) {

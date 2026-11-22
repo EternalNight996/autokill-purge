@@ -36,9 +36,13 @@ export function personaTargets() {
     dsh: {
       id: 'dsh',
       name: 'DSH',
-      file: join(dshHome(), 'prompt-inject.md'),
+      // 写 AGENTS.md 而不是 prompt-inject.md：
+      // prompt-inject.md 会被宿主（dsh-purge 的挂载逻辑）按内存里的 committed override
+      // 每几秒重写一遍，写进去的人格块会被冲掉；AGENTS.md 走 <project_instructions> 通道，
+      // 每会话原样注入、不被重写，这才是真正能进模型上下文的位置。
+      file: join(dshHome(), 'AGENTS.md'),
       restart: false,
-      note: '写 ~/.dsh/prompt-inject.md 的 persona 块；宿主每轮读取，下一句生效',
+      note: '写 ~/.dsh/AGENTS.md 的 persona 块（<project_instructions> 通道）；每轮会话注入，下一句生效',
     },
     autokill: {
       id: 'autokill',
