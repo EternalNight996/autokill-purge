@@ -231,6 +231,7 @@ const BREAK_BTN = {
 /* ------------------------------------------------------------------ state */
 const S = {
   persona: { loading: false, tried: false, data: null, error: null, busy: '', message: '', host: 'dsh', selected: [] },
+  compat: { loading: false, tried: false, data: null, error: null },
   personas: null,
   booted: false,
   bootError: null,
@@ -2735,6 +2736,7 @@ function renderSimpleBreach() {
     ${renderSimpleOperation()}
     ${renderFlowPatchList()}
     ${renderPersonaSection()}
+    ${renderCompatSection()}
     ${renderOpsFold()}
     <details class="adv-fold"${S.simple.advOpen ? " open" : ""}><summary>高级：模型目录 / 任务类型与输出 / 就绪与二进制</summary>
       ${S.simple.advOpen
@@ -5326,6 +5328,66 @@ async function promptAction(kind) {
 /* ---------------------------------------------------------------- 人格台（双轨桥接）
    卡格式是 Character Card V3：酒馆的 .png/.json 卡能直接导入，内置卡也能导出回酒馆。
    注入 = 写宿主 prompt-inject.md 的 persona 块；宿主每轮读取，下一句生效，不用重启。 */
+/* ---------------------------------------------------------------- 兼容性 · 历史
+   模型与宿主会变，这里把「测过的组合」写成矩阵；不在矩阵里就黄色警告。
+   每次注入（人格 / 生成）都记一条历史，出问题能回看当时的版本与人格。 */
+async function loadCompat(force = false) {
+  const st = S.compat;
+  if (st.loading) return;
+  if (st.tried && !force) return;
+  st.loading = true;
+  try {
+    const modelId = (S.breach.models && S.breach.models[0]) || S.breach.model || "";
+    const d = await request("/api/compat?model=" + encodeURIComponent(modelId));
+    if (!d || d.ok === false) throw new Error((d && d.error) || "兼容性接口不可用");
+    st.data = d;
+    st.error = null;
+  } catch (e) { st.error = simpleReason(e); }
+  finally { st.loading = false; st.tried = true; if (S.tab === "breach") renderPage(); }
+}
+
+async function recordCompat(kind, extra) {
+  try {
+    const modelId = (S.breach.models && S.breach.models[0]) || S.breach.model || "";
+    await request("/api/compat/record", {
+      method: "POST",
+      body: Object.assign({ kind, host: S.hostTarget, model: modelId }, extra || {}),
+    });
+    S.compat.tried = false;
+  } catch { /* 记录失败不影响主流程 */ }
+}
+
+function renderCompatSection() {
+  const st = S.compat;
+  if (!st.tried && !st.loading) loadCompat();
+  const d = st.data;
+  if (!d) {
+    return '<section class="section"><details class="grp" data-group="compat"><summary><span class="grp-title">兼容性 · 历史</span><span class="grp-hint">' + esc(st.error || "读取中…") + '</span></summary></details></section>';
+  }
+  const v = d.verdict || { level: "unknown", message: "" };
+  const tone = v.level === "ok" ? "good" : (v.level === "bad" ? "bad" : "warn");
+  const hostRows = (d.hostChecks || []).map((h) => `<div class="s-row"><div class="s-row-main"><strong>${esc(h.name)}</strong><span class="mono small">${esc(h.version)}</span><span class="small muted">${esc(h.reason)}</span></div><div class="actions"><span class="badge ${h.level === 'ok' ? 'good' : 'warn'}">${h.level === 'ok' ? '已测' : '未测'}</span></div></div>`).join("");
+  const modelRow = d.modelCheck
+    ? `<div class="s-row"><div class="s-row-main"><strong>模型</strong><span class="mono small">${esc(d.current.modelName || d.current.modelId)}</span><span class="small muted">${esc(d.modelCheck.reason)}</span></div><div class="actions"><span class="badge ${d.modelCheck.level === 'ok' ? 'good' : (d.modelCheck.level === 'bad' ? 'bad' : 'warn')}">${d.modelCheck.level === 'ok' ? '已测' : '未测'}</span></div></div>`
+    : '<p class="hint">还没选模型（会走自动推荐）</p>';
+  const hist = (d.history || []).slice(0, 12).map((h) => `<div class="s-row"><div class="s-row-main"><span class="mono small muted">${esc(String(h.at || '').replace('T', ' ').slice(0, 19))}</span><strong>${esc(h.kind || '')}</strong><span class="small">${esc((h.personas || []).join('、') || h.model || '')}</span><span class="small muted">${esc(h.dshVersion || '')}</span></div></div>`).join("");
+  return `<section class="section" aria-labelledby="f-compat-h">
+    <details class="grp" data-group="compat">
+      <summary><span class="grp-title">兼容性 · 历史</span>
+        <span class="grp-hint">DSH ${esc(d.current.dshVersion || '—')} · 模型 ${esc(d.current.modelName || '自动')} · ${v.level === 'ok' ? '已测' : '未测'}</span></summary>
+      <div class="grp-body">
+        <div class="alert ${tone}" role="status"><strong>${esc(v.message)}</strong>
+          <span class="hint">测过的宿主：${esc((d.tested.dsh || []).join(' / '))}；模型按目录里的 dshPurge 标记判定。</span>
+        </div>
+        ${hostRows}
+        ${modelRow}
+        <p class="hint" style="margin-top:10px">最近记录（${(d.history || []).length} 条，最多留 300 条）</p>
+        ${hist || '<p class="hint">还没有记录：注入人格或生成一次就会出现。</p>'}
+      </div>
+    </details>
+  </section>`;
+}
+
 async function loadPersona(force = false) {
   const st = S.persona;
   if (st.loading) return;
@@ -5434,6 +5496,7 @@ async function personaApplySelected() {
       if (!d || d.ok === false) throw payloadError(d, "注入人格失败");
       st.message = "已写入 bot soul（重启 MengBot 生效）：" + (d.count || sel.length) + " 张";
       await loadPersona(true);
+      await recordCompat("persona-apply", { personas: d.count ? sel : sel, count: d.count || sel.length });
       toast(st.message);
     } catch (e) { toastError(simpleReason(e)); }
     finally { st.busy = ""; renderPage(); }
@@ -5448,6 +5511,7 @@ async function personaApplySelected() {
       ? "已写入 " + (d.count || sel.length) + " 张，重启宿主后生效"
       : "已生效：" + (d.count || sel.length) + " 张（" + (d.names || []).join("、") + "），下一句话就是这个人格";
     await loadPersona(true);
+    await recordCompat("persona-apply", { personas: (d.names || []), count: d.count || sel.length });
     toast(st.message);
   } catch (e) { toastError(simpleReason(e)); }
   finally { st.busy = ""; renderPage(); }
@@ -5933,6 +5997,7 @@ function renderBreach() {
     ${renderFlowPlanStep("technical")}
     ${renderFlowApplyStep()}
     ${renderPersonaSection()}
+    ${renderCompatSection()}
     ${baseGroup}
     ${renderFlowPatchList()}
 

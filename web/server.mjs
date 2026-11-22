@@ -14,10 +14,11 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { HOME, dshHome, appDataDir, localAppDataDir, platformInfo, isWin, DESKTOP_IMAGE } from './platform.mjs';
 import { run as breakRun, BreakError } from '../break/break.mjs';
-import { hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, restartDesktopHost, stopDesktopHost, scheduleHandoff, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listPurgeLeftovers, cleanPurgeLeftovers, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
+import { asarVersion, hostStatus, baselineDiff, createSnapshot, listSnapshots, restoreSnapshot, factoryRestore, applyHostPatches, hostHandoffStatus, finishHostHandoff, restoreHostAsar, restartDesktopHost, stopDesktopHost, scheduleHandoff, hostFeatureAvailable, readPromptFile, writePromptFile, resetPromptFile, hostInventory, uninstallHostPurge, listPurgeLeftovers, cleanPurgeLeftovers, listRules, readRule, writeRule, deleteRule, readNetScope, writeNetScope, listSkills, readSkill, writeSkill, deleteSkill } from './host.mjs';
 import { readRuntime as readPluginRuntime, writeRuntime as writePluginRuntime, runtimeFile as pluginRuntimeFile } from '../plugin/lib/host-bridge.js';
 import { listOps, opStatus, opRun, opPlan } from './ops/index.mjs';
 import { decodeSession } from './ops/rewind.mjs';
+import { TESTED_HOSTS, classifyModel, classifyHost, summarize, readHistory, appendHistory } from './compat.mjs';
 import { run as instructionRun } from './ops/instruction-inject.mjs';
 import { injectSummary } from './summary.mjs';
 import { detectLiveModels } from './models-live.mjs';
@@ -2721,6 +2722,50 @@ async function handleApi(req, res, url, state) {
       });
     }
     return out;
+  }
+  if (p === '/api/compat' && method === 'GET') {
+    // 兼容性矩阵 + 当前组合判定 + 注入历史
+    let dshVersion = null;
+    try { dshVersion = await asarVersion(); } catch { dshVersion = null; }
+    let appVersion = null;
+    for (const root of (platformInfo().desktopRoots || [])) {
+      const f = join(root, 'resources', 'app', 'package.json');
+      if (!existsSync(f)) continue;
+      try { appVersion = JSON.parse(readFileSync(f, 'utf8')).version || null; } catch { /* next */ }
+      if (appVersion) break;
+    }
+    const modelId = String(url.searchParams.get('model') || '');
+    const model = modelId ? (MODELS || []).find((m) => m.id === modelId) || null : null;
+    const hostChecks = classifyHost({ dshVersion, appVersion });
+    const modelCheck = modelId ? classifyModel(model || { id: modelId }) : null;
+    const verdict = summarize({ hostChecks, modelCheck });
+    const history = await readHistory(DATA_DIR, 20);
+    return send(res, 200, {
+      ok: true,
+      tested: TESTED_HOSTS,
+      current: { dshVersion, appVersion, modelId: modelId || null, modelName: model ? model.name : null },
+      hostChecks,
+      modelCheck,
+      verdict,
+      history,
+    });
+  }
+  if (p === '/api/compat/record' && method === 'POST') {
+    const body = await bodyOf(req);
+    try {
+      const size = await appendHistory(DATA_DIR, {
+        kind: String(body.kind || 'persona-apply'),
+        host: String(body.host || 'dsh'),
+        dshVersion: body.dshVersion || null,
+        appVersion: body.appVersion || null,
+        model: body.model || null,
+        personas: Array.isArray(body.personas) ? body.personas.slice(0, 10) : [],
+        count: Number(body.count) || 0,
+        verdict: body.verdict || null,
+        ok: body.ok !== false,
+      });
+      return send(res, 200, { ok: true, size });
+    } catch (e) { return send(res, 400, { ok: false, error: 'record_failed', detail: publicError(e) }); }
   }
   if (p === '/api/persona/list' && method === 'GET') {
     try { await seedPersonas(DATA_DIR); } catch { /* 播种失败不挡列表 */ }
