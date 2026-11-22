@@ -105,6 +105,8 @@ export function apply(ctx, config) {
   const cfg = { ...DEFAULTS, ...(config || {}) };
   // 宿主内运行时桥：审批 / 沙箱 / 结果裁剪的内存 hook + runtime.json 热监听（替代 dsh-purge 的进程内部分）
   const bridge = installHostBridge(ctx, cfg, (msg) => log(cfg, msg));
+  // 人格实时注入：每轮 assemble 检查 persona-current.json，缺就补（不写宿主文件）
+  const personaHookReady = installPersonaAssemble(ctx, (msg) => log(cfg, msg));
 
   // ---- ⓪ 上游 dsh-purge 完整实现（同等能力底座）------------------------------
   // 它自己会挂：identity 改写 / prompt sections / pre-step / fresh access / rewind filter /

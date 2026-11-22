@@ -37,6 +37,7 @@ import {
   importCard, exportJson, embedCardInPng, applyPersonaToFile, clearPersonaInFile,
   readActivePersona, personaTargets, buildPersonaBlock, buildPersonaBlockMulti,
 } from './persona.mjs';
+import { writePersonaSelection, clearPersonaSelection } from './persona-selection.mjs';
 import { renderGearMarkdown, renderGearSyncBlock } from './stage-hints.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -2887,7 +2888,15 @@ async function handleApi(req, res, url, state) {
     }
     try {
       const r = await applyPersonaToFile(t.file, cards, backupDir);
-      return send(res, 200, { ok: true, host, ...r, note: t.note, restart: !!t.restart });
+      // DSH：再写一份给插件做「每轮实时注入」（AGENTS.md 要等宿主下一次读取才生效）
+      let live = false;
+      if (host === 'dsh') {
+        try {
+          await writePersonaSelection(DATA_DIR, { ids, block: buildPersonaBlockMulti(cards) });
+          live = true;
+        } catch { live = false; }
+      }
+      return send(res, 200, { ok: true, host, ...r, note: t.note, restart: !!t.restart, live });
     } catch (e) { return send(res, 400, { ok: false, error: 'apply_failed', detail: publicError(e) }); }
   }
   if (p === '/api/persona/clear' && method === 'POST') {
@@ -2898,6 +2907,7 @@ async function handleApi(req, res, url, state) {
     if (host === 'mengbot') return send(res, 400, { ok: false, error: 'use_mengbot_restore', hint: 'MengBot 的 soul 用 /api/mengbot/restore 还原' });
     try {
       const r = await clearPersonaInFile(t.file, join(DATA_DIR, 'host-snapshots'));
+      if (host === 'dsh') { try { await clearPersonaSelection(DATA_DIR); } catch { /* ignore */ } }
       return send(res, 200, { ok: true, host, ...r, note: 'persona 块已移除，其余注入正文原样保留' });
     } catch (e) { return send(res, 400, { ok: false, error: 'clear_failed', detail: publicError(e) }); }
   }
