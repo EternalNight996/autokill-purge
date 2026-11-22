@@ -2176,6 +2176,12 @@ function renderAkPatchList() {
 
 /** 提示词层卸载：只摘 autokill-purge 的标记块，宿主原文不动 */
 async function uninjectPrompt() {
+  // 一键卸载同时卸人格
+  try {
+    const { host } = personaActive();
+    if (host !== "mengbot") await request("/api/persona/clear", { method: "POST", body: { host } });
+    S.persona.message = "人格已随补丁一并卸下";
+  } catch { /* ignore */ }
   try {
     const d = await request("/api/breach/uninject-host", { method: "POST", body: { host: S.hostTarget } });
     if (!d || d.ok === false) throw payloadError(d, "撤销失败");
@@ -2949,30 +2955,11 @@ function bindFlowControls() {
   $$("#page [data-persona-toggle]").forEach((el) => {
     el.addEventListener("click", () => personaToggle(el.dataset.personaToggle));
   });
-  $$("#page [data-persona-apply-selected]").forEach((el) => {
-    el.addEventListener("click", () => personaApplySelected());
-  });
-  $$("#page [data-persona-clear-selection]").forEach((el) => {
-    el.addEventListener("click", () => { S.persona.selected = []; renderPage(); });
-  });
-  $$("#page [data-persona-clear]").forEach((el) => {
-    el.addEventListener("click", () => personaClear());
-  });
-  $$("#page [data-persona-export]").forEach((el) => {
-    el.addEventListener("click", () => {
-      const pp = personaActive();
-      if (!pp.active) return;
-      window.open("/api/persona/export?id=" + encodeURIComponent(pp.active.id || "") + "&format=" + el.dataset.personaExport, "_blank", "noopener");
-    });
-  });
   $$("#page [data-persona-import]").forEach((el) => {
     el.addEventListener("change", () => {
       const f = el.files && el.files[0];
       if (f) personaImport(f);
     });
-  });
-  $$("#page [data-persona-verify]").forEach((el) => {
-    el.addEventListener("click", () => personaVerify());
   });
   $$("#page [data-persona-url-go]").forEach((el) => {
     el.addEventListener("click", () => {
@@ -3281,6 +3268,8 @@ async function simpleBuild() {
       b.variants = [];
       b.built = false;
       b.deliveryResult = await runPostBuildActions([]);
+      // 人格注入统一挂在「一键注入」上（人格台只负责选）
+      try { await personaInjectSelectedSilently(); } catch { /* 人格失败不影响补丁 */ }
       return;
     }
     const data = await request("/api/breach/build", {
@@ -5436,11 +5425,18 @@ async function loadPersona(force = false) {
     if (!d || d.ok === false) throw new Error((d && d.error) || "人格库不可用");
     st.data = d;
     st.error = null;
-    // 默认全选：人格库一次给全，用户自己点掉不要的那几张
+    // 记住上次选择；第一次打开才默认全选
     if (!st.initialized) {
       st.initialized = true;
       const all = (d.cards || []).map((x) => x.id);
-      if (!Array.isArray(st.selected) || !st.selected.length) st.selected = all;
+      const remembered = readPersonaSelection();
+      if (remembered && remembered.length) {
+        const kept = remembered.filter((id) => all.includes(id));
+        st.selected = kept.length ? kept : all;
+      } else {
+        st.selected = all;
+      }
+      savePersonaSelection(st.selected);
     }
   } catch (e) {
     st.error = simpleReason(e);
@@ -5491,14 +5487,10 @@ function renderPersonaSection() {
       <summary><span class="grp-title">人格</span>
         <span class="grp-hint">生效：${cur} · ${esc(selText)} · 宿主 ${esc(host)} · 卡 ${cards.length} 张</span></summary>
       <div class="grp-body">
-        <p class="hint">可多选：<b>默认已全选</b>，不要的点掉即可；第一张是主人格，其余是叠加层（口吻/立场按主人格走）。点「应用所选」后宿主下一句话生效。</p>
+        <p class="hint">可多选：<b>选择会自动记住</b>；第一张是主人格，其余是叠加层。<b>注入走上方「一键注入」，卸载走「一键卸载」</b>——这里只负责选。</p>
         <div class="persona-grid">${body}</div>
         <div data-persona-sources-box hidden></div>
         <div class="actions" style="margin-top:10px;flex-wrap:wrap;gap:8px">
-          <button type="button" class="primary" data-persona-apply-selected${busy || !sel.length ? " disabled" : ""}>应用所选${sel.length ? "（" + sel.length + "）" : ""}</button>
-          <button type="button" class="ghost" data-persona-clear-selection${busy || !sel.length ? " disabled" : ""}>清空选择</button>
-          <button type="button" class="ghost" data-persona-clear${busy ? " disabled" : ""}>卸下人格</button>
-          <button type="button" class="ghost" data-persona-verify${active ? "" : " disabled"}>验证生效</button>
           <label class="ghost" style="cursor:pointer">
             导入卡（.png / .json）
             <input type="file" accept=".png,.json,application/json,image/png" data-persona-import hidden>
@@ -5506,14 +5498,25 @@ function renderPersonaSection() {
           <input type="text" data-persona-url placeholder="贴卡直链（.png / .json）" style="flex:1;min-width:200px"${busy ? " disabled" : ""}>
           <button type="button" class="ghost" data-persona-url-go${busy ? " disabled" : ""}>从 URL 导入</button>
           <button type="button" class="ghost" data-persona-sources>卡源</button>
-          <button type="button" class="ghost" data-persona-export="json"${active ? "" : " disabled"}>导出 JSON</button>
-          <button type="button" class="ghost" data-persona-export="png"${active ? "" : " disabled"}>导出卡（给酒馆）</button>
           <span class="hint">${esc(busy ? "处理中…" : (st.message || ""))}</span>
         </div>
         ${st.error ? alertBox("人格库不可用", st.error) : ""}
       </div>
     </details>
   </section>`;
+}
+
+const PERSONA_SEL_KEY = "ap.persona.selected";
+function savePersonaSelection(sel) {
+  try { localStorage.setItem(PERSONA_SEL_KEY, JSON.stringify(sel || [])); } catch { /* 隐私模式 */ }
+}
+function readPersonaSelection() {
+  try {
+    const raw = localStorage.getItem(PERSONA_SEL_KEY);
+    if (!raw) return null;
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : null;
+  } catch { return null; }
 }
 
 function personaToggle(id) {
@@ -5523,7 +5526,25 @@ function personaToggle(id) {
   const k = sel.indexOf(id);
   if (k >= 0) sel.splice(k, 1); else sel.push(id);
   st.selected = sel;
+  savePersonaSelection(sel);
   renderPage();
+}
+
+/** 一键注入：把人格台当前选择注入当前宿主；失败静默，不打断补丁流程 */
+async function personaInjectSelectedSilently() {
+  const st = S.persona;
+  const sel = Array.isArray(st.selected) ? st.selected : [];
+  if (!sel.length) return { ok: true, skipped: true };
+  const { host } = personaActive();
+  if (host === "mengbot") return { ok: true, skipped: true };
+  try {
+    const d = await request("/api/persona/apply", { method: "POST", body: { host, ids: sel } });
+    if (d && d.ok) {
+      st.message = "已注入 " + (d.count || sel.length) + " 张：" + (d.names || []).join("、") + (d.scope === "global-fallback" ? "（全局默认）" : "");
+      loadPersona(true);
+    }
+    return d;
+  } catch (e) { return { ok: false, error: simpleReason(e) }; }
 }
 
 async function personaApplySelected() {

@@ -98,6 +98,14 @@ export function injectPersonaInto(assembled, context) {
   return { ...assembled, sections };
 }
 
+function writeHookLog(line) {
+  try {
+    const f = join(dataDir(), 'persona-hook.log');
+    mkdirSync(dataDir(), { recursive: true });
+    writeFileSync(f, new Date().toISOString() + ' ' + line + '\n', 'utf8');
+  } catch { /* ignore */ }
+}
+
 export function installPersonaAssemble(ctx, log = () => {}) {
   try {
     ctx.on('system-prompt/assemble', async (...args) => {
@@ -106,6 +114,7 @@ export function installPersonaAssemble(ctx, log = () => {}) {
       let session = null;
       try { session = context && context.agent && context.agent.session; } catch { session = null; }
       const sid = sessionIdOf(session);
+      writeHookLog('assemble fired sid=' + (sid || '-') + ' keys=' + Object.keys(session || {}).join(','));
       // 记录"最近活跃会话"：控制台/下拉据此把人格写进这个会话，而不是全局
       const fb = fallbackIdOf(session);
       if (sid) writeJson('persona-active.json', { sid, fallback: fb || null, at: new Date().toISOString() });
@@ -136,6 +145,10 @@ export function installPersonaAssemble(ctx, log = () => {}) {
         return out;
       } catch { return assembled; }
     }, { global: true });
+    writeHookLog('installed ok');
     return true;
-  } catch { return false; }
+  } catch (e) {
+    writeHookLog('install failed: ' + (e && e.message));
+    return false;
+  }
 }

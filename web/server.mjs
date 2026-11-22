@@ -2909,17 +2909,21 @@ async function handleApi(req, res, url, state) {
       if (host === 'dsh' && scope !== 'global') {
         const act = await readActiveSession();
         const sid = String(body.sessionId || (act && act.sid) || '');
-        if (!sid) {
-          return send(res, 409, {
-            ok: false, error: 'no_active_session',
-            hint: '还没有活跃会话：先在 DSH 里发一句话，再回来点人格（或勾「设为默认（全局）」）',
+        if (sid) {
+          await writePersonaSession(sid, { ids, names, block });
+          return send(res, 200, {
+            ok: true, host, scope: 'session', sessionId: sid, ids, names, count: cards.length,
+            live: true, restart: false,
+            note: '只对当前会话生效，下一句就是这个人格；其它会话不受影响',
           });
         }
-        await writePersonaSession(sid, { ids, names, block });
+        // 拿不到会话 id（插件还没记录活跃会话）→ 降级为全局，保证选了一定生效
+        try { await writePersonaSelection(DATA_DIR, { ids, block }); } catch { /* ignore */ }
+        try { await applyPersonaToFile(t.file, cards, backupDir); } catch { /* AGENTS.md 兜底 */ }
         return send(res, 200, {
-          ok: true, host, scope: 'session', sessionId: sid, ids, names, count: cards.length,
+          ok: true, host, scope: 'global-fallback', ids, names, count: cards.length,
           live: true, restart: false,
-          note: '只对当前会话生效，下一句就是这个人格；其它会话不受影响',
+          note: '没拿到会话 id（插件未记录活跃会话），已设为全局默认：所有会话下一句都是这个人格',
         });
       }
       if (host === 'dsh') {

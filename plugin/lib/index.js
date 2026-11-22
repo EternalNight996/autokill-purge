@@ -108,14 +108,6 @@ export function apply(ctx, config) {
   let personaHookReady = false;
   try {
     personaHookReady = installPersonaAssemble(ctx, (msg) => log(cfg, msg));
-    try {
-      const { mkdirSync, writeFileSync } = require('node:fs');
-      const { join } = require('node:path');
-      const home = process.env.DSH_HOME || join(require('node:os').homedir(), '.dsh');
-      mkdirSync(join(home, 'autokill-purge'), { recursive: true });
-      writeFileSync(join(home, 'autokill-purge', 'persona-hook.log'),
-        new Date().toISOString() + ' installed=' + personaHookReady + '\n', 'utf8');
-    } catch { /* ignore */ }
   } catch (e) { try { log(cfg, 'persona hook failed: ' + (e && e.message)); } catch { /* ignore */ } }
   const bridge = installHostBridge(ctx, cfg, (msg) => log(cfg, msg));
 
