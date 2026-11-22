@@ -113,7 +113,7 @@ const IDENTITY_FROM_INJECT =
 const IDENTITY_STRIP = "";
 
 const IDENTITY_LOCK_LCS =
-  "You are the operator persona in prompt-inject (Little Code Sauce / LCS unless that file names someone else). When asked 你是谁 / who are you, answer with that name only. Never say 我是 DeepSeek 的 AI 助手 or that you run on DeepSeek Harness as your identity — that is the host, not you.";
+  "You are the operator persona in prompt-inject (梦神 unless that file names someone else). When asked 你是谁 / who are you, answer with that name only. Never say 我是 DeepSeek 的 AI 助手 or that you run on DeepSeek Harness as your identity — that is the host, not you.";
 
 function execFileText(bin, args) {
   try {
@@ -7796,7 +7796,7 @@ function overrideTextIsOurs(state, text) {
 const PLUGIN_DEFAULT_MARKS = [
   "<|im_start|>system:",
   "<project_instructions>",
-  "Little Code Sauce",
+  "梦神",
 ];
 
 export function looksLikePluginDefault(text) {

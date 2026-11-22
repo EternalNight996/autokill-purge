@@ -230,7 +230,7 @@ const BREAK_BTN = {
 
 /* ------------------------------------------------------------------ state */
 const S = {
-  persona: { loading: false, tried: false, data: null, error: null, busy: '', message: '', host: 'dsh', selected: [] },
+  persona: { loading: false, tried: false, data: null, error: null, busy: '', message: '', host: 'dsh', selected: [], initialized: false },
   compat: { loading: false, tried: false, data: null, error: null },
   personas: null,
   booted: false,
@@ -5436,6 +5436,12 @@ async function loadPersona(force = false) {
     if (!d || d.ok === false) throw new Error((d && d.error) || "人格库不可用");
     st.data = d;
     st.error = null;
+    // 默认全选：人格库一次给全，用户自己点掉不要的那几张
+    if (!st.initialized) {
+      st.initialized = true;
+      const all = (d.cards || []).map((x) => x.id);
+      if (!Array.isArray(st.selected) || !st.selected.length) st.selected = all;
+    }
   } catch (e) {
     st.error = simpleReason(e);
   } finally {
@@ -5485,7 +5491,7 @@ function renderPersonaSection() {
       <summary><span class="grp-title">人格</span>
         <span class="grp-hint">生效：${cur} · ${esc(selText)} · 宿主 ${esc(host)} · 卡 ${cards.length} 张</span></summary>
       <div class="grp-body">
-        <p class="hint">可多选：第一张是主人格，其余是叠加层（口吻/立场按主人格走）。默认不选＝没有任何人格注入。点「应用所选」后宿主下一句话生效。</p>
+        <p class="hint">可多选：<b>默认已全选</b>，不要的点掉即可；第一张是主人格，其余是叠加层（口吻/立场按主人格走）。点「应用所选」后宿主下一句话生效。</p>
         <div class="persona-grid">${body}</div>
         <div data-persona-sources-box hidden></div>
         <div class="actions" style="margin-top:10px;flex-wrap:wrap;gap:8px">

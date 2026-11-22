@@ -58,19 +58,31 @@ try {
   ok('2. 展开后渲染出人格卡', Number(cards) >= 10, 'cards=' + cards);
 
   // 2. 点第一张卡 → 注入
-  const first = await cdp.eval(`(() => {
+  // 默认全选：卡数 = 选中数
+  const defAll = await cdp.eval(`(() => JSON.stringify({ cards: (S.persona.data && S.persona.data.cards || []).length, selected: (S.persona.selected || []).length }))()`);
+  const da = JSON.parse(defAll);
+  ok('2a. 默认全选（选中数 = 卡数）', da.cards > 0 && da.selected === da.cards, defAll);
+
+  // 点一张卡 = 取消它（默认全选下取消勾选）
+  const afterToggle = await cdp.eval(`(() => {
     const d = document.querySelector('details[data-group="persona"]');
     const btn = d && d.querySelector('[data-persona-toggle]');
     if (!btn) return 'no-card';
-    const id = btn.dataset.personaToggle;
-    btn.click();                        // 多选模式：点击 = 加入选中，不立即注入
-    return id;
+    btn.click();
+    return String((S.persona.selected || []).length);
   })()`);
-  ok('2a. 点到某张卡（进入选中态）', first !== 'no-card', String(first));
-  await sleep(700);
-  const selState = await cdp.eval(`(() => JSON.stringify({ selected: (S.persona.selected || []).length, applyBtn: !!document.querySelector('[data-persona-apply-selected]'), diag: null }))()`);
+  ok('2b. 点一下卡 = 取消一张', afterToggle === String(da.cards - 1), afterToggle);
+  await sleep(400);
+
+  // 清空再单选一张，作为注入目标
+  await cdp.eval(`(() => { const b = document.querySelector('[data-persona-clear-selection]'); if (b) b.click(); return 1; })()`);
+  await sleep(400);
+  const zero = await cdp.eval(`String((S.persona.selected || []).length)`);
+  await cdp.eval(`(() => { const d = document.querySelector('details[data-group="persona"]'); const btn = d && d.querySelector('[data-persona-toggle]'); if (btn) btn.click(); return 1; })()`);
+  await sleep(400);
+  const selState = await cdp.eval(`(() => JSON.stringify({ selected: (S.persona.selected || []).length, applyBtn: !!document.querySelector('[data-persona-apply-selected]') }))()`);
   const ss = JSON.parse(selState);
-  ok('2b. 选中 1 张且出现「应用所选」', ss.selected === 1 && ss.applyBtn === true, selState);
+  ok('2c. 清空后单选 1 张且出现「应用所选」', zero === '0' && ss.selected === 1 && ss.applyBtn === true, selState);
   await cdp.eval(`(() => { const b = document.querySelector('[data-persona-apply-selected]'); if (b) b.click(); return 1; })()`);
   await sleep(600);
   const diag = await cdp.eval(`(() => JSON.stringify({ busy: S.persona.busy, msg: S.persona.message, host: S.hostTarget, tried: S.persona.tried, cards: (S.persona.data && S.persona.data.cards || []).length, errs: (window.__apErrors || []).map((e) => e.message).slice(0, 3) }))()`);

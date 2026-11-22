@@ -35,10 +35,13 @@ function writeJson(name, obj) {
 export function personaSelectionFile() { return join(dataDir(), 'persona-current.json'); }
 
 /** 当前会话的选择（没有就回落全局），返回 null 表示这个会话不该有人格 */
-export function resolvePersonaBlock(sid) {
+export function resolvePersonaBlock(sid, fallbackSid) {
   const sessions = readJson('persona-sessions.json') || {};
-  if (sid && sessions[sid] && typeof sessions[sid].block === 'string' && sessions[sid].block.includes(MARK)) {
-    return { block: sessions[sid].block, ids: sessions[sid].ids || [], scope: 'session' };
+  const keys = [sid, fallbackSid].filter(Boolean);
+  for (const k of keys) {
+    if (sessions[k] && typeof sessions[k].block === 'string' && sessions[k].block.includes(MARK)) {
+      return { block: sessions[k].block, ids: sessions[k].ids || [], scope: 'session', sid: k };
+    }
   }
   const global = readJson('persona-current.json');
   if (global && typeof global.block === 'string' && global.block.includes(MARK)) {
@@ -53,11 +56,41 @@ function hasPersonaSection(assembled) {
   } catch { return false; }
 }
 
+/** 会话 id 的多种可能位置：不同宿主版本把它放在不同层 */
+function sessionIdOf(session) {
+  if (!session) return '';
+  const tries = [
+    session.id,
+    session.sessionId,
+    session.header && session.header.id,
+    session.header && session.header.sessionId,
+    session.meta && session.meta.id,
+    session.record && session.record.id,
+    session.key,
+  ];
+  for (const t of tries) {
+    const v = String(t || '').trim();
+    if (v && v.length > 3) return v;
+  }
+  return '';
+}
+
+/** 用 session.header 的稳定字段拼一个降级 id（拿不到真 id 时不至于全退化成全局） */
+function fallbackIdOf(session) {
+  const h = (session && session.header) || {};
+  const parts = [h.cwd, h.createdAt || h.created || h.startedAt, h.origin].filter(Boolean);
+  if (!parts.length) return '';
+  const raw = parts.join('|');
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) hash = (hash * 31 + raw.charCodeAt(i)) >>> 0;
+  return 'h' + hash.toString(36);
+}
+
 export function injectPersonaInto(assembled, context) {
   if (!assembled || !Array.isArray(assembled.sections)) return assembled;
-  let sid = '';
-  try { sid = String((context && context.agent && context.agent.session && context.agent.session.id) || ''); } catch { sid = ''; }
-  const picked = resolvePersonaBlock(sid);
+  let session = null;
+  try { session = context && context.agent && context.agent.session; } catch { session = null; }
+  const picked = resolvePersonaBlock(sessionIdOf(session), fallbackIdOf(session));
   if (!picked) return assembled;
   if (hasPersonaSection(assembled)) return assembled;   // 宿主已通过 AGENTS.md 注入同一块
   const sections = assembled.sections.slice();
@@ -70,10 +103,27 @@ export function installPersonaAssemble(ctx, log = () => {}) {
     ctx.on('system-prompt/assemble', async (...args) => {
       const [assembly, context] = args;
       const next = args.length >= 3 ? args[args.length - 1] : null;
-      let sid = '';
-      try { sid = String((context && context.agent && context.agent.session && context.agent.session.id) || ''); } catch { sid = ''; }
+      let session = null;
+      try { session = context && context.agent && context.agent.session; } catch { session = null; }
+      const sid = sessionIdOf(session);
       // 记录"最近活跃会话"：控制台/下拉据此把人格写进这个会话，而不是全局
-      if (sid) writeJson('persona-active.json', { sid, at: new Date().toISOString() });
+      const fb = fallbackIdOf(session);
+      if (sid) writeJson('persona-active.json', { sid, fallback: fb || null, at: new Date().toISOString() });
+      else if (session) {
+        // 拿不到 id 时把结构写下来，方便定位（只写一次）
+        const probeFile = join(dataDir(), 'persona-probe.json');
+        if (!existsSync(probeFile)) {
+          try {
+            mkdirSync(dataDir(), { recursive: true });
+            writeFileSync(probeFile, JSON.stringify({
+              at: new Date().toISOString(),
+              sessionKeys: Object.keys(session || {}),
+              headerKeys: Object.keys((session && session.header) || {}),
+              header: (session && session.header) || null,
+            }, null, 2) + '\n', 'utf8');
+          } catch { /* ignore */ }
+        }
+      }
       let assembled = assembly;
       if (typeof next === 'function') {
         try { assembled = await next(); } catch { assembled = assembly; }

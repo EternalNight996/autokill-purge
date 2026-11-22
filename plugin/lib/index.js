@@ -104,9 +104,20 @@ const emptyParams = { type: 'object', additionalProperties: false, properties: {
 export function apply(ctx, config) {
   const cfg = { ...DEFAULTS, ...(config || {}) };
   // 宿主内运行时桥：审批 / 沙箱 / 结果裁剪的内存 hook + runtime.json 热监听（替代 dsh-purge 的进程内部分）
+  // 人格实时注入：放在最前，避免被后面的桥接失败拖累（每轮 assemble 检查选择文件，缺就补）
+  let personaHookReady = false;
+  try {
+    personaHookReady = installPersonaAssemble(ctx, (msg) => log(cfg, msg));
+    try {
+      const { mkdirSync, writeFileSync } = require('node:fs');
+      const { join } = require('node:path');
+      const home = process.env.DSH_HOME || join(require('node:os').homedir(), '.dsh');
+      mkdirSync(join(home, 'autokill-purge'), { recursive: true });
+      writeFileSync(join(home, 'autokill-purge', 'persona-hook.log'),
+        new Date().toISOString() + ' installed=' + personaHookReady + '\n', 'utf8');
+    } catch { /* ignore */ }
+  } catch (e) { try { log(cfg, 'persona hook failed: ' + (e && e.message)); } catch { /* ignore */ } }
   const bridge = installHostBridge(ctx, cfg, (msg) => log(cfg, msg));
-  // 人格实时注入：每轮 assemble 检查 persona-current.json，缺就补（不写宿主文件）
-  const personaHookReady = installPersonaAssemble(ctx, (msg) => log(cfg, msg));
 
   // ---- ⓪ 上游 dsh-purge 完整实现（同等能力底座）------------------------------
   // 它自己会挂：identity 改写 / prompt sections / pre-step / fresh access / rewind filter /

@@ -1,6 +1,6 @@
 {
   "name": "autokill-purge",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "破甲控制台｜一键注入 · 83 补丁可视化 · 载荷生成 · 记忆库 · MCP 管理｜零依赖",
   "type": "module",
   "bin": {
@@ -39,7 +39,11 @@
     "scripts/check-pack.mjs",
     "docs/*.md",
     "docs/shots-ux2/hero-breach-1280.png",
-    "web/persona-presets.json"
+    "web/persona-presets.json",
+    "web/persona.mjs",
+    "web/persona-selection.mjs",
+    "web/compat.mjs",
+    "plugin/lib/persona-hook.js"
   ],
   "engines": {
     "node": ">=22"

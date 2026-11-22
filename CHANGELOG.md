@@ -2,6 +2,60 @@
 
 本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
 
+## [1.3.0] — 2026-11-22（人格层：10 张真实语料卡 + 会话隔离 + 实时注入；兼容性与历史）
+
+### Added — 人格层（`web/persona.mjs` / `web/persona-presets.json`）
+
+- **10 张内置卡**，全部按真实语料蒸馏，卡里带 `sources`（出处 URL）与 `distilled`（结构特征）：
+
+  | 卡 | 来源 |
+  |---|---|
+  | 🗯️ 垃圾话粗口 | Chinese_Dirty_Words（COLD 语料）、pokemonchw/Dirty |
+  | 😈 魅魔恋爱 | 维基/百科 succubus 词条（梦中取精气、山羊角蝙蝠翼） |
+  | 💋 色情宠妻 | 中文「甜宠文」类型套路 |
+  | 🕴️ 霸道总裁 | 中文「总裁文」类型套路 |
+  | 🚀 埃隆马斯克 | aeonfun/soul.md 的 SOUL.md + STYLE.md |
+  | 📕 马克思哲学家 | bitzhuwei/capital《资本论》第一卷第一章中译 |
+  | 🔮 占卜推星 | zbpdata tarots.json（韦特 78 张正逆位） |
+  | 🪙 算命先生 | favkit/bazi-kit 术语库、brhiza/mingyu |
+  | 😼 雌小鬼 | メスガキ 中文/日文百科定义 |
+  | 🤖 赛博女友 | 深夜电台 / 数字存在叙事惯例 |
+
+- **多选叠加**：第一张主人格，其余叠加层；控制台**默认全选**，不要的点掉即可。
+- **会话隔离**：`persona-sessions.json` 按 `sessionId` 存，插件每轮按当前会话注入；`scope=session` 为默认，无活跃会话返回 409 提示。
+- **实时注入**：插件 `system-prompt/assemble` 钩子每轮读选择文件补人格块，与 `AGENTS.md` 自动去重（检测 `persona:begin`）——不再等宿主重读文件。
+- **卡导入/导出**：PNG 卡（`tEXt:chara`）与 JSON 双格式；可从 URL 拉卡。
+
+### Added — 兼容性 · 历史（`web/compat.mjs`）
+
+- 每次注入 / 生成记一条历史（时间、模型、人格、DSH 版本、是否被拒、任务句）。
+- 历史可**回放**：切回当时模型并重新注入 / 重跑生成。
+- 已测矩阵：DSH `0.2.2-rc.5 / rc.2 / 0.2.1`、app `1.1.7 / 1.1.71`；模型按目录 `dshPurge` 标记判定。未测组合出黄色警告「可能失败，请联系作者（附时间戳）」。
+
+### Added — 控制台
+
+- 破甲台新增**模型下拉**（与人格同样的即时选择）。
+- 人格台卡片网格（图标 + 配色 + 勾选环）、默认全选、应用所选 / 清空选择 / 卸下 / 验证生效。
+
+### Fixed
+
+- `# CHANGELOG
+
+本项目变更记录。格式：每个里程碑一段，写明「做了什么 / 跑了什么 / 结果 / 还缺什么」。
+
+ 选择器笔误导致 `bindFlowControls` 抛错、整页挂在「连不上控制台服务」—— 改 `$` 并补 boot 断言。
+- 人格块原写 `prompt-inject.md` 会被宿主每 8 秒重写冲掉 —— 改走 `AGENTS.md`（`project_instructions` 通道）。
+- DSH 侧栏人格下拉不再占 `conversation.hero.agentPreset` 单槽（会顶掉模式预设），改 DOM 注入贴在预设右侧。
+
+### Tests
+
+- `persona.mjs` 20/20、`persona-ui.mjs` 9/9（含「boot 成功无红条」「点卡进选中态」「应用所选」）、`ui-error-red` 24/24。
+
+### 还缺
+
+- MengBot 宿主的会话级人格未验证（`mbInjectSoul` 走 soul-prefix）。
+- 8 张卡里的「类型套路」类（宠妻/总裁/赛博女友）没有单一原始地址，只有类型归纳。
+
 ## [1.1.25-beta.7] — 2026-11-22（插件接棒 dsh-purge：四项进程内能力 + 热开关）
 
 ### Added — `plugin/lib/host-bridge.js`（插件 0.4.0）
