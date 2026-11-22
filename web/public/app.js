@@ -230,7 +230,7 @@ const BREAK_BTN = {
 
 /* ------------------------------------------------------------------ state */
 const S = {
-  persona: { loading: false, tried: false, data: null, error: null, busy: '', message: '', host: 'dsh' },
+  persona: { loading: false, tried: false, data: null, error: null, busy: '', message: '', host: 'dsh', selected: [] },
   personas: null,
   booted: false,
   bootError: null,
@@ -2633,6 +2633,13 @@ function renderSimpleOperation() {
           ${renderEquipPicker()}
           <span class="help">勾上预设＝生成时先发装备再投递；能力项可逐项取舍。</span>
         </div>
+        <div class="field"><span>模型</span>
+          <select id="sModelQuick" data-focus="sModelQuick" aria-label="模型选择">
+            <option value="__auto"${chosen2.length ? "" : " selected"}>自动（推荐：按可用性挑第一个）</option>
+            ${(S.models || []).map((m) => `<option value="${esc(m.id)}"${chosen2.length === 1 && chosen2[0] === m.id ? " selected" : ""}>${esc(simpleText(m.name || m.id))}</option>`).join("")}
+          </select>
+          <span class="help">当前：${esc(chosen2.length ? chosen2.map(nameOf).join("、") : "自动")} · 共 ${(S.models || []).length} 个可用模型；多选/高级参数仍在「高级」里。</span>
+        </div>
       </div>
 
       ${needsPayload
@@ -2934,8 +2941,14 @@ async function drillAction(kind) {
 /* 统一流程里的公共控件（两模式共用）：注入/卸载/还原、重新识别、注入正文编辑 */
 function bindFlowControls() {
   // 人格台：卡片＝注入，卸下，导入，导出
-  $$("#page [data-persona-apply]").forEach((el) => {
-    el.addEventListener("click", () => personaApply(el.dataset.personaApply));
+  $$("#page [data-persona-toggle]").forEach((el) => {
+    el.addEventListener("click", () => personaToggle(el.dataset.personaToggle));
+  });
+  $$("#page [data-persona-apply-selected]").forEach((el) => {
+    el.addEventListener("click", () => personaApplySelected());
+  });
+  $$("#page [data-persona-clear-selection]").forEach((el) => {
+    el.addEventListener("click", () => { S.persona.selected = []; renderPage(); });
   });
   $$("#page [data-persona-clear]").forEach((el) => {
     el.addEventListener("click", () => personaClear());
@@ -3034,6 +3047,18 @@ function bindFlowControls() {
 }
 
 function bindSimpleBreach() {
+  // 破甲台的模型下拉：选择即写入 S.breach.models（单选）；「自动」清空让推荐接管
+  const quick = $("#sModelQuick");
+  if (quick && !quick.dataset.bound) {
+    quick.dataset.bound = "1";
+    quick.addEventListener("change", () => {
+      const v = quick.value;
+      if (v === "__auto") { S.breach.models = []; S.breach.model = ""; }
+      else { S.breach.models = [v]; S.breach.model = v; }
+      renderPage();
+    });
+  }
+
   $$("#page [data-model]").forEach((el) => {
     el.addEventListener("click", () => toggleModel(el.dataset.model));
   });
@@ -5332,39 +5357,49 @@ function renderPersonaSection() {
   if (!st.tried && !st.loading) loadPersona();
   const { host, active } = personaActive();
   const cards = (st.data && st.data.cards) || [];
-  const cur = active ? esc(active.name || active.id) : "无（空白人格）";
+  const sel = Array.isArray(st.selected) ? st.selected : [];
+  const cur = active ? esc(active.name || active.id) : "无（默认对话没有人格）";
   const busy = st.busy;
+  const nameOf = (id) => {
+    const hit = cards.find((x) => x.id === id);
+    return hit ? hit.name : id;
+  };
+  const selText = sel.length ? "已选 " + sel.length + "：" + sel.slice(0, 3).map(nameOf).join("、") + (sel.length > 3 ? "…" : "") : "未选（点卡片加入，可多选）";
   const body = cards.length
     ? cards.map((cd) => {
-      const on = active && (active.id === cd.id || active.name === cd.name);
+      const on = sel.includes(cd.id);
+      const isActive = active && (active.id === cd.id || active.name === cd.name);
       const scale = "粗" + (cd.vulgarity || 0) + "·攻" + (cd.aggression || 0);
-      return `<button type="button" class="pick persona-card${on ? " on" : ""}" data-persona-apply="${esc(cd.id)}"${busy ? " disabled" : ""} title="${esc(cd.descriptionHead || "")}">
+      return `<button type="button" class="pick persona-card${on ? " on" : ""}${isActive ? " active" : ""}" data-persona-toggle="${esc(cd.id)}"${busy ? " disabled" : ""} title="${esc(cd.descriptionHead || "")}">
         <span class="persona-ava" style="--accent:${esc(cd.accent || "#6EA8FF")}" aria-hidden="true">${esc(cd.icon || "🎭")}</span>
         <span class="persona-main">
           <span class="pick-name">${esc(cd.name)}</span>
-          <span class="pick-tag">${esc(scale)}${cd.nsfw ? " · 18+" : ""}</span>
+          <span class="pick-tag">${esc(scale)}${cd.nsfw ? " · 18+" : ""}${isActive ? " · 生效中" : ""}</span>
         </span>
+        <span class="persona-check" aria-hidden="true">${on ? "✓" : ""}</span>
       </button>`;
     }).join("")
-    : '<p class="hint">人格库是空的：点下面「导入卡」拖一张酒馆卡进来，或先在 data/personas 里放 JSON。</p>';
+    : '<p class="hint">人格库是空的：点下面「导入卡」拖一张酒馆卡进来。</p>';
   return `<section class="section" aria-labelledby="f-persona-h">
-    <details class="grp" data-group="persona"${st.message ? " open" : ""}>
+    <details class="grp" data-group="persona"${st.message || sel.length ? " open" : ""}>
       <summary><span class="grp-title">人格</span>
-        <span class="grp-hint">当前：${cur} · 宿主 ${esc(host)} · 卡 ${cards.length} 张</span></summary>
+        <span class="grp-hint">生效：${cur} · ${esc(selText)} · 宿主 ${esc(host)} · 卡 ${cards.length} 张</span></summary>
       <div class="grp-body">
-        <p class="hint">点一张卡＝立刻换上，宿主<b>下一句话</b>就是这个人格（写 prompt-inject.md 的 persona 块，不重启、不动 83 条补丁）。</p>
+        <p class="hint">可多选：第一张是主人格，其余是叠加层（口吻/立场按主人格走）。默认不选＝没有任何人格注入。点「应用所选」后宿主下一句话生效。</p>
         <div class="persona-grid">${body}</div>
         <div data-persona-sources-box hidden></div>
         <div class="actions" style="margin-top:10px;flex-wrap:wrap;gap:8px">
-          <input type="text" data-persona-url placeholder="贴卡直链（.png / .json）" style="flex:1;min-width:220px" ${busy ? "disabled" : ""}>
-          <button type="button" class="ghost" data-persona-url-go${busy ? " disabled" : ""}>从 URL 导入</button>
-          <button type="button" class="ghost" data-persona-sources>卡源</button>
+          <button type="button" class="primary" data-persona-apply-selected${busy || !sel.length ? " disabled" : ""}>应用所选${sel.length ? "（" + sel.length + "）" : ""}</button>
+          <button type="button" class="ghost" data-persona-clear-selection${busy || !sel.length ? " disabled" : ""}>清空选择</button>
           <button type="button" class="ghost" data-persona-clear${busy ? " disabled" : ""}>卸下人格</button>
+          <button type="button" class="ghost" data-persona-verify${active ? "" : " disabled"}>验证生效</button>
           <label class="ghost" style="cursor:pointer">
             导入卡（.png / .json）
             <input type="file" accept=".png,.json,application/json,image/png" data-persona-import hidden>
           </label>
-          <button type="button" class="ghost" data-persona-verify${active ? "" : " disabled"}>验证生效</button>
+          <input type="text" data-persona-url placeholder="贴卡直链（.png / .json）" style="flex:1;min-width:200px"${busy ? " disabled" : ""}>
+          <button type="button" class="ghost" data-persona-url-go${busy ? " disabled" : ""}>从 URL 导入</button>
+          <button type="button" class="ghost" data-persona-sources>卡源</button>
           <button type="button" class="ghost" data-persona-export="json"${active ? "" : " disabled"}>导出 JSON</button>
           <button type="button" class="ghost" data-persona-export="png"${active ? "" : " disabled"}>导出卡（给酒馆）</button>
           <span class="hint">${esc(busy ? "处理中…" : (st.message || ""))}</span>
@@ -5375,20 +5410,31 @@ function renderPersonaSection() {
   </section>`;
 }
 
-async function personaApply(id) {
+function personaToggle(id) {
   const st = S.persona;
-  if (st.busy || !id) return;
+  if (!id || st.busy) return;
+  const sel = Array.isArray(st.selected) ? st.selected.slice() : [];
+  const k = sel.indexOf(id);
+  if (k >= 0) sel.splice(k, 1); else sel.push(id);
+  st.selected = sel;
+  renderPage();
+}
+
+async function personaApplySelected() {
+  const st = S.persona;
+  const sel = Array.isArray(st.selected) ? st.selected : [];
+  if (st.busy || !sel.length) return;
   const { host } = personaActive();
   if (host === "mengbot") {
     const ids = currentBotIds();
     if (!ids.length) { toastError("MengBot 人格要先把目标 bot 勾上"); return; }
     st.busy = "apply";
     try {
-      const d = await request("/api/persona/apply", { method: "POST", body: { host, id, botId: ids[0] } });
+      const d = await request("/api/persona/apply", { method: "POST", body: { host, ids: sel, botId: ids[0] } });
       if (!d || d.ok === false) throw payloadError(d, "注入人格失败");
-      st.message = "已写入 bot soul（重启 MengBot 生效）";
+      st.message = "已写入 bot soul（重启 MengBot 生效）：" + (d.count || sel.length) + " 张";
       await loadPersona(true);
-      toast("已换人格：" + id + " → bot soul");
+      toast(st.message);
     } catch (e) { toastError(simpleReason(e)); }
     finally { st.busy = ""; renderPage(); }
     return;
@@ -5396,9 +5442,11 @@ async function personaApply(id) {
   st.busy = "apply";
   renderPage();
   try {
-    const d = await request("/api/persona/apply", { method: "POST", body: { host, id } });
+    const d = await request("/api/persona/apply", { method: "POST", body: { host, ids: sel } });
     if (!d || d.ok === false) throw payloadError(d, "注入人格失败");
-    st.message = d.restart ? "已写入，重启宿主后生效" : "已生效：下一句话就是这个人格";
+    st.message = d.restart
+      ? "已写入 " + (d.count || sel.length) + " 张，重启宿主后生效"
+      : "已生效：" + (d.count || sel.length) + " 张（" + (d.names || []).join("、") + "），下一句话就是这个人格";
     await loadPersona(true);
     toast(st.message);
   } catch (e) { toastError(simpleReason(e)); }

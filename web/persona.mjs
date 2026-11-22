@@ -308,9 +308,28 @@ export async function readActivePersona(file) {
   };
 }
 
-/** 注入：删旧块 + 把新块放最前；先备份 */
-export async function applyPersonaToFile(file, card, backupDir) {
+/** 多张卡 → 一个块：第一张是主人格，其余作为「叠加层」追加在块尾（不覆盖主人格口吻） */
+export function buildPersonaBlockMulti(cards) {
+  const list = (Array.isArray(cards) ? cards : [cards]).filter(Boolean).map((c) => normalizeCard(c));
+  if (!list.length) return '';
+  let block = buildPersonaBlock(list[0]);
+  const extras = list.slice(1);
+  if (extras.length) {
+    const lines = extras.map((c) => {
+      const d = c.data;
+      const bits = [d.personality, d.description].filter(Boolean).join('；').replace(/\s+/g, ' ').slice(0, 260);
+      return `叠加层「${d.name}」：${bits}`;
+    });
+    block = block.replace(PERSONA_END, lines.join('\n') + '\n' + PERSONA_END);
+  }
+  return block;
+}
+
+/** 注入：删旧块 + 把新块放最前；先备份（cards 可以是单卡或数组） */
+export async function applyPersonaToFile(file, cards, backupDir) {
   if (!file) return { ok: false, error: 'no_target' };
+  const list = (Array.isArray(cards) ? cards : [cards]).filter(Boolean);
+  if (!list.length) return { ok: false, error: 'no_cards' };
   await mkdir(dirname(file), { recursive: true });
   let prev = '';
   if (existsSync(file)) {
@@ -320,16 +339,18 @@ export async function applyPersonaToFile(file, card, backupDir) {
         await mkdir(backupDir, { recursive: true });
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
         await copyFile(file, join(backupDir, 'persona-' + stamp + '.md'));
-      } catch { /* 备份失败不阻塞，下面会返回 backup:false */ }
+      } catch { /* 备份失败不阻塞 */ }
     }
   }
-  const block = buildPersonaBlock(normalizeCard(card));
+  const block = buildPersonaBlockMulti(list);
   const rest = stripBlocks(prev);
   const next = block + '\n\n' + rest.trimStart();
   await writeFile(file, next, 'utf8');
   return {
     ok: true,
     file,
+    count: list.length,
+    names: list.map((c) => c.data.name),
     bytes: Buffer.byteLength(next, 'utf8'),
     blockBytes: Buffer.byteLength(block, 'utf8'),
     prevBytes: Buffer.byteLength(prev, 'utf8'),

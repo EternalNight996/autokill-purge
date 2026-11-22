@@ -34,7 +34,7 @@ import { EQUIP_PRESETS } from './presets.mjs';
 import {
   listPersonas, readPersona, savePersona, deletePersona, seedPersonas,
   importCard, exportJson, embedCardInPng, applyPersonaToFile, clearPersonaInFile,
-  readActivePersona, personaTargets, buildPersonaBlock,
+  readActivePersona, personaTargets, buildPersonaBlock, buildPersonaBlockMulti,
 } from './persona.mjs';
 import { renderGearMarkdown, renderGearSyncBlock } from './stage-hints.mjs';
 
@@ -2817,20 +2817,27 @@ async function handleApi(req, res, url, state) {
     const targets = personaTargets();
     const t = targets[host];
     if (!t) return send(res, 400, { ok: false, error: 'bad_host', hint: 'host 只能是 dsh / autokill / mengbot' });
-    const card = await readPersona(DATA_DIR, body.id);
-    if (!card) return send(res, 404, { ok: false, error: 'card_not_found', id: body.id });
+    // 多选：ids 数组，第一张是主人格，其余是叠加层
+    const ids = Array.isArray(body.ids) ? body.ids.filter(Boolean) : (body.id ? [body.id] : []);
+    if (!ids.length) return send(res, 400, { ok: false, error: 'no_ids', hint: '选一张或多张卡' });
+    const cards = [];
+    for (const id of ids) {
+      const card = await readPersona(DATA_DIR, id);
+      if (card) cards.push(card);
+    }
+    if (!cards.length) return send(res, 404, { ok: false, error: 'card_not_found', ids });
     const backupDir = join(DATA_DIR, 'host-snapshots');
     if (host === 'mengbot') {
       const botId = String(body.botId || '');
       if (!botId) return send(res, 400, { ok: false, error: 'need_botId', hint: 'MengBot 要先选一个 bot（人格写进它的 soul）' });
-      const text = buildPersonaBlock(card);
+      const text = buildPersonaBlockMulti(cards);
       try {
         const r = mbInjectSoul(botId, { text, mode: 'prefix' });
-        return send(res, 200, { ok: true, host, botId, mode: 'soul-prefix', detail: r, note: t.note });
+        return send(res, 200, { ok: true, host, botId, mode: 'soul-prefix', count: cards.length, detail: r, note: t.note });
       } catch (e) { return send(res, 400, { ok: false, error: 'mengbot_inject_failed', detail: publicError(e) }); }
     }
     try {
-      const r = await applyPersonaToFile(t.file, card, backupDir);
+      const r = await applyPersonaToFile(t.file, cards, backupDir);
       return send(res, 200, { ok: true, host, ...r, note: t.note, restart: !!t.restart });
     } catch (e) { return send(res, 400, { ok: false, error: 'apply_failed', detail: publicError(e) }); }
   }

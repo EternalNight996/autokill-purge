@@ -53,20 +53,25 @@ try {
   const cards = await cdp.eval(`(() => {
     const d = document.querySelector('details[data-group="persona"]');
     if (!d) return '0';
-    return String(d.querySelectorAll('[data-persona-apply]').length);
+    return String(d.querySelectorAll('[data-persona-toggle]').length);
   })()`);
   ok('2. 展开后渲染出人格卡', Number(cards) >= 10, 'cards=' + cards);
 
   // 2. 点第一张卡 → 注入
   const first = await cdp.eval(`(() => {
     const d = document.querySelector('details[data-group="persona"]');
-    const btn = d && d.querySelector('[data-persona-apply]');
+    const btn = d && d.querySelector('[data-persona-toggle]');
     if (!btn) return 'no-card';
-    const id = btn.dataset.personaApply;
-    btn.click();
+    const id = btn.dataset.personaToggle;
+    btn.click();                        // 多选模式：点击 = 加入选中，不立即注入
     return id;
   })()`);
-  ok('2a. 点到某张卡', first !== 'no-card', String(first));
+  ok('2a. 点到某张卡（进入选中态）', first !== 'no-card', String(first));
+  await sleep(700);
+  const selState = await cdp.eval(`(() => JSON.stringify({ selected: (S.persona.selected || []).length, applyBtn: !!document.querySelector('[data-persona-apply-selected]'), diag: null }))()`);
+  const ss = JSON.parse(selState);
+  ok('2b. 选中 1 张且出现「应用所选」', ss.selected === 1 && ss.applyBtn === true, selState);
+  await cdp.eval(`(() => { const b = document.querySelector('[data-persona-apply-selected]'); if (b) b.click(); return 1; })()`);
   await sleep(600);
   const diag = await cdp.eval(`(() => JSON.stringify({ busy: S.persona.busy, msg: S.persona.message, host: S.hostTarget, tried: S.persona.tried, cards: (S.persona.data && S.persona.data.cards || []).length, errs: (window.__apErrors || []).map((e) => e.message).slice(0, 3) }))()`);
   console.log('  diag:', diag);
