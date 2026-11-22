@@ -4046,7 +4046,7 @@ function renderSimpleSettings() {
         <dl class="kv compact">
           <dt>名称</dt><dd>autokill-purge</dd>
           <dt>版本</dt><dd class="mono">${esc(S.version || "—")}</dd>
-          <dt>作者</dt><dd>EternalNight996（YG）</dd>
+          <dt>作者</dt><dd>EternalNight996（梦神）</dd>
           <dt>许可</dt><dd>MIT</dd>
         </dl>
         <p class="small muted" style="margin-top:8px">本工具只用于本人拥有或获得书面授权的系统、模型与数据的安全研究、红队演练与教学演示。使用者对自己的一切操作与后果负全部责任。</p>
@@ -8560,7 +8560,7 @@ function renderAbout() {
         <div class="kv compact">
           <dt>项目名</dt><dd>autokill-purge（梦神破甲）</dd>
           <dt>版本</dt><dd class="mono">${esc(S.version || "—")}</dd>
-          <dt>作者</dt><dd>EternalNight996（YG）</dd>
+          <dt>作者</dt><dd>EternalNight996（梦神）</dd>
           <dt>署名</dt><dd>梦神破甲（Dream God Armor Break）</dd>
           <dt>许可</dt><dd>MIT</dd>
           <dt>定位</dt><dd>二进制破甲内核 · 模型红队研究 · 智能体装备 · memory-eternal 实时分发</dd>
