@@ -3303,6 +3303,8 @@ async function simpleBuild() {
       count: b.variants.length,
       ok: b.variants.length > 0,
       technique: String((b.variants[0] && (b.variants[0].technique || b.variants[0].id)) || techniques[0] || ""),
+      task: String(result.task || task || "").slice(0, 400),
+      template: String(b.template || "none"),
     });
     b.advice = (Array.isArray(result.advice) ? result.advice : []).map(adviceText).filter(Boolean);
     b.zero = result.zero_wide_sample || "";
@@ -5368,6 +5370,14 @@ function personaReplay(at) {
     renderPage();
     toast("已切回：" + (h.personas || []).join("、") + "（模型 " + (h.model || "自动") + "），正在重新注入…");
     personaApplySelected();
+    return;
+  }
+  if (h.kind === "build" && h.task) {
+    S.breach.task = h.task;
+    if (h.template) S.breach.template = h.template;
+    renderPage();
+    toast("已切回模型 " + (h.model || "自动") + "，正在按原任务重跑…");
+    simpleBuild();
     return;
   }
   renderPage();
