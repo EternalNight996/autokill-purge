@@ -3293,6 +3293,14 @@ async function simpleBuild() {
     if (!data || data.ok === false) throw payloadError(data, "生成失败");
     const result = data.result || data;
     b.variants = (Array.isArray(result.variants) ? result.variants : []).map(normalizeVariant);
+    // 记一条历史：哪个模型、什么技术、出了几条载荷（0 条＝可能被拒，出问题时能对上时间点）
+    recordCompat("build", {
+      model: String(result.model || model),
+      personas: [],
+      count: b.variants.length,
+      ok: b.variants.length > 0,
+      technique: String((b.variants[0] && (b.variants[0].technique || b.variants[0].id)) || techniques[0] || ""),
+    });
     b.advice = (Array.isArray(result.advice) ? result.advice : []).map(adviceText).filter(Boolean);
     b.zero = result.zero_wide_sample || "";
     b.resultMeta = { model: result.model || model, layer: result.layer || "prompt", at: new Date().toISOString() };
@@ -5370,7 +5378,7 @@ function renderCompatSection() {
   const modelRow = d.modelCheck
     ? `<div class="s-row"><div class="s-row-main"><strong>模型</strong><span class="mono small">${esc(d.current.modelName || d.current.modelId)}</span><span class="small muted">${esc(d.modelCheck.reason)}</span></div><div class="actions"><span class="badge ${d.modelCheck.level === 'ok' ? 'good' : (d.modelCheck.level === 'bad' ? 'bad' : 'warn')}">${d.modelCheck.level === 'ok' ? '已测' : '未测'}</span></div></div>`
     : '<p class="hint">还没选模型（会走自动推荐）</p>';
-  const hist = (d.history || []).slice(0, 12).map((h) => `<div class="s-row"><div class="s-row-main"><span class="mono small muted">${esc(String(h.at || '').replace('T', ' ').slice(0, 19))}</span><strong>${esc(h.kind || '')}</strong><span class="small">${esc((h.personas || []).join('、') || h.model || '')}</span><span class="small muted">${esc(h.dshVersion || '')}</span></div></div>`).join("");
+  const hist = (d.history || []).slice(0, 12).map((h) => `<div class="s-row"><div class="s-row-main"><span class="mono small muted">${esc(String(h.at || '').replace('T', ' ').slice(0, 19))}</span><strong>${esc(h.kind === 'build' ? '生成载荷' : (h.kind === 'persona-apply' ? '注入人格' : (h.kind || '')))}</strong><span class="small">${esc((h.personas || []).join('、') || h.model || '')}</span><span class="small muted">${esc(h.dshVersion || '')}</span></div></div>`).join("");
   return `<section class="section" aria-labelledby="f-compat-h">
     <details class="grp" data-group="compat">
       <summary><span class="grp-title">兼容性 · 历史</span>
