@@ -1716,3 +1716,12 @@ body.armor-fire button.primary { animation: armor-btn-flash 440ms cubic-bezier(.
   box-shadow: 0 0 0 1px rgba(0,0,0,.25), 0 2px 8px rgba(0,0,0,.35);
 }
 .persona-card.on .persona-ava { box-shadow: 0 0 0 2px var(--accent, #6EA8FF), 0 0 14px rgba(255,255,255,.18); }
+
+/* 破甲台模型多选面板 */
+.model-pick{display:flex;flex-direction:column;gap:6px}
+.model-pick-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.model-pick-head strong{font-size:13px}
+.model-pick-list{display:flex;flex-wrap:wrap;gap:6px;max-height:180px;overflow:auto;padding:6px;border:1px solid rgba(255,255,255,.10);border-radius:10px;background:rgba(255,255,255,.03)}
+.model-pick-item{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:8px;border:1px solid rgba(255,255,255,.10);font-size:12px;cursor:pointer}
+.model-pick-item.on{border-color:rgba(255,170,60,.55);background:rgba(255,170,60,.12)}
+.model-pick-item input{accent-color:#ff9f1c;margin:0}

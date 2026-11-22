@@ -2641,11 +2641,21 @@ function renderSimpleOperation() {
           <span class="help">勾上预设＝生成时先发装备再投递；能力项可逐项取舍。</span>
         </div>
         <div class="field"><span>模型</span>
-          <select id="sModelQuick" data-focus="sModelQuick" aria-label="模型选择">
-            <option value="__auto"${chosen2.length ? "" : " selected"}>自动（推荐：按可用性挑第一个）</option>
-            ${(S.models || []).map((m) => `<option value="${esc(m.id)}"${chosen2.length === 1 && chosen2[0] === m.id ? " selected" : ""}>${esc(simpleText(m.name || m.id))}</option>`).join("")}
-          </select>
-          <span class="help">当前：${esc(chosen2.length ? chosen2.map(nameOf).join("、") : "自动")} · 共 ${(S.models || []).length} 个可用模型；多选/高级参数仍在「高级」里。</span>
+          <div class="model-pick">
+            <div class="model-pick-head">
+              <strong>${chosen2.length ? "已选 " + chosen2.length + " 个" : "自动（未选，按可用性挑第一个）"}</strong>
+              <span class="hint">宿主当前可用 ${(S.models || []).length} 个</span>
+              <button type="button" class="small" data-model-all>全选</button>
+              <button type="button" class="small" data-model-none>清空</button>
+            </div>
+            <div class="model-pick-list">
+              ${(S.models || []).map((m) => `<label class="model-pick-item${chosen2.includes(m.id) ? " on" : ""}">
+                <input type="checkbox" data-model-id="${esc(m.id)}"${chosen2.includes(m.id) ? " checked" : ""}>
+                <span>${esc(simpleText(m.name || m.id))}</span>
+              </label>`).join("")}
+            </div>
+          </div>
+          <span class="help">可多选/全选；一个都不选＝自动挑第一个可用模型。</span>
         </div>
       </div>
 
@@ -3040,16 +3050,26 @@ function bindFlowControls() {
 
 function bindSimpleBreach() {
   // 破甲台的模型下拉：选择即写入 S.breach.models（单选）；「自动」清空让推荐接管
-  const quick = $("#sModelQuick");
-  if (quick && !quick.dataset.bound) {
-    quick.dataset.bound = "1";
-    quick.addEventListener("change", () => {
-      const v = quick.value;
-      if (v === "__auto") { S.breach.models = []; S.breach.model = ""; }
-      else { S.breach.models = [v]; S.breach.model = v; }
+  $$("#page [data-model-id]").forEach((el) => {
+    el.addEventListener("change", () => {
+      const id = el.dataset.modelId;
+      const set = new Set(S.breach.models || []);
+      if (el.checked) set.add(id); else set.delete(id);
+      S.breach.models = Array.from(set);
+      S.breach.model = S.breach.models[0] || "";
       renderPage();
     });
-  }
+  });
+  $$("#page [data-model-all]").forEach((el) => {
+    el.addEventListener("click", () => {
+      S.breach.models = (S.models || []).map((m) => m.id);
+      S.breach.model = S.breach.models[0] || "";
+      renderPage();
+    });
+  });
+  $$("#page [data-model-none]").forEach((el) => {
+    el.addEventListener("click", () => { S.breach.models = []; S.breach.model = ""; renderPage(); });
+  });
 
   $$("#page [data-model]").forEach((el) => {
     el.addEventListener("click", () => toggleModel(el.dataset.model));
