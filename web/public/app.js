@@ -5336,8 +5336,11 @@ function renderPersonaSection() {
       const on = active && (active.id === cd.id || active.name === cd.name);
       const scale = "粗" + (cd.vulgarity || 0) + "·攻" + (cd.aggression || 0);
       return `<button type="button" class="pick persona-card${on ? " on" : ""}" data-persona-apply="${esc(cd.id)}"${busy ? " disabled" : ""} title="${esc(cd.descriptionHead || "")}">
-        <span class="pick-name">${esc(cd.name)}</span>
-        <span class="pick-tag">${esc(scale)}</span>
+        <span class="persona-ava" style="--accent:${esc(cd.accent || "#6EA8FF")}" aria-hidden="true">${esc(cd.icon || "🎭")}</span>
+        <span class="persona-main">
+          <span class="pick-name">${esc(cd.name)}</span>
+          <span class="pick-tag">${esc(scale)}${cd.nsfw ? " · 18+" : ""}</span>
+        </span>
       </button>`;
     }).join("")
     : '<p class="hint">人格库是空的：点下面「导入卡」拖一张酒馆卡进来，或先在 data/personas 里放 JSON。</p>';
