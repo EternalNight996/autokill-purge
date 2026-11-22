@@ -165,8 +165,10 @@ window.__ModuleLoader__.load({
         id: "mengshen-armor",
         inject: () => ({}),
       }, ArmorNavButton));
-      ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
-        name: "sidebar.footer.action",
+      // 人格下拉放在「新建对话 / 模式预设」那一行（与 agent-preset 同槽位），
+      // 不放侧栏：换人格是建对话时的动作，应该在输入区手边。
+      ctx.slots.inject("conversation.hero.agentPreset", () => ctx.slots.register({
+        name: "conversation.hero.agentPreset",
         id: "mengshen-persona",
         inject: () => ({}),
       }, PersonaPicker));
