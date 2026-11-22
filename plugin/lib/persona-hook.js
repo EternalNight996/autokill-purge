@@ -1,35 +1,50 @@
-// plugin/lib/persona-hook.js —— 人格层的「实时注入」通路
+// plugin/lib/persona-hook.js —— 人格层的「每轮实时注入」+「按会话隔离」
 //
-// 为什么要这一层：
-//   AGENTS.md 是宿主的 project_instructions 通道，可靠但**只在会话开始/重挂时读取**，
-//   用户选完人格后当前这一轮还是旧提示 → 看起来「没换上」。
-//   这里在 system-prompt/assemble 钩子里，每轮组装前再检查一次选择文件：
-//     · 选择文件里有人格块 → 若 assembled 还没有 persona:begin（说明 AGENTS.md 没被读到），就补进去
-//     · assembled 已经有（AGENTS.md 生效）→ 什么都不做，避免重复
-//   这样「选完 → 下一句就是」不依赖宿主读文件时机，也不会写任何宿主文件。
-import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+// 数据布局（都在 $DSH_HOME/autokill-purge/ 下）：
+//   persona-current.json  { ids, block, at }                 —— 全局默认（新会话用，可按需留空）
+//   persona-sessions.json { "<sessionId>": { ids, block, at } } —— 每个会话自己的选择（优先）
+//   persona-active.json   { sid, at }                         —— 最近活跃会话（控制台据此把选择写进该会话）
+//
+// 注入优先级：sessions[sid] ＞ persona-current.json ＞ 无人格（默认对话不注入任何人格）。
+// 去重：assembled 里已经有 persona:begin（宿主通过 AGENTS.md 注入）就不再补。
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import os from 'node:os';
 
 const MARK = 'persona:begin';
 
-function dshHome() {
-  return process.env.DSH_HOME || join(os.homedir(), '.dsh');
+function dataDir() {
+  const home = process.env.DSH_HOME || join(os.homedir(), '.dsh');
+  return join(home, 'autokill-purge');
 }
-
-/** 人格选择文件：与控制台共用（控制台 apply 时写，插件每轮读） */
-export function personaSelectionFile() {
-  return join(dshHome(), 'autokill-purge', 'persona-current.json');
-}
-
-export function readPersonaSelection() {
+function readJson(name) {
   try {
-    const f = personaSelectionFile();
+    const f = join(dataDir(), name);
     if (!existsSync(f)) return null;
-    const j = JSON.parse(readFileSync(f, 'utf8'));
-    if (!j || typeof j.block !== 'string' || !j.block.includes(MARK)) return null;
-    return j;
+    return JSON.parse(readFileSync(f, 'utf8'));
   } catch { return null; }
+}
+function writeJson(name, obj) {
+  try {
+    const f = join(dataDir(), name);
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+  } catch { /* ignore */ }
+}
+
+export function personaSelectionFile() { return join(dataDir(), 'persona-current.json'); }
+
+/** 当前会话的选择（没有就回落全局），返回 null 表示这个会话不该有人格 */
+export function resolvePersonaBlock(sid) {
+  const sessions = readJson('persona-sessions.json') || {};
+  if (sid && sessions[sid] && typeof sessions[sid].block === 'string' && sessions[sid].block.includes(MARK)) {
+    return { block: sessions[sid].block, ids: sessions[sid].ids || [], scope: 'session' };
+  }
+  const global = readJson('persona-current.json');
+  if (global && typeof global.block === 'string' && global.block.includes(MARK)) {
+    return { block: global.block, ids: global.ids || [], scope: 'global' };
+  }
+  return null;
 }
 
 function hasPersonaSection(assembled) {
@@ -38,31 +53,27 @@ function hasPersonaSection(assembled) {
   } catch { return false; }
 }
 
-/** 把人格块补进 assembled（已经是新对象，不改原对象） */
 export function injectPersonaInto(assembled, context) {
-  const sel = readPersonaSelection();
-  if (!sel) return assembled;
   if (!assembled || !Array.isArray(assembled.sections)) return assembled;
-  if (hasPersonaSection(assembled)) return assembled;   // AGENTS.md 那条路已经注入了
-  // 会话级：选择文件里可用 sessions[sessionId] 覆盖全局
-  let block = sel.block;
-  try {
-    const sid = context && context.agent && context.agent.session && context.agent.session.id;
-    if (sid && sel.sessions && typeof sel.sessions[sid] === 'string' && sel.sessions[sid].includes(MARK)) {
-      block = sel.sessions[sid];
-    }
-  } catch { /* 拿不到 session 就用全局 */ }
+  let sid = '';
+  try { sid = String((context && context.agent && context.agent.session && context.agent.session.id) || ''); } catch { sid = ''; }
+  const picked = resolvePersonaBlock(sid);
+  if (!picked) return assembled;
+  if (hasPersonaSection(assembled)) return assembled;   // 宿主已通过 AGENTS.md 注入同一块
   const sections = assembled.sections.slice();
-  sections.push({ name: 'autokill-purge:persona', text: block });
+  sections.push({ name: 'autokill-purge:persona', text: picked.block });
   return { ...assembled, sections };
 }
 
-/** 注册 assemble 钩子；返回 disposer 由 ctx.effect 管 */
 export function installPersonaAssemble(ctx, log = () => {}) {
   try {
     ctx.on('system-prompt/assemble', async (...args) => {
       const [assembly, context] = args;
       const next = args.length >= 3 ? args[args.length - 1] : null;
+      let sid = '';
+      try { sid = String((context && context.agent && context.agent.session && context.agent.session.id) || ''); } catch { sid = ''; }
+      // 记录"最近活跃会话"：控制台/下拉据此把人格写进这个会话，而不是全局
+      if (sid) writeJson('persona-active.json', { sid, at: new Date().toISOString() });
       let assembled = assembly;
       if (typeof next === 'function') {
         try { assembled = await next(); } catch { assembled = assembly; }
@@ -71,7 +82,7 @@ export function installPersonaAssemble(ctx, log = () => {}) {
         const before = hasPersonaSection(assembled);
         const out = injectPersonaInto(assembled, context);
         const after = hasPersonaSection(out);
-        if (!before && after) log('persona: injected into system prompt');
+        if (!before && after) log('persona: injected for session ' + (sid || '(unknown)'));
         return out;
       } catch { return assembled; }
     }, { global: true });

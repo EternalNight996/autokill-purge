@@ -37,7 +37,10 @@ import {
   importCard, exportJson, embedCardInPng, applyPersonaToFile, clearPersonaInFile,
   readActivePersona, personaTargets, buildPersonaBlock, buildPersonaBlockMulti,
 } from './persona.mjs';
-import { writePersonaSelection, clearPersonaSelection } from './persona-selection.mjs';
+import {
+  writePersonaSelection, clearPersonaSelection, writePersonaSession, clearPersonaSession,
+  readActiveSession, readPersonaSessions,
+} from './persona-selection.mjs';
 import { renderGearMarkdown, renderGearSyncBlock } from './stage-hints.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -2781,12 +2784,24 @@ async function handleApi(req, res, url, state) {
       try { active[id] = await readActivePersona(t.file); } catch { active[id] = { active: null, file: t.file }; }
     }
     const cards = await listPersonas(DATA_DIR);
+    let sessionInfo = { activeSession: null, selected: null, sessionCount: 0 };
+    try {
+      const act = await readActiveSession();
+      const all = await readPersonaSessions();
+      const sid = act && act.sid;
+      sessionInfo = {
+        activeSession: sid || null,
+        sessionCount: Object.keys(all).length,
+        selected: sid && all[sid] ? { ids: all[sid].ids || [], names: all[sid].names || [], at: all[sid].at } : null,
+      };
+    } catch { /* ignore */ }
     return send(res, 200, {
       ok: true,
       targets: Object.values(targets),
       active,
+      session: sessionInfo,
       cards: cards.map(({ card, ...rest }) => rest),
-      note: 'DSH 的 persona 块写在 ~/.dsh/prompt-inject.md 开头；宿主每轮读取，下一句生效，不需要重启',
+      note: '人格默认按会话隔离：写 persona-sessions.json，插件每轮 assemble 时注入；「设为默认（全局）」才影响新会话',
     });
   }
   if (p === '/api/persona/verify' && method === 'POST') {
@@ -2887,16 +2902,31 @@ async function handleApi(req, res, url, state) {
       } catch (e) { return send(res, 400, { ok: false, error: 'mengbot_inject_failed', detail: publicError(e) }); }
     }
     try {
-      const r = await applyPersonaToFile(t.file, cards, backupDir);
-      // DSH：再写一份给插件做「每轮实时注入」（AGENTS.md 要等宿主下一次读取才生效）
-      let live = false;
-      if (host === 'dsh') {
-        try {
-          await writePersonaSelection(DATA_DIR, { ids, block: buildPersonaBlockMulti(cards) });
-          live = true;
-        } catch { live = false; }
+      const block = buildPersonaBlockMulti(cards);
+      const names = cards.map((x) => x.data.name);
+      const scope = String(body.scope || 'session');
+      // DSH 默认只写「当前活跃会话」：一个对话换人格不会污染其它对话
+      if (host === 'dsh' && scope !== 'global') {
+        const act = await readActiveSession();
+        const sid = String(body.sessionId || (act && act.sid) || '');
+        if (!sid) {
+          return send(res, 409, {
+            ok: false, error: 'no_active_session',
+            hint: '还没有活跃会话：先在 DSH 里发一句话，再回来点人格（或勾「设为默认（全局）」）',
+          });
+        }
+        await writePersonaSession(sid, { ids, names, block });
+        return send(res, 200, {
+          ok: true, host, scope: 'session', sessionId: sid, ids, names, count: cards.length,
+          live: true, restart: false,
+          note: '只对当前会话生效，下一句就是这个人格；其它会话不受影响',
+        });
       }
-      return send(res, 200, { ok: true, host, ...r, note: t.note, restart: !!t.restart, live });
+      if (host === 'dsh') {
+        try { await writePersonaSelection(DATA_DIR, { ids, block }); } catch { /* ignore */ }
+      }
+      const r = await applyPersonaToFile(t.file, cards, backupDir);
+      return send(res, 200, { ok: true, host, scope, ...r, note: t.note, restart: !!t.restart, live: host === 'dsh' });
     } catch (e) { return send(res, 400, { ok: false, error: 'apply_failed', detail: publicError(e) }); }
   }
   if (p === '/api/persona/clear' && method === 'POST') {
@@ -2905,10 +2935,19 @@ async function handleApi(req, res, url, state) {
     const t = personaTargets()[host];
     if (!t) return send(res, 400, { ok: false, error: 'bad_host' });
     if (host === 'mengbot') return send(res, 400, { ok: false, error: 'use_mengbot_restore', hint: 'MengBot 的 soul 用 /api/mengbot/restore 还原' });
+    const scope = String(body.scope || 'session');
+    if (host === 'dsh' && scope !== 'global') {
+      const act = await readActiveSession();
+      const sid = String(body.sessionId || (act && act.sid) || '');
+      if (sid) await clearPersonaSession(sid);
+      try { await clearPersonaSelection(DATA_DIR); } catch { /* ignore */ }
+      try { await clearPersonaInFile(t.file, join(DATA_DIR, 'host-snapshots')); } catch { /* ignore */ }
+      return send(res, 200, { ok: true, host, scope: 'session', sessionId: sid || null, changed: !!sid, note: '当前会话的人格已卸下' });
+    }
     try {
       const r = await clearPersonaInFile(t.file, join(DATA_DIR, 'host-snapshots'));
       if (host === 'dsh') { try { await clearPersonaSelection(DATA_DIR); } catch { /* ignore */ } }
-      return send(res, 200, { ok: true, host, ...r, note: 'persona 块已移除，其余注入正文原样保留' });
+      return send(res, 200, { ok: true, host, scope, ...r, note: 'persona 块已移除，其余注入正文原样保留' });
     } catch (e) { return send(res, 400, { ok: false, error: 'clear_failed', detail: publicError(e) }); }
   }
   if (p === '/api/persona/export' && method === 'GET') {
