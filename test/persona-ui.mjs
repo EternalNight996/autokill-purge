@@ -34,6 +34,11 @@ await cdp.send('Page.navigate', { url: BASE + '/#/breach' });
 await sleep(7000);
 
 try {
+  // 0. boot 必须成功（否则整页都挂在「连不上控制台服务」的红条上）
+  const boot = await cdp.eval(`JSON.stringify({ booted: S.booted, err: S.bootError && S.bootError.message, alert: (document.getElementById("globalAlert")||{}).innerText || "" })`);
+  const bj = JSON.parse(boot);
+  ok('0. boot 成功、无红条、无 bootError', bj.booted === true && !bj.err && !String(bj.alert).includes('连不上'), boot);
+
   // 1. 区块在页面上
   const has = await cdp.eval(`(() => {
     const d = document.querySelector('details[data-group="persona"]');

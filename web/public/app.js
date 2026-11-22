@@ -2953,10 +2953,10 @@ function bindFlowControls() {
       if (f) personaImport(f);
     });
   });
-  $("#page [data-persona-verify]").forEach((el) => {
+  $$("#page [data-persona-verify]").forEach((el) => {
     el.addEventListener("click", () => personaVerify());
   });
-  $("#page [data-persona-url-go]").forEach((el) => {
+  $$("#page [data-persona-url-go]").forEach((el) => {
     el.addEventListener("click", () => {
       const inp = document.querySelector("#page [data-persona-url]");
       personaImportUrl(inp && inp.value);
