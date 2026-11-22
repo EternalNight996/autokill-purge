@@ -2698,6 +2698,37 @@ async function handleApi(req, res, url, state) {
       note: 'DSH 的 persona 块写在 ~/.dsh/prompt-inject.md 开头；宿主每轮读取，下一句生效，不需要重启',
     });
   }
+  if (p === '/api/persona/import-url' && method === 'POST') {
+    // 从 URL 拉一张卡：支持 chub / characterhub 的直链 PNG，或任意 .json 卡
+    const body = await bodyOf(req);
+    const raw = String(body.url || '').trim();
+    if (!/^https?:\/\//i.test(raw)) return send(res, 400, { ok: false, error: 'bad_url', hint: '只接受 http(s) 直链（.png 或 .json）' });
+    try {
+      const r = await fetch(raw, { redirect: 'follow', signal: AbortSignal.timeout(20000) });
+      if (!r.ok) return send(res, 400, { ok: false, error: 'fetch_failed', status: r.status });
+      const len = Number(r.headers.get('content-length') || 0);
+      if (len > 24 * 1024 * 1024) return send(res, 400, { ok: false, error: 'too_large', bytes: len });
+      const buf = Buffer.from(await r.arrayBuffer());
+      const card = await importCard(buf, raw.split('?')[0]);
+      const saved = await savePersona(DATA_DIR, card, { id: body.id });
+      return send(res, 200, { ok: true, id: saved.id, name: saved.card.data.name, source: raw });
+    } catch (e) { return send(res, 400, { ok: false, error: 'import_url_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/persona/sources' && method === 'GET') {
+    // 卡源清单：这些站点/仓库没有"可随包分发"的授权，但个人导入完全可行，所以做成入口而不是内置
+    return send(res, 200, {
+      ok: true,
+      note: '社区角色卡是用户生成内容，作者保留版权 —— 不随本包分发，按下面的入口自行导入（个人使用）',
+      sources: [
+        { id: 'chub', name: 'Chub / CharacterHub', url: 'https://chub.ai/', hint: '最大的卡库；下载 .png 卡后拖进「导入卡」或贴直链' },
+        { id: 'xl', name: 'xmlans/AI-Character-Cards', url: 'https://github.com/xmlans/AI-Character-Cards', hint: '开源中文卡集合（.png/.json）' },
+        { id: 'tw', name: 'TavernWeave', url: 'https://github.com/LiarMTTT/TavernWeave', hint: '中文制卡工程，产出 CCv3 卡；Noncommercial，自用' },
+        { id: 'ccstudio', name: 'dsh-cc-studio（DSH 插件）', url: 'https://github.com/xia-sc/dsh-cc-studio', hint: '在 DSH 里从一句话生成 CCv3 卡' },
+        { id: 'enclave', name: 'Enclave character recipes', url: 'https://huggingface.co/datasets/w9000/enclave-character-recipes', hint: '开源角色配方数据集（含中文角色）' },
+        { id: 'awesome', name: 'awesome-llm-role-playing', url: 'https://github.com/Neph0s/awesome-llm-role-playing-with-persona', hint: '资源索引：卡库、框架、提示词' },
+      ],
+    });
+  }
   if (p === '/api/persona/import' && method === 'POST') {
     const body = await bodyOf(req);
     try {

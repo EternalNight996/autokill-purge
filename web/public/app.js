@@ -2953,6 +2953,18 @@ function bindFlowControls() {
       if (f) personaImport(f);
     });
   });
+  $$("#page [data-persona-url-go]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const inp = document.querySelector("#page [data-persona-url]");
+      personaImportUrl(inp && inp.value);
+    });
+  });
+  $$("#page [data-persona-url]").forEach((el) => {
+    el.addEventListener("keydown", (ev) => { if (ev.key === "Enter") personaImportUrl(el.value); });
+  });
+  $$("#page [data-persona-sources]").forEach((el) => {
+    el.addEventListener("click", () => personaShowSources(document.querySelector("#page [data-persona-sources-box]")));
+  });
   $$("#page [data-simple-host]").forEach((el) => {
     el.addEventListener("click", () => simpleHostAction(el.dataset.simpleHost));
   });
@@ -5336,7 +5348,11 @@ function renderPersonaSection() {
       <div class="grp-body">
         <p class="hint">点一张卡＝立刻换上，宿主<b>下一句话</b>就是这个人格（写 prompt-inject.md 的 persona 块，不重启、不动 83 条补丁）。</p>
         <div class="persona-grid">${body}</div>
+        <div data-persona-sources-box hidden></div>
         <div class="actions" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+          <input type="text" data-persona-url placeholder="贴卡直链（.png / .json）" style="flex:1;min-width:220px" ${busy ? "disabled" : ""}>
+          <button type="button" class="ghost" data-persona-url-go${busy ? " disabled" : ""}>从 URL 导入</button>
+          <button type="button" class="ghost" data-persona-sources>卡源</button>
           <button type="button" class="ghost" data-persona-clear${busy ? " disabled" : ""}>卸下人格</button>
           <label class="ghost" style="cursor:pointer">
             导入卡（.png / .json）
@@ -5397,6 +5413,42 @@ async function personaClear() {
     toast(st.message);
   } catch (e) { toastError(simpleReason(e)); }
   finally { st.busy = ""; renderPage(); }
+}
+
+async function personaImportUrl(rawUrl) {
+  const st = S.persona;
+  const url = String(rawUrl || '').trim();
+  if (!url || st.busy) return;
+  st.busy = 'url';
+  st.message = '正在拉取 ' + url.slice(0, 60) + '…';
+  renderPage();
+  try {
+    const d = await request('/api/persona/import-url', { method: 'POST', body: { url } });
+    if (!d || d.ok === false) throw payloadError(d, 'URL 导入失败');
+    st.message = '已导入：' + (d.name || d.id);
+    await loadPersona(true);
+    const { host } = personaActive();
+    if (host !== 'mengbot') {
+      const a = await request('/api/persona/apply', { method: 'POST', body: { host, id: d.id } });
+      if (a && a.ok !== false) st.message = '已导入并换上：' + (d.name || d.id) + '（下一句生效）';
+    }
+    toast(st.message);
+  } catch (e) { st.message = ''; toastError(simpleReason(e)); }
+  finally { st.busy = ''; renderPage(); }
+}
+
+async function personaShowSources(box) {
+  if (!box) return;
+  if (!box.hidden) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  box.innerHTML = '<p class="hint">正在读取卡源…</p>';
+  try {
+    const d = await request('/api/persona/sources');
+    const rows = (d.sources || []).map((s) => `<div class="s-row"><div class="s-row-main"><strong>${esc(s.name)}</strong><span class="small muted">${esc(s.hint || '')}</span></div><div class="actions"><a class="small" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">打开</a></div></div>`).join('');
+    box.innerHTML = `<p class="hint">${esc(d.note || '')}</p>${rows}`;
+  } catch (e) {
+    box.innerHTML = '<p class="hint">卡源读取失败：' + esc(simpleReason(e)) + '</p>';
+  }
 }
 
 async function personaImport(file) {
