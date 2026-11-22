@@ -50,6 +50,13 @@ window.__ModuleLoader__.load({
       ".ap-armor-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}",
       ".ap-armor-collapsed{justify-content:center;padding:0}",
       ".ap-persona-nav{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:10px;min-width:0}",
+      ".ap-persona-mount{position:relative;display:inline-flex;align-items:center;margin-left:6px}",
+      ".ap-persona-btn{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:inherit;font-size:12px;line-height:1.5;cursor:pointer;white-space:nowrap}",
+      ".ap-persona-btn:hover{background:rgba(255,255,255,.12)}",
+      ".ap-persona-list{position:absolute;z-index:9999;top:calc(100% + 4px);left:0;min-width:190px;max-height:340px;overflow:auto;padding:4px;border-radius:10px;background:#161b22;border:1px solid rgba(255,255,255,.14);box-shadow:0 8px 28px rgba(0,0,0,.5)}",
+      ".ap-persona-item{display:block;width:100%;text-align:left;padding:5px 8px;border:0;border-radius:7px;background:transparent;color:inherit;font-size:12px;cursor:pointer;white-space:nowrap}",
+      ".ap-persona-item:hover{background:rgba(255,255,255,.10)}",
+      ".ap-persona-item.on{background:rgba(255,170,60,.18);color:#ffd08a}",
       ".ap-persona-collapsed{justify-content:center;padding:2px}",
       ".ap-persona-ico{font-size:15px;line-height:1;flex:none}",
       ".ap-persona-select{flex:1;min-width:0;background:rgba(255,255,255,.05);color:inherit;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:4px 6px;font-size:12px;outline:none}",
@@ -101,56 +108,82 @@ window.__ModuleLoader__.load({
 
     const inject = ["slots"];
 
-    /** 侧栏「人格」下拉：直接读控制台的人格库，选中即注入（写 AGENTS.md，下一句生效）。
-     *  不依赖控制台标签页——用户可以在 DSH 里直接换人，不用切窗口。 */
-    function PersonaPicker(props) {
-      const wide = !!(props && props.wide);
-      const [cards, setCards] = React.useState(null);   // null=加载中
-      const [active, setActive] = React.useState("");
-      const [busy, setBusy] = React.useState(false);
-      const [err, setErr] = React.useState("");
+    /** 人格下拉（DOM 注入版）：贴在宿主「模式预设」下拉右边，点击展开，不占槽位。
+     *  为什么要 DOM 注入：conversation.hero.agentPreset 是 single 槽，注册会覆盖宿主的预设选择器；
+     *  我们只是"再加一个"控件，所以直接找到那个下拉的父行插入自己，宿主感知不到。 */
+    function mountPersonaPicker() {
+      try {
+        if (typeof document === "undefined" || !document.body) return;
+        if (document.querySelector("[data-ap-persona-mount]")) return;
+        const cands = Array.prototype.slice.call(
+          document.querySelectorAll('button, [role="combobox"], [role="button"], [aria-haspopup="listbox"]')
+        ).filter((el) => /标准模式|创造模式|梦神破甲|最小模式|Cordis 模式/i.test(el.textContent || ""));
+        const anchor = cands[0];
+        if (!anchor || !anchor.parentElement) return;
+        const row = anchor.parentElement;
 
-      const base = consoleUrl();
-      const reload = () => {
-        fetch(base + "/api/persona/list", { headers: { accept: "application/json" } })
-          .then((r) => r.json())
-          .then((d) => {
-            if (!d || !d.ok) throw new Error((d && d.error) || "人格库不可用");
-            setCards(d.cards || []);
-            const a = d.active && d.active.dsh && d.active.dsh.active;
-            setActive(a ? (a.id || a.name || "") : "");
-            setErr("");
-          })
-          .catch((e) => { setCards([]); setErr(String((e && e.message) || e)); });
-      };
-      React.useEffect(() => { reload(); }, []);
+        const wrap = document.createElement("div");
+        wrap.dataset.apPersonaMount = "1";
+        wrap.className = "ap-persona-mount";
 
-      const onChange = (ev) => {
-        const v = ev.target.value;
-        setBusy(true);
-        setErr("");
-        const done = (ok, msg) => { setBusy(false); if (ok) { setActive(v); setTimeout(reload, 400); } else setErr(msg || "失败"); };
-        if (!v) {
-          fetch(base + "/api/persona/clear", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ host: "dsh" }) })
-            .then((r) => r.json()).then((d) => done(!!(d && d.ok), d && d.error)).catch((e) => done(false, String(e && e.message)));
-          return;
-        }
-        fetch(base + "/api/persona/apply", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ host: "dsh", ids: [v] }) })
-          .then((r) => r.json()).then((d) => done(!!(d && d.ok), d && d.error)).catch((e) => done(false, String(e && e.message)));
-      };
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "ap-persona-btn";
+        btn.textContent = "🎭 人格";
+        btn.title = "切换人格（写 ~/.dsh/AGENTS.md，下一句生效）";
 
-      const state = busy ? "处理中…" : (err ? "连不上控制台" : (active ? "已换上" : "无人格"));
-      const opts = (cards || []).map((c) => h("option", { key: c.id, value: c.id }, (c.icon || "🎭") + " " + (c.name || c.id)));
-      return h("div", { className: "ap-persona-nav" + (wide ? "" : " ap-persona-collapsed"), title: "人格：" + state },
-        h("span", { className: "ap-persona-ico", "aria-hidden": "true" }, "🎭"),
-        wide ? h("select", {
-          className: "ap-persona-select",
-          value: active,
-          disabled: busy,
-          onChange,
-          "aria-label": "切换人格",
-        }, [h("option", { key: "", value: "" }, "无（默认对话没有人格）")].concat(opts)) : null,
-      );
+        const list = document.createElement("div");
+        list.className = "ap-persona-list";
+        list.hidden = true;
+
+        wrap.appendChild(btn);
+        wrap.appendChild(list);
+        if (anchor.nextSibling) row.insertBefore(wrap, anchor.nextSibling);
+        else row.appendChild(wrap);
+
+        let cards = [];
+        let activeId = "";
+        const render = () => {
+          list.innerHTML = "";
+          const mk = (id, label) => {
+            const it = document.createElement("button");
+            it.type = "button";
+            it.className = "ap-persona-item" + (id === activeId ? " on" : "");
+            it.textContent = label;
+            it.addEventListener("click", (ev) => { ev.stopPropagation(); pick(id); });
+            return it;
+          };
+          list.appendChild(mk("", "无（默认对话没有人格）"));
+          cards.forEach((cd) => list.appendChild(mk(cd.id, (cd.icon || "🎭") + " " + (cd.name || cd.id))));
+          const cur = cards.find((x) => x.id === activeId);
+          btn.textContent = cur ? "🎭 " + cur.name : "🎭 人格";
+        };
+        const load = () => {
+          fetch(consoleUrl() + "/api/persona/list", { headers: { accept: "application/json" } })
+            .then((r) => r.json())
+            .then((d) => {
+              if (!d || !d.ok) return;
+              cards = d.cards || [];
+              const at = d.active && d.active.dsh && d.active.dsh.active;
+              activeId = at ? (at.id || "") : "";
+              render();
+            })
+            .catch(() => { /* 控制台没开就当没这回事 */ });
+        };
+        const pick = (id) => {
+          list.hidden = true;
+          const url = id ? consoleUrl() + "/api/persona/apply" : consoleUrl() + "/api/persona/clear";
+          const body = id ? JSON.stringify({ host: "dsh", ids: [id] }) : JSON.stringify({ host: "dsh" });
+          fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body })
+            .then((r) => r.json())
+            .then((d) => { if (d && d.ok) { activeId = id; render(); } })
+            .catch(() => { /* ignore */ });
+        };
+
+        btn.addEventListener("click", (ev) => { ev.stopPropagation(); list.hidden = !list.hidden; });
+        document.addEventListener("click", (ev) => { if (!wrap.contains(ev.target)) list.hidden = true; });
+        load();
+      } catch (_) { /* ignore */ }
     }
 
     /** 只往 sidebar.footer.action（list 槽）加两行：装甲入口 + 人格下拉。
@@ -165,13 +198,10 @@ window.__ModuleLoader__.load({
         id: "mengshen-armor",
         inject: () => ({}),
       }, ArmorNavButton));
-      // 人格下拉放在「新建对话 / 模式预设」那一行（与 agent-preset 同槽位），
-      // 不放侧栏：换人格是建对话时的动作，应该在输入区手边。
-      ctx.slots.inject("conversation.hero.agentPreset", () => ctx.slots.register({
-        name: "conversation.hero.agentPreset",
-        id: "mengshen-persona",
-        inject: () => ({}),
-      }, PersonaPicker));
+      // 人格入口不再占槽位：conversation.hero.agentPreset 是 single 槽，
+      // 注册进去会把宿主的「模式预设」下拉顶掉（实测过）。改成 DOM 注入，贴在它右边。
+      mountPersonaPicker();
+      try { setInterval(mountPersonaPicker, 1500); } catch (_) { /* ignore */ }
     }
 
     exports.name = "autokill-purge-plugin";
