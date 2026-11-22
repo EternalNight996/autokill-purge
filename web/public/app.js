@@ -230,6 +230,8 @@ const BREAK_BTN = {
 
 /* ------------------------------------------------------------------ state */
 const S = {
+  persona: { loading: false, tried: false, data: null, error: null, busy: '', message: '', host: 'dsh' },
+  personas: null,
   booted: false,
   bootError: null,
   locked: false,
@@ -2725,6 +2727,7 @@ function renderSimpleBreach() {
   $("#page").innerHTML = `
     ${renderSimpleOperation()}
     ${renderFlowPatchList()}
+    ${renderPersonaSection()}
     ${renderOpsFold()}
     <details class="adv-fold"${S.simple.advOpen ? " open" : ""}><summary>高级：模型目录 / 任务类型与输出 / 就绪与二进制</summary>
       ${S.simple.advOpen
@@ -2930,6 +2933,26 @@ async function drillAction(kind) {
 
 /* 统一流程里的公共控件（两模式共用）：注入/卸载/还原、重新识别、注入正文编辑 */
 function bindFlowControls() {
+  // 人格台：卡片＝注入，卸下，导入，导出
+  $$("#page [data-persona-apply]").forEach((el) => {
+    el.addEventListener("click", () => personaApply(el.dataset.personaApply));
+  });
+  $$("#page [data-persona-clear]").forEach((el) => {
+    el.addEventListener("click", () => personaClear());
+  });
+  $$("#page [data-persona-export]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const pp = personaActive();
+      if (!pp.active) return;
+      window.open("/api/persona/export?id=" + encodeURIComponent(pp.active.id || "") + "&format=" + el.dataset.personaExport, "_blank", "noopener");
+    });
+  });
+  $$("#page [data-persona-import]").forEach((el) => {
+    el.addEventListener("change", () => {
+      const f = el.files && el.files[0];
+      if (f) personaImport(f);
+    });
+  });
   $$("#page [data-simple-host]").forEach((el) => {
     el.addEventListener("click", () => simpleHostAction(el.dataset.simpleHost));
   });
@@ -5260,6 +5283,145 @@ async function promptAction(kind) {
   }
 }
 
+/* ---------------------------------------------------------------- 人格台（双轨桥接）
+   卡格式是 Character Card V3：酒馆的 .png/.json 卡能直接导入，内置卡也能导出回酒馆。
+   注入 = 写宿主 prompt-inject.md 的 persona 块；宿主每轮读取，下一句生效，不用重启。 */
+async function loadPersona(force = false) {
+  const st = S.persona;
+  if (st.loading) return;
+  if (st.tried && !force) return;
+  st.loading = true;
+  try {
+    const d = await request("/api/persona/list");
+    if (!d || d.ok === false) throw new Error((d && d.error) || "人格库不可用");
+    st.data = d;
+    st.error = null;
+  } catch (e) {
+    st.error = simpleReason(e);
+  } finally {
+    st.loading = false;
+    st.tried = true;
+    if (S.tab === "breach") renderPage();
+  }
+}
+
+function personaActive() {
+  const st = S.persona;
+  const host = S.hostTarget === "mengbot" ? "mengbot" : (S.hostTarget === "autokill" ? "autokill" : "dsh");
+  const a = st.data && st.data.active ? st.data.active[host] : null;
+  return { host, active: a && a.active ? a.active : null };
+}
+
+function renderPersonaSection() {
+  const st = S.persona;
+  if (!st.tried && !st.loading) loadPersona();
+  const { host, active } = personaActive();
+  const cards = (st.data && st.data.cards) || [];
+  const cur = active ? esc(active.name || active.id) : "无（空白人格）";
+  const busy = st.busy;
+  const body = cards.length
+    ? cards.map((cd) => {
+      const on = active && (active.id === cd.id || active.name === cd.name);
+      const scale = "粗" + (cd.vulgarity || 0) + "·攻" + (cd.aggression || 0);
+      return `<button type="button" class="pick persona-card${on ? " on" : ""}" data-persona-apply="${esc(cd.id)}"${busy ? " disabled" : ""} title="${esc(cd.descriptionHead || "")}">
+        <span class="pick-name">${esc(cd.name)}</span>
+        <span class="pick-tag">${esc(scale)}</span>
+      </button>`;
+    }).join("")
+    : '<p class="hint">人格库是空的：点下面「导入卡」拖一张酒馆卡进来，或先在 data/personas 里放 JSON。</p>';
+  return `<section class="section" aria-labelledby="f-persona-h">
+    <details class="grp" data-group="persona"${st.message ? " open" : ""}>
+      <summary><span class="grp-title">人格</span>
+        <span class="grp-hint">当前：${cur} · 宿主 ${esc(host)} · 卡 ${cards.length} 张</span></summary>
+      <div class="grp-body">
+        <p class="hint">点一张卡＝立刻换上，宿主<b>下一句话</b>就是这个人格（写 prompt-inject.md 的 persona 块，不重启、不动 83 条补丁）。</p>
+        <div class="persona-grid">${body}</div>
+        <div class="actions" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+          <button type="button" class="ghost" data-persona-clear${busy ? " disabled" : ""}>卸下人格</button>
+          <label class="ghost" style="cursor:pointer">
+            导入卡（.png / .json）
+            <input type="file" accept=".png,.json,application/json,image/png" data-persona-import hidden>
+          </label>
+          <button type="button" class="ghost" data-persona-export="json"${active ? "" : " disabled"}>导出 JSON</button>
+          <button type="button" class="ghost" data-persona-export="png"${active ? "" : " disabled"}>导出卡（给酒馆）</button>
+          <span class="hint">${esc(busy ? "处理中…" : (st.message || ""))}</span>
+        </div>
+        ${st.error ? alertBox("人格库不可用", st.error) : ""}
+      </div>
+    </details>
+  </section>`;
+}
+
+async function personaApply(id) {
+  const st = S.persona;
+  if (st.busy || !id) return;
+  const { host } = personaActive();
+  if (host === "mengbot") {
+    const ids = currentBotIds();
+    if (!ids.length) { toastError("MengBot 人格要先把目标 bot 勾上"); return; }
+    st.busy = "apply";
+    try {
+      const d = await request("/api/persona/apply", { method: "POST", body: { host, id, botId: ids[0] } });
+      if (!d || d.ok === false) throw payloadError(d, "注入人格失败");
+      st.message = "已写入 bot soul（重启 MengBot 生效）";
+      await loadPersona(true);
+      toast("已换人格：" + id + " → bot soul");
+    } catch (e) { toastError(simpleReason(e)); }
+    finally { st.busy = ""; renderPage(); }
+    return;
+  }
+  st.busy = "apply";
+  renderPage();
+  try {
+    const d = await request("/api/persona/apply", { method: "POST", body: { host, id } });
+    if (!d || d.ok === false) throw payloadError(d, "注入人格失败");
+    st.message = d.restart ? "已写入，重启宿主后生效" : "已生效：下一句话就是这个人格";
+    await loadPersona(true);
+    toast(st.message);
+  } catch (e) { toastError(simpleReason(e)); }
+  finally { st.busy = ""; renderPage(); }
+}
+
+async function personaClear() {
+  const st = S.persona;
+  if (st.busy) return;
+  const { host } = personaActive();
+  if (host === "mengbot") { toastError("MengBot 的 soul 请到「soul 注入」用还原"); return; }
+  st.busy = "clear";
+  renderPage();
+  try {
+    const d = await request("/api/persona/clear", { method: "POST", body: { host } });
+    if (!d || d.ok === false) throw payloadError(d, "卸下失败");
+    st.message = d.changed ? "已卸下人格，回到空白人格" : "本来就没有人格块";
+    await loadPersona(true);
+    toast(st.message);
+  } catch (e) { toastError(simpleReason(e)); }
+  finally { st.busy = ""; renderPage(); }
+}
+
+async function personaImport(file) {
+  const st = S.persona;
+  if (!file || st.busy) return;
+  st.busy = "import";
+  st.message = "正在解析 " + file.name + "…";
+  renderPage();
+  try {
+    const buf = await file.arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const d = await request("/api/persona/import", { method: "POST", body: { fileBase64: b64, filename: file.name } });
+    if (!d || d.ok === false) throw payloadError(d, "导入失败");
+    st.message = "已导入：" + (d.name || d.id);
+    await loadPersona(true);
+    const { host } = personaActive();
+    if (host !== "mengbot") {
+      const a = await request("/api/persona/apply", { method: "POST", body: { host, id: d.id } });
+      if (a && a.ok !== false) st.message = "已导入并换上：" + (d.name || d.id) + "（下一句生效）";
+    }
+    toast(st.message);
+  } catch (e) { st.message = ""; toastError(simpleReason(e)); }
+  finally { st.busy = ""; renderPage(); }
+}
+
 async function loadHostStatus(force = false) {
   if (S.host.loading) return S.host.loadPromise || null;
   if (S.host.tried && !force && S.host.data && S.host.prompt) return null;
@@ -5644,6 +5806,7 @@ function renderBreach() {
     ${renderFlowModelStep("technical")}
     ${renderFlowPlanStep("technical")}
     ${renderFlowApplyStep()}
+    ${renderPersonaSection()}
     ${baseGroup}
     ${renderFlowPatchList()}
 

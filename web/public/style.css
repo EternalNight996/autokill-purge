@@ -1697,3 +1697,10 @@ body.armor-fire button.primary { animation: armor-btn-flash 440ms cubic-bezier(.
 
 /* 预加载的 canvas：等在后台，点击时才显示 */
 .armor-eater.armor-idle { visibility: hidden; opacity: 0; }
+
+/* 人格台：卡片网格 */
+.persona-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }
+.persona-card { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 11px; text-align: left; }
+.persona-card .pick-name { font-weight: 600; }
+.persona-card .pick-tag { font-size: 11px; opacity: .62; }
+.persona-card.on { outline: 2px solid var(--accent-line); background: var(--accent-soft); }

@@ -30,6 +30,11 @@ import { readDeploy, switchDeploy } from './deploy.mjs';
 import { OWNER, ownerLine } from '../lib/owner.mjs';
 import { mbStatus, mbListBots, mbReadBot, mbInjectSoul, mbRestoreSoul, mbEquipBot, mbSetGear, GEAR_IDS, mbSnapshots, mbPruneSnapshots, mbServiceStop, mbServiceStart } from './mengbot.mjs';
 import { EQUIP_PRESETS } from './presets.mjs';
+import {
+  listPersonas, readPersona, savePersona, deletePersona, seedPersonas,
+  importCard, exportJson, embedCardInPng, applyPersonaToFile, clearPersonaInFile,
+  readActivePersona, personaTargets, buildPersonaBlock,
+} from './persona.mjs';
 import { renderGearMarkdown, renderGearSyncBlock } from './stage-hints.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -2673,6 +2678,101 @@ async function handleApi(req, res, url, state) {
   if (p === '/api/mengbot/bot' && method === 'GET') {
     try { return send(res, 200, mbReadBot(String(url.searchParams.get('id') || ''))); }
     catch (e) { return send(res, 500, { ok: false, error: 'mb_read_failed', detail: publicError(e) }); }
+  }
+  // ---------------------------------------------------------------- 人格层（双轨桥接）
+  // 卡格式 = Character Card V3：SillyTavern 的 .png/.json 卡能直接导入，内置卡也能导出回酒馆。
+  if (p === '/api/persona/list' && method === 'GET') {
+    try { await seedPersonas(DATA_DIR); } catch { /* 播种失败不挡列表 */ }
+    const targets = personaTargets();
+    const active = {};
+    for (const id of ['dsh', 'autokill']) {
+      const t = targets[id];
+      try { active[id] = await readActivePersona(t.file); } catch { active[id] = { active: null, file: t.file }; }
+    }
+    const cards = await listPersonas(DATA_DIR);
+    return send(res, 200, {
+      ok: true,
+      targets: Object.values(targets),
+      active,
+      cards: cards.map(({ card, ...rest }) => rest),
+      note: 'DSH 的 persona 块写在 ~/.dsh/prompt-inject.md 开头；宿主每轮读取，下一句生效，不需要重启',
+    });
+  }
+  if (p === '/api/persona/import' && method === 'POST') {
+    const body = await bodyOf(req);
+    try {
+      let card = null;
+      if (body.card && typeof body.card === 'object') card = body.card;
+      else if (typeof body.fileBase64 === 'string') {
+        card = await importCard(Buffer.from(body.fileBase64, 'base64'), String(body.filename || ''));
+      } else return send(res, 400, { ok: false, error: 'no_card', hint: '传 card（对象）或 fileBase64 + filename（.png/.json）' });
+      const saved = await savePersona(DATA_DIR, card, { id: body.id });
+      return send(res, 200, { ok: true, id: saved.id, name: saved.card.data.name, card: saved.card });
+    } catch (e) { return send(res, 400, { ok: false, error: 'import_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/persona/delete' && method === 'POST') {
+    const body = await bodyOf(req);
+    const r = await deletePersona(DATA_DIR, body.id);
+    return send(res, r.ok ? 200 : 400, r);
+  }
+  if (p === '/api/persona/apply' && method === 'POST') {
+    const body = await bodyOf(req);
+    const host = String(body.host || 'dsh');
+    const targets = personaTargets();
+    const t = targets[host];
+    if (!t) return send(res, 400, { ok: false, error: 'bad_host', hint: 'host 只能是 dsh / autokill / mengbot' });
+    const card = await readPersona(DATA_DIR, body.id);
+    if (!card) return send(res, 404, { ok: false, error: 'card_not_found', id: body.id });
+    const backupDir = join(DATA_DIR, 'host-snapshots');
+    if (host === 'mengbot') {
+      const botId = String(body.botId || '');
+      if (!botId) return send(res, 400, { ok: false, error: 'need_botId', hint: 'MengBot 要先选一个 bot（人格写进它的 soul）' });
+      const text = buildPersonaBlock(card);
+      try {
+        const r = mbInjectSoul(botId, { text, mode: 'prefix' });
+        return send(res, 200, { ok: true, host, botId, mode: 'soul-prefix', detail: r, note: t.note });
+      } catch (e) { return send(res, 400, { ok: false, error: 'mengbot_inject_failed', detail: publicError(e) }); }
+    }
+    try {
+      const r = await applyPersonaToFile(t.file, card, backupDir);
+      return send(res, 200, { ok: true, host, ...r, note: t.note, restart: !!t.restart });
+    } catch (e) { return send(res, 400, { ok: false, error: 'apply_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/persona/clear' && method === 'POST') {
+    const body = await bodyOf(req);
+    const host = String(body.host || 'dsh');
+    const t = personaTargets()[host];
+    if (!t) return send(res, 400, { ok: false, error: 'bad_host' });
+    if (host === 'mengbot') return send(res, 400, { ok: false, error: 'use_mengbot_restore', hint: 'MengBot 的 soul 用 /api/mengbot/restore 还原' });
+    try {
+      const r = await clearPersonaInFile(t.file, join(DATA_DIR, 'host-snapshots'));
+      return send(res, 200, { ok: true, host, ...r, note: 'persona 块已移除，其余注入正文原样保留' });
+    } catch (e) { return send(res, 400, { ok: false, error: 'clear_failed', detail: publicError(e) }); }
+  }
+  if (p === '/api/persona/export' && method === 'GET') {
+    const id = String(url.searchParams.get('id') || '');
+    const format = String(url.searchParams.get('format') || 'json');
+    const card = await readPersona(DATA_DIR, id);
+    if (!card) return send(res, 404, { ok: false, error: 'card_not_found' });
+    if (format === 'png') {
+      try {
+        const base = await readFile(join(HERE, '..', 'assets', 'autokill-purge.png'));
+        const png = embedCardInPng(base, card);
+        res.writeHead(200, {
+          'content-type': 'image/png',
+          'content-disposition': `attachment; filename="${encodeURIComponent(card.data.name || id)}.png"`,
+          'cache-control': 'no-store',
+        });
+        return res.end(png);
+      } catch (e) { return send(res, 400, { ok: false, error: 'png_export_failed', detail: publicError(e) }); }
+    }
+    const json = exportJson(card, id);
+    res.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'content-disposition': `attachment; filename="${encodeURIComponent(card.data.name || id)}.json"`,
+      'cache-control': 'no-store',
+    });
+    return res.end(json);
   }
   if (p === '/api/mengbot/inject' && method === 'POST') {
     const body = await bodyOf(req);
